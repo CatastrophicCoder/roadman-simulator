@@ -29,7 +29,7 @@ Run these from the repo root.
 dotnet build game/RoadmanSimulator.sln                       # works
 dotnet test                                                  # TODO: no Roadman.Core.Tests project yet (prompt 5)
 dotnet format game/RoadmanSimulator.sln --verify-no-changes  # TODO: confirm once the solution has code
-godot --headless --path game --import                        # TODO: `godot` not on PATH (outline setup step 2)
+godot --headless --path game --import                        # needs a wrapper, not a symlink; see "Godot binary" in the root CLAUDE.md
 # TODO: gdUnit4 headless test command (add-on not installed yet)
 # TODO: headless screenshot script (prompt 6)
 ```
