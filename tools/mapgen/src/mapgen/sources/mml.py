@@ -8,7 +8,8 @@ Without a key, each MML source prints the manual download steps for MML's
 Karttapaikka file service and registers any files already in its raw folder.
 
 For builds, the DEM adapter loads its GeoTIFFs (mosaicked and warped to the map CRS),
-and the 3D buildings adapter is a stub until its file format is confirmed.
+the lidar adapter loads the non-ground points of its LAZ files, and the 3D buildings
+adapter is a stub until its file format is confirmed.
 """
 
 import re
@@ -20,9 +21,10 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Literal
 
+import laspy
 import numpy as np
 import rasterio
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pyproj import CRS as ProjCRS
 from rasterio.crs import CRS as RasterioCRS
 from rasterio.enums import Resampling
@@ -38,11 +40,13 @@ from mapgen.http import HttpError, redact, with_query_param
 from mapgen.sources.base import (
     BUILDINGS_3D,
     ELEVATION,
+    POINT_CLOUD,
     AdapterOptions,
     DownloadContext,
     DownloadedFile,
     ElevationRaster,
     LoadContext,
+    PointCloud,
     SourceAdapter,
     SourceData,
     SourceError,
@@ -55,17 +59,26 @@ API_KEY_ENV = "MML_API_KEY"
 API_KEY_PARAM = "api-key"
 MML_CRS = "EPSG:3067"
 MML_DOMAIN = "maanmittauslaitos.fi"
-FORBIDDEN_PROCESS_PREFIX = "laserkeilausaineisto"
+LASER_SCANNING_PREFIX = "laserkeilausaineisto"
+# The only open laser scanning process: laser scanning data 0.5 p by map sheet.
+LIDAR_05P_PROCESS = "laserkeilausaineisto_05_karttalehti"
 
 PENDING_STATUSES = frozenset({"accepted", "running"})
 FAILED_STATUSES = frozenset({"failed", "dismissed"})
 
 
 def ensure_allowed_process(process_id: str) -> str:
-    """Refuse MML laser scanning processes (the 5 p data isn't open, see tools/mapgen/CLAUDE.md)."""
-    if process_id.strip().lower().startswith(FORBIDDEN_PROCESS_PREFIX):
+    """Refuse every MML laser scanning process except laser scanning data 0.5 p.
+
+    ADR 0005 (amended): the 0.5 p data is open (CC BY 4.0) and allowed through exactly
+    `laserkeilausaineisto_05_karttalehti`. The 5 p data isn't open, so any other process id
+    starting with `laserkeilausaineisto` (every 5 p process included) is refused.
+    """
+    normalised = process_id.strip().lower()
+    if normalised.startswith(LASER_SCANNING_PREFIX) and normalised != LIDAR_05P_PROCESS:
         raise ValueError(
-            f"process {process_id!r} is MML laser scanning data, which this pipeline must not use"
+            f"process {process_id!r} is MML laser scanning data, which this pipeline must not "
+            f"use; only {LIDAR_05P_PROCESS!r} (laser scanning data 0.5 p) is allowed"
         )
     return process_id
 
@@ -581,9 +594,9 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
 
 
 class MmlSheetOptions(MmlOptions):
-    # Orthophoto: verified from MML's process description (a list of up to 100 TM35
-    # 1:10 000 sheets in one job). TODO-verify for 3D buildings: its sheet scale, and
-    # whether mapSheetInput is a list ("list", one job) or one name ("single", one job each).
+    # Verified from MML's process descriptions: the orthophoto and 3D buildings processes
+    # take a list of up to 100 TM35 sheets in one job (orthophoto 1:10 000; 3D buildings
+    # accepts sheet names but has no Somero coverage), lidar 0.5 p takes 1:5 000 sheets.
     sheet_scale: int = 10_000
     map_sheet_input: Literal["list", "single"] = "list"
     describe_process: bool = True
@@ -635,7 +648,7 @@ class OrthophotoOptions(MmlSheetOptions):
 class MmlOrthophotoAdapter(MmlSheetAdapter):
     name = "mml_orthophoto"
     Options = OrthophotoOptions
-    dataset_name = "Orthophoto"
+    dataset_name = "NLS orthophotos"
     product_name = "Ortokuva (Orthophoto)"
     layer = "orthophoto"
     default_process_id = "ortoilmakuva_karttalehti"
@@ -665,7 +678,7 @@ class Buildings3dOptions(MmlSheetOptions):
 class MmlBuildings3dAdapter(MmlSheetAdapter):
     name = "mml_buildings_3d"
     Options = Buildings3dOptions
-    dataset_name = "3D buildings"
+    dataset_name = "Buildings 3D"
     product_name = "3D-rakennukset (3D buildings)"
     layer = "buildings_3d"
     default_process_id = "3d-rakennukset_karttalehti"
@@ -685,3 +698,189 @@ class MmlBuildings3dAdapter(MmlSheetAdapter):
     def extra_inputs(self, options: MmlSheetOptions) -> dict[str, Any]:
         assert isinstance(options, Buildings3dOptions)
         return {} if options.file_format is None else {"fileFormatInput": options.file_format}
+
+
+# Laser scanning data 0.5 p (LAZ point clouds on TM35 1:5 000 sheets).
+
+LAZ_SUFFIXES = frozenset({".laz", ".las"})
+# Classes dropped on load (spec docs/specs/building-heights.md, ASPRS LAS 1.4 codes):
+# 2 ground, and if they appear, the noise classes 7 low noise and 18 high noise.
+DROPPED_CLASSES: tuple[int, ...] = (2, 7, 18)
+LAZ_CHUNK_POINTS = 2_000_000
+
+
+class LidarOptions(MmlSheetOptions):
+    """Download options (sheet scale, dataset, format) and the lidar height thresholds.
+
+    The height options are read by stage 3 (`mapgen.build.lidar`).
+    """
+
+    sheet_scale: int = 5_000  # MML product description: 3 x 3 km TM35 1:5 000 sheets
+    dataset: str = "Uusin"  # dataSetInput: "Uusin" (latest), "05p_2008-2019" or "05p_2020-"
+    file_format: str = "LAZ"
+    inner_buffers_m: tuple[float, ...] = (1.0, 0.5, 0.0)
+    min_points: int = Field(default=5, ge=1)
+    tree_spread_m: float = Field(default=8.0, gt=0)
+    min_height_m: float = Field(default=1.0, gt=0)
+    max_height_m: float = Field(default=40.0, gt=0)
+
+    @field_validator("process_id")
+    @classmethod
+    def _only_05p(cls, value: str | None) -> str | None:
+        if value is not None and value.strip().lower() != LIDAR_05P_PROCESS:
+            raise ValueError(f"the lidar source only allows process {LIDAR_05P_PROCESS!r}")
+        return value
+
+    @field_validator("inner_buffers_m")
+    @classmethod
+    def _buffers(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        if not value:
+            raise ValueError("inner_buffers_m needs at least one buffer")
+        if any(not np.isfinite(b) or b < 0 for b in value):
+            raise ValueError("inner_buffers_m values must be finite and >= 0")
+        return value
+
+    @model_validator(mode="after")
+    def _height_range(self) -> "LidarOptions":
+        if not self.max_height_m > self.min_height_m:
+            raise ValueError("max_height_m must be greater than min_height_m")
+        return self
+
+
+def same_las_crs(crs: ProjCRS, target: str) -> bool:
+    """True when a LAS file's horizontal CRS is equivalent to `target`.
+
+    LAS files may carry a compound CRS (horizontal plus vertical datum); only the
+    horizontal part matters for x and y.
+    """
+    target_crs = ProjCRS.from_user_input(target)
+    candidates = [crs, *(crs.sub_crs_list or [])]
+    for candidate in candidates:
+        if candidate.is_vertical:
+            continue
+        if candidate.equals(target_crs, ignore_axis_order=True):
+            return True
+        epsg = candidate.to_epsg()
+        if epsg is not None and epsg == target_crs.to_epsg():
+            return True
+    return False
+
+
+def check_las_crs(path: Path, header: laspy.LasHeader, target_crs: str) -> None:
+    """Raise unless the file's CRS is equivalent to `target_crs` (points are not reprojected)."""
+    crs = header.parse_crs()
+    if crs is None:
+        raise SourceLoadError(f"{path} has no CRS")
+    if not same_las_crs(crs, target_crs):
+        raise SourceLoadError(
+            f"{path} is in {crs.name}, not {target_crs}; reprojecting point clouds is not supported"
+        )
+
+
+def read_points(path: Path, target_crs: str, bounds: BBox) -> PointCloud:
+    """The points of one LAS/LAZ file inside `bounds`, without `DROPPED_CLASSES`.
+
+    Reads in chunks so a whole sheet never sits in memory at once. The file's CRS must be
+    equivalent to `target_crs` (points are not reprojected).
+    """
+    clouds: list[PointCloud] = []
+    with laspy.open(path) as reader:
+        check_las_crs(path, reader.header, target_crs)
+        dropped = np.array(DROPPED_CLASSES, dtype=np.uint8)
+        for chunk in reader.chunk_iterator(LAZ_CHUNK_POINTS):
+            x = np.asarray(chunk.x, dtype=np.float64)
+            y = np.asarray(chunk.y, dtype=np.float64)
+            classification = np.asarray(chunk.classification, dtype=np.uint8)
+            keep = (
+                (x >= bounds.min_x)
+                & (x <= bounds.max_x)
+                & (y >= bounds.min_y)
+                & (y <= bounds.max_y)
+                & ~np.isin(classification, dropped)
+            )
+            if not keep.any():
+                continue
+            clouds.append(
+                PointCloud(
+                    x=x[keep],
+                    y=y[keep],
+                    z=np.asarray(chunk.z, dtype=np.float64)[keep],
+                    classification=classification[keep],
+                    return_number=np.asarray(chunk.return_number, dtype=np.uint8)[keep],
+                    number_of_returns=np.asarray(chunk.number_of_returns, dtype=np.uint8)[keep],
+                    crs=target_crs,
+                )
+            )
+    return PointCloud.concatenate(clouds, target_crs)
+
+
+def laz_overlaps(path: Path, target_crs: str, bounds: BBox) -> bool:
+    """True when the file's header extent overlaps `bounds` (reads only the header).
+
+    The CRS is checked first, so a file in another CRS fails instead of being skipped.
+    """
+    with laspy.open(path) as reader:
+        check_las_crs(path, reader.header, target_crs)
+        hmin, hmax = reader.header.mins, reader.header.maxs
+    return not (
+        hmax[0] < bounds.min_x
+        or hmin[0] > bounds.max_x
+        or hmax[1] < bounds.min_y
+        or hmin[1] > bounds.max_y
+    )
+
+
+class MmlLidarAdapter(MmlSheetAdapter):
+    """MML laser scanning data 0.5 p. Never any other laser scanning product (ADR 0005)."""
+
+    name = "mml_lidar"
+    Options = LidarOptions
+    dataset_name = "Laser scanning data 0,5 p"
+    product_name = "Laserkeilausaineisto 0,5 p (Laser scanning data 0,5 p)"
+    layer = "lidar_05p"
+    default_process_id = LIDAR_05P_PROCESS
+    provides = frozenset({POINT_CLOUD})
+
+    def process_id(self, options: MmlOptions) -> str:
+        process_id = super().process_id(options)
+        if process_id.strip().lower() != LIDAR_05P_PROCESS:
+            raise ValueError(f"the lidar source only allows process {LIDAR_05P_PROCESS!r}")
+        return process_id
+
+    def extra_inputs(self, options: MmlSheetOptions) -> dict[str, Any]:
+        assert isinstance(options, LidarOptions)
+        return {"fileFormatInput": options.file_format, "dataSetInput": options.dataset}
+
+    def manual_area(self, ctx: DownloadContext) -> list[str]:
+        options = ctx.options
+        assert isinstance(options, LidarOptions)
+        return [
+            f"Format: {options.file_format}, data set {options.dataset}",
+            *super().manual_area(ctx),
+        ]
+
+    def load(self, ctx: LoadContext) -> SourceData:
+        """Non-ground points inside `ctx.bounds` from every LAZ file that overlaps them.
+
+        Only files that contribute to the area are listed in `files` (for the credits).
+        """
+        folder = ctx.raw_dir / "mml" / self.layer
+        files = [p for p in list_files(folder) if p.suffix.lower() in LAZ_SUFFIXES]
+        if not files:
+            raise SourceLoadError(
+                f"[{ctx.source_name}] no LAZ files in {folder}; run `mapgen download "
+                f"{ctx.map_config.id} --only {ctx.source_name}`"
+            )
+        read: list[Path] = []
+        clouds: list[PointCloud] = []
+        for path in files:
+            try:
+                if not laz_overlaps(path, ctx.target_crs, ctx.bounds):
+                    continue
+                clouds.append(read_points(path, ctx.target_crs, ctx.bounds))
+            except SourceLoadError as exc:
+                raise SourceLoadError(f"[{ctx.source_name}] {exc}") from exc
+            except (laspy.errors.LaspyException, OSError, ValueError) as exc:
+                raise SourceLoadError(f"[{ctx.source_name}] cannot read {path}: {exc}") from exc
+            read.append(path)
+        return SourceData(files=read, points=PointCloud.concatenate(clouds, ctx.target_crs))

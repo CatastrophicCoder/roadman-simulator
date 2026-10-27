@@ -54,6 +54,20 @@ sources:
       sheet_scale: 10000    # MML process description: 1:10 000 sheets, e.g. L2332H
       map_sheet_input: list # MML: array of up to 100 sheets per job
 
+  mml_lidar:
+    adapter: mml_lidar      # laser scanning data 0,5 p only (ADR 0005); building heights
+    enabled: true
+    options:
+      sheet_scale: 5000     # MML product description: 3 x 3 km TM35 1:5 000 sheets
+      map_sheet_input: list # MML: array of up to 100 sheets per job
+      dataset: Uusin        # dataSetInput: Uusin = latest scan, or 05p_2008-2019, 05p_2020-
+      file_format: LAZ
+      inner_buffers_m: [1.0, 0.5, 0.0]  # footprint shrink ladder; first with min_points wins
+      min_points: 5         # fewer points at every buffer: no lidar height (few_points)
+      tree_spread_m: 8.0    # p90 - p10 above this: single returns only (else tree_cover)
+      min_height_m: 1.0     # median roof minus base below this: rejected (too_low)
+      max_height_m: 40.0    # above this: rejected (too_high)
+
   mml_buildings_3d:
     adapter: mml_buildings_3d
     enabled: false          # check MML's coverage map for Somero first

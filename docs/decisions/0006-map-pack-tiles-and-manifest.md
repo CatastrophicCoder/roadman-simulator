@@ -28,3 +28,11 @@ The pipeline's first stages (load, terrain, buildings) need a pack layout that t
 - Switching between test and full builds replaces the pack, so the game always sees one consistent area.
 - Buildings that overhang a tile edge are loaded with their tile. Streaming by tile later must allow for this overhang.
 - Building heights are mostly defaults until MML 3D buildings or overrides are added: in Somero's current OSM data, 1 of 1841 buildings has a height or level tag.
+
+## Amendment (2026-10-27): lidar heights
+
+Spec: `docs/specs/building-heights.md`.
+
+- `height_source` in `buildings.json` can also be `mml_lidar`, which comes first: `mml_lidar`, `mml_3d`, `osm_height`, `osm_levels`, `default`.
+- Lidar buildings also record `lidar_points`, `lidar_buffer_m`, `lidar_returns`, `roof_z_median` and `roof_z_p90`. A building whose lidar value was rejected records `lidar_rejected` with the reason. These are additions to `buildings.json`, not to the manifest, so the manifest schema stays at version 1.
+- The last consequence above no longer holds for Somero: about 98% of its buildings get a measured lidar height.

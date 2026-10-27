@@ -125,7 +125,14 @@ def run_build(
 
     with stage("buildings"):
         measured = match_measured_heights(loaded.footprints, loaded.buildings_3d)
-        buildings = resolve_buildings(loaded.footprints, loaded.heightfield, area, measured)
+        buildings = resolve_buildings(
+            loaded.footprints,
+            loaded.heightfield,
+            area,
+            measured,
+            points=loaded.points,
+            lidar_params=loaded.lidar_params,
+        )
         _write_buildings_stage(work_dir / "03-buildings", buildings, config.crs, origin)
     building_report = buildings.report()
     report.building_count = building_report["building_count"]

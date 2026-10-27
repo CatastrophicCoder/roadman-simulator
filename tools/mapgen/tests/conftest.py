@@ -174,6 +174,54 @@ def write_plane_dem(
     return path
 
 
+def write_laz(
+    path: Path,
+    x: Any,
+    y: Any,
+    z: Any,
+    classification: Any = 5,
+    number_of_returns: Any = 1,
+    crs: str | None = "EPSG:3067",
+) -> Path:
+    """A LAZ file (point format 6) of the given world points; `crs=None` writes no CRS.
+
+    `classification` and `number_of_returns` are scalars or per-point arrays; every point
+    is the last return of its pulse.
+    """
+    import laspy
+    import numpy as np
+    import pyproj
+
+    x, y, z = (np.asarray(a, dtype=np.float64) for a in (x, y, z))
+    n = len(x)
+    header = laspy.LasHeader(point_format=6, version="1.4")
+    if n:
+        header.offsets = [float(np.floor(x.min())), float(np.floor(y.min())), 0.0]
+    header.scales = [0.001, 0.001, 0.001]
+    if crs is not None:
+        header.add_crs(pyproj.CRS(crs))
+    las = laspy.LasData(header)
+    las.x, las.y, las.z = x, y, z
+    las.classification = np.broadcast_to(np.asarray(classification, dtype=np.uint8), n).copy()
+    returns = np.broadcast_to(np.asarray(number_of_returns, dtype=np.uint8), n).copy()
+    las.number_of_returns = returns
+    las.return_number = returns
+    path.parent.mkdir(parents=True, exist_ok=True)
+    las.write(path)
+    return path
+
+
+def lidar_entry(rel: str) -> dict:
+    """A download-manifest entry for a lidar file, as the `mml_lidar` adapter writes it."""
+    return _entry(
+        rel,
+        "mml_lidar",
+        "Laser scanning data 0,5 p",
+        "CC BY 4.0",
+        "Contains data from the National Land Survey of Finland Laser scanning data 0,5 p, 10/2026",
+    )
+
+
 def _entry(rel: str, source: str, dataset: str, licence: str, attribution: str) -> dict:
     return {
         "path": rel,

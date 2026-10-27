@@ -5,7 +5,7 @@ This file describes the systems and how they connect. Source: `docs/project-outl
 ## Data flow
 
 ```
-  OSM (Overpass / Geofabrik)   MML (DEM 2 m, orthophoto, 3D buildings, topo DB)
+  OSM (Overpass / Geofabrik)   MML (DEM 2 m, lidar 0.5 p, orthophoto, 3D buildings, topo DB)
               \                     /
                v                   v
         tools/mapgen/data/raw/<map-id>/        (downloaded, git-ignored)
@@ -72,7 +72,7 @@ Stages, each with output that can be inspected:
 9. Tiling (256 m to start) and export: `.glb` per tile, JSON files, minimap PNG.
 10. World edge: roadblocks, land and water fences, cliff edge, void trigger, written to `boundary.json`.
 
-Building attribute precedence: manual override, then enhancement data, then OSM tags, then MML 3D, then style preset defaults.
+Building attribute precedence: manual override, then enhancement data, then measured data (MML lidar, then MML 3D), then OSM tags, then style preset defaults.
 
 Collision comes from glTF node name suffixes (`-col`, `-colonly`, `-convcolonly`).
 
@@ -83,22 +83,24 @@ Module layout (`tools/mapgen/src/mapgen/`):
 - `geo.py`: WGS84 to map CRS, projected bbox, world and local coordinates, test area, geometry reprojection and offsets.
 - `tm35.py`: ETRS-TM35FIN map sheet names for a bbox (used by MML adapters).
 - `http.py`: a small urllib client behind a protocol, so tests can stub it.
-- `sources/`: the adapter interface (`base.py`), the registry, and the adapters `osm_overpass`, `mml_dem_2m`, `mml_orthophoto`, `mml_buildings_3d` and `mml_topographic` (ADR 0005).
+- `sources/`: the adapter interface (`base.py`), the registry, and the adapters `osm_overpass`, `mml_dem_2m`, `mml_lidar`, `mml_orthophoto`, `mml_buildings_3d` and `mml_topographic` (ADR 0005).
 - `download.py` and `manifest.py`: run the enabled sources and write `data/raw/<map-id>/download-manifest.json` with the checksum, licence and attribution of each file.
 
-Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, whose options model validates the source's `options`. `download(ctx)` gets the map config, the raw folder, the `--force` flag and an injected HTTP client, and returns one `DownloadedFile` record per file. Each adapter also declares what it can load in `provides` (`osm_vector`, `elevation`, `buildings_3d`), and `load(ctx)` reads its raw files for a build and returns a `SourceData` (footprints, an elevation raster, skipped features, and the files it read). The build picks enabled sources by capability, never by source name, and allows at most one source per capability.
+Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, whose options model validates the source's `options`. `download(ctx)` gets the map config, the raw folder, the `--force` flag and an injected HTTP client, and returns one `DownloadedFile` record per file. Each adapter also declares what it can load in `provides` (`osm_vector`, `elevation`, `point_cloud`, `buildings_3d`), and `load(ctx)` reads its raw files for a build and returns a `SourceData` (footprints, an elevation raster, a point cloud, skipped features, and the files it read). The build picks enabled sources by capability, never by source name, and allows at most one source per capability.
 
 - `osm_overpass` loads building footprints from the `.osm` XML (standard library `iterparse`): closed ways and `type=multipolygon` relations, with rings joined from member ways and both outer and inner rings repaired with `make_valid`. Unclosed rings are dropped. Features that can't be built (no closed outer ring, geometry errors, duplicates of a relation's outer way) are skipped with a reason; relations built despite missing member ways or unclosed rings are listed as partial (ADR 0005).
 - `mml_dem_2m` loads its GeoTIFFs, mosaics them with `rasterio.merge`, and crops to the area plus a 10 m margin. A file is warped only when its CRS isn't equivalent to the map CRS (compared semantically, not as text); warped CRSs are listed in the load report. Nodata becomes NaN.
-- `mml_buildings_3d` has a stub `load` that returns no buildings, because its file format isn't confirmed (ADR 0005).
+- `mml_lidar` downloads MML's laser scanning data 0.5 p as LAZ on TM35 1:5 000 sheets (`sheet_scale`, `dataset` options; `Uusin` is the latest). Only the process `laserkeilausaineisto_05_karttalehti` is allowed; the 5 p data is refused (ADR 0005 amendment). `load` reads the files with laspy and lazrs in chunks, keeps the points inside the requested bounds and drops classes 2 (ground), 7 (low noise) and 18 (high noise). Its options also hold the height thresholds used by stage 3.
+- `mml_buildings_3d` has a stub `load` that returns no buildings: MML has no 3D building coverage for Somero, and its CityGML reader is out of scope (ADR 0005).
 
 Build stages (`build/`; ADR 0006):
 
 - `build/__init__.py`: `run_build(config, area, raw_dir, out_dir, work_dir)` runs the stages in order and writes the pack.
 - `build/area.py`: `BuildArea` (the full bbox or the test area in local coordinates, rounded outward to whole metres) and the tile grid.
-- `build/stage1_load.py`: loads the sources by capability, reprojects footprints to the map CRS, subtracts the origin, and keeps footprints whose centroid is in the area.
+- `build/stage1_load.py`: loads the sources by capability, reprojects footprints to the map CRS, subtracts the origin, and keeps footprints whose centroid is in the area. The point cloud is read only around those footprints and moved to local coordinates.
 - `build/heightfield.py`: `Heightfield`, the single terrain sampler for terrain, buildings and later road draping. `sample(x, y)` is bilinear. `min_under(footprint)` is the lowest node of every DEM cell the footprint touches, so a building base is never above the terrain mesh. Nodata is filled from neighbouring cells.
 - `build/terrain/`: the `TerrainBuilder` protocol (`build_tile(heightfield, tile) -> TerrainChunk`) and `MeshTerrainBuilder`, a regular grid at DEM resolution cut to the tile. Vertex normals come from the heightfield gradient (central differences of `Heightfield.sample`), so neighbouring tiles have identical edge vertices and normals.
+- `build/lidar.py`: the building height from the point cloud (buffer ladder, tree check, limits; see "Building heights" below).
 - `build/buildings.py`: height resolution, base height, flat-roof extrusion (holes supported) and collision boxes: one minimum rotated rectangle per footprint part. Courtyards and concave corners are filled in the collision box.
 - `build/export_glb.py`: one `.glb` per tile with trimesh, checking the node names after export.
 - `build/pack_manifest.py` and `build/schemas/manifest-v1.schema.json`: the manifest model, the committed JSON Schema, and the credits.
@@ -108,10 +110,17 @@ Intermediate output goes to `tools/mapgen/build/<map-id>/<area>/` (git-ignored).
 
 - `01-load/`: `footprints.geojson`, `dem.tif` (cropped), `report.json` (counts, skipped and partial features with reasons, DEM statistics including filled nodata cells and any warped CRSs).
 - `02-terrain/`: `<tile>.glb` (terrain only) and `stats.json`.
-- `03-buildings/`: `buildings.geojson` (resolved attributes and their sources) and `report.json` (count per height source, ignored tags).
+- `03-buildings/`: `buildings.geojson` (resolved attributes and their sources) and `report.json` (count per height source, lidar rejections per reason, buildings per lidar buffer, buildings using single returns, ignored tags).
 - `timings.json`: seconds per stage.
 
-Building heights: MML 3D measured height (when a 3D building covers at least half the footprint), OSM `height` (`12`, `12 m`, `12.5`; invalid or ≤ 0 values are ignored), `building:levels` × 3 m, then 2 floors × 3 m. Manual overrides and enhancement data come later (`mapgen enhance`).
+Building heights, first valid value wins (spec: `docs/specs/building-heights.md`):
+
+1. Manual override (comes later with `mapgen enhance`).
+2. `mml_lidar`: the non-ground points inside the footprint shrunk by 1.0 m, else 0.5 m, else 0 m, using the first buffer with at least 5 points. If the 90th minus 10th percentile spread is over 8 m (trees over the roof), only single returns are used. The height is the median point elevation minus `base_z`, so the flat roof sits at the measured median. Values under 1 m or over 40 m are rejected (`too_low`, `too_high`), as are footprints without enough points (`few_points`, `tree_cover`). All thresholds are `mml_lidar` options in `map.yaml`.
+3. `mml_3d`: MML 3D measured height, when a 3D building covers at least half the footprint (stub, no data yet).
+4. `osm_height`: OSM `height` (`12`, `12 m`, `12.5`; invalid or ≤ 0 values are ignored).
+5. `osm_levels`: `building:levels` × 3 m.
+6. `default`: 2 floors × 3 m.
 
 TODO: the `enhance` command.
 
@@ -123,7 +132,7 @@ Contents so far:
 
 - `manifest.json` (schema version 1).
 - `tiles/tile_x{i}_y{j}.glb`: one file per tile. Tile (i, j) covers local [i·T, (i+1)·T) × [j·T, (j+1)·T), clipped to the area, where T is `tile_size_m`. Each file holds the terrain and the buildings whose footprint centroid is in the tile. Buildings are never split.
-- `buildings.json`: `schema_version`, `map_id` and `buildings`, one provenance entry per building: `id` (e.g. `osm:way/123`), `tile`, `node`, `collision_nodes` (a list, one per footprint part), `height_m`, `height_source` (`mml_3d`, `osm_height`, `osm_levels` or `default`), `base_z`, `base_source` (`dem`), `roof_shape` (`flat`) and `roof_shape_source` (`default`).
+- `buildings.json`: `schema_version`, `map_id` and `buildings`, one provenance entry per building: `id` (e.g. `osm:way/123`), `tile`, `node`, `collision_nodes` (a list, one per footprint part), `height_m`, `height_source` (`mml_lidar`, `mml_3d`, `osm_height`, `osm_levels` or `default`), `base_z`, `base_source` (`dem`), `roof_shape` (`flat`) and `roof_shape_source` (`default`). Lidar buildings add `lidar_points`, `lidar_buffer_m`, `lidar_returns` (`all` or `single`), `roof_z_median` and `roof_z_p90` (absolute elevations; p90 is kept for pitched roofs later). A building whose lidar value was rejected adds `lidar_rejected` with the reason.
 
 Axes: glTF is Y-up. Local east is +X, up is +Y, and north is −Z. Units are metres from the map origin.
 
@@ -171,7 +180,7 @@ TODO: traffic AI, pedestrian AI, police, missions, player character. Each of the
 
 ## Testing
 
-- Pipeline: pytest, using a fixed small test area.
+- Pipeline: pytest, using a fixed small test area. `tools/mapgen/tests/fixtures/raw/somero-test-area/` holds the Somero test area's raw data (OSM without contributor metadata, DEM and lidar cuts, download manifest, attribution in `NOTICE.md`), laid out like `data/raw/<map-id>/`, so tests and CI can build the test-area pack offline. `tools/mapgen/scripts/cut_test_area.py` recreates it.
 - Core: xUnit on `Roadman.Core`.
 - Engine: gdUnit4Net, run headless.
 - Visual: headless screenshots from fixed camera positions.

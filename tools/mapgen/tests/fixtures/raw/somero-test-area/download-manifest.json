@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "map_id": "somero",
+  "generated_at": "2026-10-27T20:33:28Z",
+  "tool": {
+    "name": "mapgen",
+    "version": "test-area-cut"
+  },
+  "files": [
+    {
+      "path": "mml/dem_2m/korkeusmalli_2m.tif",
+      "source": "mml_dem_2m",
+      "dataset": "Elevation model 2 m",
+      "request": {
+        "service": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/",
+        "process_id": "korkeusmalli_2m_bbox",
+        "inputs": {
+          "boundingBoxInput": [
+            308504,
+            6725445,
+            310809,
+            6727787
+          ],
+          "fileFormatInput": "TIFF"
+        },
+        "job_id": "4254485e-ae93-4c0d-9c59-fa1633d9a25c",
+        "result": {
+          "url": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/dl/v1/4254485e-ae93-4c0d-9c59-fa1633d9a25c/korkeusmalli_2m.tif",
+          "format": "TIFF",
+          "crs": "etrs-tm35fin",
+          "mimeType": "image/tiff",
+          "length": "5410398"
+        },
+        "test_area_cut": {
+          "bounds": [
+            309497.0,
+            6726456.0,
+            309817.0,
+            6726776.0
+          ],
+          "source_size": 5410398,
+          "source_sha256": "396ce6460ac9abfa996764dddd72be8a1656cb64676f83448f6b6559da72c947"
+        }
+      },
+      "retrieved_at": "2026-10-27T14:44:30Z",
+      "size": 56617,
+      "sha256": "4a19c5daa8db025f2b24d9943eddfc95fae7dd614dcc8df426e70106d3759c89",
+      "licence": "CC BY 4.0",
+      "attribution": "Contains data from the National Land Survey of Finland Elevation model 2 m, 10/2026",
+      "origin": "downloaded"
+    },
+    {
+      "path": "mml/lidar_05p/L4212A1.laz",
+      "source": "mml_lidar",
+      "dataset": "Laser scanning data 0,5 p",
+      "request": {
+        "service": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/",
+        "process_id": "laserkeilausaineisto_05_karttalehti",
+        "inputs": {
+          "mapSheetInput": [
+            "L4211B2",
+            "L4212A1"
+          ],
+          "fileFormatInput": "LAZ",
+          "dataSetInput": "Uusin"
+        },
+        "job_id": "bab599cf-edd9-4f4b-9d9f-fe60fa42bef7",
+        "result": {
+          "url": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/dl/v1/bab599cf-edd9-4f4b-9d9f-fe60fa42bef7/L4212A1.laz",
+          "format": "LAZ",
+          "crs": "etrs-tm35fin",
+          "lastModified": "2024-09-09T06:51:53.318522Z",
+          "dataset": "laser",
+          "datasetVersion": "automaattinen",
+          "mimeType": "application/x-laz",
+          "length": "45221747",
+          "mapSheetNumber": "L4212A1",
+          "pointDensity": "0.5 pistetta/m2",
+          "dateOfScanning": "2024-05-31",
+          "yearOfScanning": "2024",
+          "elevationSystem": "N2000",
+          "elevationPrecision": "0.1 m"
+        },
+        "test_area_cut": {
+          "bounds": [
+            309497.82196342445,
+            6726464.785878934,
+            309812.08869436156,
+            6726754.6283394685
+          ],
+          "points": 56576,
+          "source_size": 45221747,
+          "source_sha256": "060cf1036033fa320eb0e10fd3e3c99cf93507a787ef191ff3bc6f51a2aa5e7e"
+        }
+      },
+      "retrieved_at": "2026-10-27T20:33:28Z",
+      "size": 403350,
+      "sha256": "940ae8b736df9d008accca124714ab1d23b03ac30c55846447e18bd21646d4eb",
+      "licence": "CC BY 4.0",
+      "attribution": "Contains data from the National Land Survey of Finland Laser scanning data 0,5 p, 10/2026",
+      "origin": "downloaded"
+    },
+    {
+      "path": "osm/somero.osm",
+      "source": "osm",
+      "dataset": "OpenStreetMap",
+      "request": {
+        "url": "https://overpass-api.de/api/interpreter",
+        "query": "[out:xml][timeout:180];(node(60.62,23.5,60.64,23.54);way(60.62,23.5,60.64,23.54););(._;>;);(._;rel(bn);rel(bw););out meta;",
+        "test_area_cut": {
+          "footprints": 60,
+          "source_size": 3175738,
+          "source_sha256": "d676b6a2996f2cc0ac1d5182945dcc98102eadd154641234b6ade75e3f1dae4c"
+        }
+      },
+      "retrieved_at": "2026-10-27T14:34:18Z",
+      "size": 32365,
+      "sha256": "a4239e4e568188b08679c5be6ded2d3f40a41777da645158598edeb4f75fd0bf",
+      "licence": "ODbL 1.0",
+      "attribution": "© OpenStreetMap contributors",
+      "origin": "downloaded"
+    }
+  ]
+}

@@ -151,7 +151,7 @@ Download the data once, by script, so it can be repeated and checked. Claude Cod
 7. **Optional: MML topographic database.** It has building footprints and road classes that can fill gaps in OSM.
 8. **Inspect everything in QGIS.** Check alignment between layers, missing buildings, and road connectivity at bridges and intersections.
 
-Avoid MML's high-density laser scanning data 5 p: it isn't open and carries a charge. The free elevation model and 0.5 p point cloud are enough at game scale.
+Avoid MML's high-density laser scanning data 5 p: it isn't open and carries a charge. The free elevation model and 0.5 p point cloud are enough at game scale. The 0.5 p point cloud comes on 1:5 000 map sheets and supplies the building heights.
 
 **Done when:** all raw files are in `data/raw/`, a download script reproduces them, and a QGIS project shows all layers aligned over the chosen area.
 
@@ -165,7 +165,7 @@ A Python pipeline in `tools/mapgen/` turns any map's raw data into a Godot-ready
 
 1. **Load and project:** read OSM and MML data, reproject to EPSG:3067, subtract the local origin.
 2. **Terrain:** produce either chunked terrain meshes or a 16-bit heightmap for the Terrain3D add-on. Decide with an ADR (see below).
-3. **Buildings:** extrude footprints to height, from MML 3D data, OSM `height` or `building:levels` tags, or a default of 2 floors × 3 m. Set the base at terrain height under the footprint. Start with flat roofs; add simple pitched roofs later.
+3. **Buildings:** extrude footprints to height, from MML 0.5 p lidar (median roof height minus ground), MML 3D data, OSM `height` or `building:levels` tags, or a default of 2 floors × 3 m. Set the base at terrain height under the footprint. Start with flat roofs; add simple pitched roofs later.
 4. **Roads:** buffer centre lines to widths by road class, triangulate, drape onto the terrain with a small offset. Handle bridges with OSM `bridge` and `layer` tags.
 5. **Water and land use:** water polygons as flat meshes, land-use polygons as material zones on the ground.
 6. **Vegetation:** scatter tree positions inside forest and park polygons; output positions only, not meshes.
@@ -203,10 +203,11 @@ Maps are data, not code: a new town is a new config folder, and building appeara
 Each building attribute comes from the first source that has a value:
 
 1. Manual override in `maps/<map-id>/overrides/`, keyed by OSM or MML building id: height, roof shape and colour, facade style, texture set, or a hand-made replacement model (.glb).
-2. Enhancement data gathered for the map (sources below).
-3. OSM tags: `building:levels`, `roof:shape`, `roof:colour`, `building:material`, `building:colour`.
-4. MML 3D building geometry.
-5. Defaults from the map's style preset.
+2. Enhancement data gathered for the map, for appearance (sources below).
+3. MML 0.5 p lidar: measured height per building, the median roof height minus ground. The 90th percentile is stored too, for future pitched roofs.
+4. MML 3D building geometry: slot reserved, no reader yet.
+5. OSM tags: `height`, `building:levels`, `roof:shape`, `roof:colour`, `building:material`, `building:colour`.
+6. Defaults from the map's style preset (2 floors × 3 m for height).
 
 Tooling for this layer:
 
@@ -224,7 +225,7 @@ Tooling for this layer:
 | Your own photographs | Facade textures, photogrammetry, reference | You own them. Avoid identifiable people and number plates. |
 | Mapillary street-level imagery | Facade textures, reference | CC BY-SA 4.0: attribution, and textures made from the photos must be shared under the same licence ([Mapillary](https://help.mapillary.com/hc/en-us/articles/115001770409)). |
 | MML orthophotos | Roof colours and shapes from above | CC BY 4.0, attribution |
-| MML 0.5 p point cloud | Roof shapes where MML 3D buildings are missing | CC BY 4.0, attribution |
+| MML 0.5 p point cloud | Building heights (in use); later roof shapes | CC BY 4.0, attribution |
 | Google Street View | Viewing it yourself as a modelling reference | Google Maps Platform terms forbid exporting or extracting its content for use outside Google's services, so no textures or automated extraction ([Cesium forum, quoting the terms](https://community.cesium.com/t/saving-google-map-data/31228)). |
 
 Whether CC BY-SA's share-alike reaches beyond the textures themselves is a legal question; keep those textures in a separate, labelled folder. Tags you add to OSM from your own survey help both the pipeline and other OSM users, but OSM doesn't accept data copied from Google sources.

@@ -172,6 +172,7 @@ def test_resolve_buildings_assigns_tile_by_centroid_and_base_below_ground() -> N
     assert building.base_z <= hf.sample(corners[:, 0], corners[:, 1]).min()
     assert building.provenance()["height_source"] == "osm_levels"
     assert result.report()["height_source_counts"] == {
+        "mml_lidar": 0,
         "mml_3d": 0,
         "osm_height": 0,
         "osm_levels": 1,

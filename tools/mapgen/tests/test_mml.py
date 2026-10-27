@@ -1,4 +1,5 @@
 import json
+import re
 import urllib.parse
 from collections.abc import Iterator
 from pathlib import Path
@@ -413,10 +414,12 @@ def test_client_refuses_laser_process(fixture_config: MapConfig, tmp_repo: TmpRe
 
 
 def test_no_laser_process_in_source_code() -> None:
+    """The only laser scanning process id in the source is the 0.5 p one (ADR 0005)."""
     src = Path(__file__).resolve().parents[1] / "src"
     for path in src.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
-        assert "laserkeilausaineisto_" not in text, path
+        ids = set(re.findall(r"laserkeilausaineisto_\w*", text))
+        assert ids <= {"laserkeilausaineisto_05_karttalehti"}, (path, ids)
 
 
 def test_result_path_is_quoted_before_download(
@@ -547,3 +550,185 @@ def test_bbox_outside_tm35_grid_is_a_source_error(
     for env in ({}, {"MML_API_KEY": FAKE_KEY}):
         report = _run(config, tmp_repo, http, only=["mml_orthophoto"], env=env)
         assert "outside the TM35 sheet grid" in report.failed["mml_orthophoto"]
+
+
+# Laser scanning data 0.5 p (docs/specs/building-heights.md, criteria 1 and 9)
+
+LIDAR_PROCESS = "laserkeilausaineisto_05_karttalehti"
+LIDAR_5P_PROCESS = "laserkeilausaineisto_5p_karttalehti"
+LIDAR_ATTRIBUTION = (
+    "Contains data from the National Land Survey of Finland Laser scanning data 0,5 p, 10/2026"
+)
+
+
+def _lidar_config(tmp_repo: TmpRepo, data: dict[str, Any], **options: Any) -> MapConfig:
+    data["sources"]["mml_lidar"] = {"adapter": "mml_lidar", "enabled": True, "options": options}
+    return tmp_repo.load(data)
+
+
+def _lidar_results(host: str = "https://avoin-paikkatieto.maanmittauslaitos.fi") -> dict:
+    files = f"{host}/tiedostopalvelu/ogcproc/v1/jobs/j1/files"
+    return {
+        "results": [
+            {"path": f"{files}/L4211B2.laz", "format": "LAZ", "mapSheetNumber": "L4211B2"},
+            {"path": f"{files}/L4212A1.laz", "format": "LAZ", "mapSheetNumber": "L4212A1"},
+        ]
+    }
+
+
+def test_ac1_lidar_download_requests_both_5000_sheets_in_one_list(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any]
+) -> None:
+    config = _lidar_config(tmp_repo, fixture_data)
+    http = FakeHttp(FakeMml(results=_lidar_results()))
+    report = _run(config, tmp_repo, http, only=["mml_lidar"])
+
+    assert report.ok, report.failed
+    posts = [c for c in http.calls if c.method == "POST"]
+    assert len(posts) == 1
+    assert f"/processes/{LIDAR_PROCESS}/execution?" in posts[0].url
+    assert posts[0].body == {
+        "id": LIDAR_PROCESS,
+        "inputs": {
+            "mapSheetInput": ["L4211B2", "L4212A1"],
+            "fileFormatInput": "LAZ",
+            "dataSetInput": "Uusin",
+        },
+    }
+    raw = tmp_repo.raw_dir("testtown")
+    target = raw / "mml" / "lidar_05p"
+    assert sorted(p.name for p in target.iterdir()) == ["L4211B2.laz", "L4212A1.laz"]
+    entries = json.loads(manifest_path(raw).read_text())["files"]
+    assert [e["path"] for e in entries] == [
+        "mml/lidar_05p/L4211B2.laz",
+        "mml/lidar_05p/L4212A1.laz",
+    ]
+    for entry in entries:
+        assert entry["source"] == "mml_lidar"
+        assert entry["dataset"] == "Laser scanning data 0,5 p"
+        assert entry["licence"] == "CC BY 4.0"
+        assert entry["attribution"] == LIDAR_ATTRIBUTION
+        assert entry["origin"] == "downloaded"
+        assert entry["request"]["process_id"] == LIDAR_PROCESS
+    assert {e["request"]["result"]["mapSheetNumber"] for e in entries} == {"L4211B2", "L4212A1"}
+
+
+def test_ac1_lidar_dataset_option_is_sent(tmp_repo: TmpRepo, fixture_data: dict[str, Any]) -> None:
+    config = _lidar_config(tmp_repo, fixture_data, dataset="05p_2020-")
+    http = FakeHttp(FakeMml(results=_lidar_results()))
+    assert _run(config, tmp_repo, http, only=["mml_lidar"]).ok
+    (post,) = [c for c in http.calls if c.method == "POST"]
+    assert post.body["inputs"]["dataSetInput"] == "05p_2020-"
+
+
+def test_ac1_lidar_without_key_registers_placed_files(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any]
+) -> None:
+    config = _lidar_config(tmp_repo, fixture_data)
+    raw = tmp_repo.raw_dir("testtown")
+    placed = raw / "mml" / "lidar_05p" / "L4212A1.laz"
+    placed.parent.mkdir(parents=True)
+    placed.write_bytes(b"laz bytes")
+    http = FakeHttp(lambda call: pytest.fail("no request without a key"))
+    log: list[str] = []
+    report = _run(config, tmp_repo, http, only=["mml_lidar"], env={}, log=log)
+
+    assert report.ok
+    text = "\n".join(log)
+    assert "Format: LAZ, data set Uusin" in text
+    assert "L4211B2, L4212A1" in text
+    assert "tools/mapgen/data/raw/testtown/mml/lidar_05p/" in text
+    (entry,) = json.loads(manifest_path(raw).read_text())["files"]
+    assert entry["path"] == "mml/lidar_05p/L4212A1.laz"
+    assert entry["origin"] == "manual"
+    assert entry["dataset"] == "Laser scanning data 0,5 p"
+    assert entry["licence"] == "CC BY 4.0"
+
+
+@pytest.mark.parametrize(
+    "process_id",
+    [
+        LIDAR_5P_PROCESS,
+        "LASERKEILAUSAINEISTO_5P_KARTTALEHTI",
+        "  laserkeilausaineisto_5p_karttalehti\n",
+        "laserkeilausaineisto_5p_bbox",
+        "laserkeilausaineisto",
+        "laserkeilausaineisto_05_bbox",
+        "laserkeilausaineisto_05_karttalehti_v2",
+        "laserkeilausaineisto_05_karttalehti5p",
+    ],
+)
+def test_ac9_every_other_laser_process_is_refused(process_id: str) -> None:
+    with pytest.raises(ValueError, match="laser scanning"):
+        ensure_allowed_process(process_id)
+
+
+@pytest.mark.parametrize(
+    "process_id", [LIDAR_PROCESS, "LASERKEILAUSAINEISTO_05_KARTTALEHTI", f" {LIDAR_PROCESS} "]
+)
+def test_ac9_the_05p_process_is_allowed(process_id: str) -> None:
+    assert ensure_allowed_process(process_id) == process_id
+
+
+def test_ac9_client_refuses_a_5p_process_without_any_request(
+    fixture_config: MapConfig, tmp_repo: TmpRepo
+) -> None:
+    from mapgen.config import SourceConfig
+    from mapgen.sources.base import DownloadContext
+    from mapgen.sources.mml import LidarOptions, MmlClient
+
+    http = FakeHttp(lambda call: pytest.fail("must not call the API"))
+    options = LidarOptions()
+    ctx = DownloadContext(
+        map_config=fixture_config,
+        source_name="mml_lidar",
+        source_config=SourceConfig(adapter="mml_lidar", enabled=True, options={}),
+        options=options,
+        raw_dir=tmp_repo.raw_dir("testtown"),
+        repo_root=tmp_repo.root,
+        force=False,
+        http=http,
+        env={},
+    )
+    client = MmlClient(ctx, options, FAKE_KEY)
+    for process_id in (LIDAR_5P_PROCESS, "laserkeilausaineisto_5p_bbox"):
+        with pytest.raises(ValueError, match="laser scanning"):
+            client.execute(process_id, {"mapSheetInput": ["L4212A1"]})
+        with pytest.raises(ValueError, match="laser scanning"):
+            client.describe(process_id)
+    assert http.calls == []
+
+
+@pytest.mark.parametrize(
+    "process_id", [LIDAR_5P_PROCESS, "laserkeilausaineisto_5p", "korkeusmalli_2m_bbox"]
+)
+def test_ac9_lidar_options_only_allow_the_05p_process(process_id: str) -> None:
+    from mapgen.sources.mml import LidarOptions
+
+    with pytest.raises(ValueError):
+        LidarOptions(process_id=process_id)
+    assert LidarOptions(process_id=LIDAR_PROCESS).process_id == LIDAR_PROCESS
+
+
+def test_ac9_map_config_with_a_5p_process_is_refused(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any]
+) -> None:
+    from mapgen.config import ConfigError
+
+    with pytest.raises(ConfigError, match="mml_lidar"):
+        _lidar_config(tmp_repo, fixture_data, process_id=LIDAR_5P_PROCESS)
+    # Other MML sources refuse 5 p ids too.
+    fixture_data["sources"]["mml_dem_2m"]["options"]["process_id"] = LIDAR_5P_PROCESS
+    with pytest.raises(ConfigError):
+        tmp_repo.load(fixture_data)
+
+
+def test_ac9_lidar_adapter_refuses_a_5p_process_that_skipped_validation() -> None:
+    """Even if a 5 p id slips past config validation, the adapter refuses it."""
+    from mapgen.sources.mml import LidarOptions, MmlLidarAdapter
+
+    options = LidarOptions.model_construct(
+        **{**LidarOptions().model_dump(), "process_id": LIDAR_5P_PROCESS}
+    )
+    with pytest.raises(ValueError):
+        MmlLidarAdapter().process_id(options)

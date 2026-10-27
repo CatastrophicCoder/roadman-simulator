@@ -10,6 +10,7 @@ from mapgen.sources.base import AdapterOptions, SourceAdapter
 from mapgen.sources.mml import (
     MmlBuildings3dAdapter,
     MmlDem2mAdapter,
+    MmlLidarAdapter,
     MmlOrthophotoAdapter,
     MmlTopographicAdapter,
 )
@@ -23,6 +24,7 @@ ADAPTERS: dict[str, type[SourceAdapter]] = {
         MmlOrthophotoAdapter,
         MmlBuildings3dAdapter,
         MmlTopographicAdapter,
+        MmlLidarAdapter,
     )
 }
 
