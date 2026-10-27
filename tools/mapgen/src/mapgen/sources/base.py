@@ -1,4 +1,4 @@
-"""The shared adapter interface and the download context."""
+"""The shared adapter interface: download and load contexts, and the loaded data types."""
 
 import hashlib
 import time
@@ -9,12 +9,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict
+from rasterio.transform import Affine
+from shapely.geometry import MultiPolygon, Polygon
 
 from mapgen.config import MapConfig, SourceConfig
+from mapgen.geo import BBox
 from mapgen.http import HttpClient
 
 FileOrigin = Literal["downloaded", "manual"]
+
+# What a source can load. The build picks enabled sources by capability, never by name.
+OSM_VECTOR = "osm_vector"  # OpenStreetMap-style vector features (building footprints for now)
+ELEVATION = "elevation"  # a terrain elevation raster
+BUILDINGS_3D = "buildings_3d"  # building footprints with measured heights
 
 
 def utc_now() -> datetime:
@@ -166,12 +175,78 @@ class DownloadContext:
         )
 
 
+class SourceLoadError(Exception):
+    """A source's raw files are missing or unreadable. The message is shown to the user."""
+
+
+@dataclass(frozen=True)
+class Footprint:
+    """A building footprint in `crs` coordinates.
+
+    `id` is "<source>:<type>/<number>", e.g. "osm:way/123". `measured_height_m` is set only
+    by `buildings_3d` sources.
+    """
+
+    id: str
+    geometry: Polygon | MultiPolygon
+    crs: str
+    tags: Mapping[str, str] = field(default_factory=dict)
+    measured_height_m: float | None = None
+
+
+@dataclass(frozen=True)
+class SkippedFeature:
+    """A feature that was not loaded, and why."""
+
+    id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ElevationRaster:
+    """A north-up elevation grid. `data` rows run north to south; nodata cells are NaN."""
+
+    data: np.ndarray
+    transform: Affine
+    crs: str
+    warped_from: tuple[str, ...] = ()  # CRSs of source files that had to be warped
+
+    @property
+    def resolution(self) -> tuple[float, float]:
+        return (abs(self.transform.a), abs(self.transform.e))
+
+
+@dataclass
+class SourceData:
+    """What one source loaded, plus the raw files it read (used for the pack credits)."""
+
+    files: list[Path] = field(default_factory=list)
+    footprints: list[Footprint] = field(default_factory=list)
+    elevation: ElevationRaster | None = None
+    skipped: list[SkippedFeature] = field(default_factory=list)
+    partial: list[SkippedFeature] = field(default_factory=list)  # built, but incomplete
+
+
+@dataclass
+class LoadContext:
+    """Everything an adapter needs to read its raw files for a build."""
+
+    map_config: MapConfig
+    source_name: str
+    options: AdapterOptions
+    raw_dir: Path
+    target_crs: str
+    bounds: BBox  # the area to read, in `target_crs` world coordinates
+    log: Callable[[str], None] = print
+
+
 class SourceAdapter(ABC):
     """One data source. Subclasses are registered in `mapgen.sources.registry`."""
 
     name: ClassVar[str]
     licence: ClassVar[str]
     Options: ClassVar[type[AdapterOptions]] = AdapterOptions
+    provides: ClassVar[frozenset[str]] = frozenset()
 
     @abstractmethod
     def attribution(self, retrieved_at: datetime) -> str:
@@ -180,3 +255,7 @@ class SourceAdapter(ABC):
     @abstractmethod
     def download(self, ctx: DownloadContext) -> list[DownloadedFile]:
         """Download (or register already present) files and describe each one."""
+
+    def load(self, ctx: LoadContext) -> SourceData:
+        """Read the downloaded raw files. Only adapters with a capability in `provides` load."""
+        raise NotImplementedError(f"adapter {self.name!r} cannot load data for a build")

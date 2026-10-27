@@ -1,0 +1,3 @@
+# The root .gitignore ignores every build/ folder. The pipeline package of that name is
+# source code; the work folder tools/mapgen/build/ stays ignored.
+!/src/mapgen/build/

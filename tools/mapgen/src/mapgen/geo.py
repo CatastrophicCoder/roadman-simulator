@@ -8,7 +8,10 @@ import math
 from dataclasses import dataclass
 from functools import lru_cache
 
-from pyproj import Transformer
+import numpy as np
+import shapely
+from pyproj import CRS, Transformer
+from shapely.geometry.base import BaseGeometry
 
 WGS84 = "EPSG:4326"
 
@@ -119,3 +122,34 @@ def square_around(centre_x: float, centre_y: float, size: float) -> BBox:
         raise ValueError("size must be positive")
     half = size / 2
     return BBox(centre_x - half, centre_y - half, centre_x + half, centre_y + half)
+
+
+def same_crs(a: str, b: str) -> bool:
+    return a == b or CRS.from_user_input(a) == CRS.from_user_input(b)
+
+
+def reproject_geometry[G: BaseGeometry](geometry: G, src_crs: str, dst_crs: str) -> G:
+    """`geometry` with its (x, y) coordinates transformed from `src_crs` to `dst_crs`."""
+    if same_crs(src_crs, dst_crs):
+        return geometry
+    transformer = _transformer(src_crs, dst_crs)
+
+    def apply(coords: np.ndarray) -> np.ndarray:
+        x, y = transformer.transform(coords[:, 0], coords[:, 1])
+        return np.column_stack([x, y])
+
+    return shapely.transform(geometry, apply)
+
+
+def offset_geometry[G: BaseGeometry](geometry: G, dx: float, dy: float) -> G:
+    """`geometry` moved by (dx, dy), e.g. minus the origin to get local coordinates."""
+    shift = np.array([dx, dy])
+    return shapely.transform(geometry, lambda coords: coords + shift)
+
+
+def crs_urn(crs: str) -> str:
+    """The OGC URN of a CRS, e.g. "urn:ogc:def:crs:EPSG::3067" (for GeoJSON's legacy `crs`)."""
+    authority = CRS.from_user_input(crs).to_authority()
+    if authority is None:
+        raise ValueError(f"CRS {crs!r} has no authority code")
+    return f"urn:ogc:def:crs:{authority[0]}::{authority[1]}"

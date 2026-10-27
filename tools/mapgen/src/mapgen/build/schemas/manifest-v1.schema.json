@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "manifest-v1.schema.json",
+  "$defs": {
+    "PackAxes": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "const": "east",
+          "default": "east",
+          "title": "X",
+          "type": "string"
+        },
+        "y": {
+          "const": "up",
+          "default": "up",
+          "title": "Y",
+          "type": "string"
+        },
+        "z": {
+          "const": "-north",
+          "default": "-north",
+          "title": "Z",
+          "type": "string"
+        }
+      },
+      "title": "PackAxes",
+      "type": "object"
+    },
+    "PackCredit": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "dataset": {
+          "title": "Dataset",
+          "type": "string"
+        },
+        "licence": {
+          "title": "Licence",
+          "type": "string"
+        },
+        "attribution": {
+          "title": "Attribution",
+          "type": "string"
+        },
+        "retrieved_at": {
+          "title": "Retrieved At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "dataset",
+        "licence",
+        "attribution",
+        "retrieved_at"
+      ],
+      "title": "PackCredit",
+      "type": "object"
+    },
+    "PackOrigin": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "PackOrigin",
+      "type": "object"
+    },
+    "PackTile": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^tile_x-?\\d+_y-?\\d+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "file": {
+          "description": "path relative to the pack folder",
+          "title": "File",
+          "type": "string"
+        },
+        "bounds_local": {
+          "description": "[min_x, min_y, max_x, max_y] in local metres",
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Bounds Local",
+          "type": "array"
+        },
+        "building_count": {
+          "minimum": 0,
+          "title": "Building Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "file",
+        "bounds_local",
+        "building_count"
+      ],
+      "title": "PackTile",
+      "type": "object"
+    },
+    "PackTool": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "PackTool",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "map_id": {
+      "title": "Map Id",
+      "type": "string"
+    },
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "area": {
+      "enum": [
+        "full",
+        "test"
+      ],
+      "title": "Area",
+      "type": "string"
+    },
+    "crs": {
+      "title": "Crs",
+      "type": "string"
+    },
+    "origin": {
+      "$ref": "#/$defs/PackOrigin"
+    },
+    "height_datum": {
+      "title": "Height Datum",
+      "type": "string"
+    },
+    "tile_size_m": {
+      "exclusiveMinimum": 0,
+      "title": "Tile Size M",
+      "type": "integer"
+    },
+    "axes": {
+      "$ref": "#/$defs/PackAxes"
+    },
+    "tiles": {
+      "items": {
+        "$ref": "#/$defs/PackTile"
+      },
+      "title": "Tiles",
+      "type": "array"
+    },
+    "credits": {
+      "items": {
+        "$ref": "#/$defs/PackCredit"
+      },
+      "title": "Credits",
+      "type": "array"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "tool": {
+      "$ref": "#/$defs/PackTool"
+    }
+  },
+  "required": [
+    "schema_version",
+    "map_id",
+    "display_name",
+    "area",
+    "crs",
+    "origin",
+    "height_datum",
+    "tile_size_m",
+    "axes",
+    "tiles",
+    "credits",
+    "generated_at",
+    "tool"
+  ],
+  "title": "PackManifest",
+  "type": "object"
+}

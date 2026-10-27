@@ -1,19 +1,37 @@
-"""OpenStreetMap through the Overpass API: one request for the whole map bbox."""
+"""OpenStreetMap through the Overpass API: one request for the whole map bbox.
+
+`load` reads the saved `.osm` XML with the standard library and returns building
+footprints in WGS84 (lon, lat). Ids look like "osm:way/123" and "osm:relation/45".
+"""
 
 import re
 import urllib.parse
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from pydantic import Field
+from shapely import make_valid
+from shapely.errors import GEOSException
+from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
+from mapgen.geo import WGS84
 from mapgen.http import HttpError
 from mapgen.sources.base import (
+    OSM_VECTOR,
     AdapterOptions,
     DownloadContext,
     DownloadedFile,
+    Footprint,
+    LoadContext,
+    SkippedFeature,
     SourceAdapter,
+    SourceData,
     SourceError,
+    SourceLoadError,
 )
 
 DEFAULT_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -60,10 +78,265 @@ def overpass_runtime_error(path: Path) -> str | None:
     return None
 
 
+def osm_path(raw_dir: Path, map_id: str) -> Path:
+    return raw_dir / "osm" / f"{map_id}.osm"
+
+
+# Reading the XML.
+
+Coord = tuple[float, float]
+
+
+@dataclass
+class _Way:
+    refs: list[int]
+    tags: dict[str, str]
+
+
+@dataclass
+class _Relation:
+    members: list[tuple[str, int, str]]  # (type, ref, role)
+    tags: dict[str, str]
+
+
+@dataclass
+class OsmBuildings:
+    """Building footprints read from an `.osm` file, in WGS84 (lon, lat)."""
+
+    footprints: list[Footprint] = field(default_factory=list)
+    skipped: list[SkippedFeature] = field(default_factory=list)
+    partial: list[SkippedFeature] = field(default_factory=list)  # built, but incomplete
+
+
+def is_building(tags: dict[str, str]) -> bool:
+    value = tags.get("building")
+    return value is not None and value != "no"
+
+
+def _tags(element: ET.Element) -> dict[str, str]:
+    return {t.attrib["k"]: t.attrib["v"] for t in element.iter("tag") if "k" in t.attrib}
+
+
+def _parse(path: Path) -> tuple[dict[int, Coord], dict[int, _Way], dict[int, _Relation]]:
+    nodes: dict[int, Coord] = {}
+    ways: dict[int, _Way] = {}
+    relations: dict[int, _Relation] = {}
+    for _, element in ET.iterparse(path, events=("end",)):
+        tag = element.tag
+        if tag == "node":
+            nodes[int(element.attrib["id"])] = (
+                float(element.attrib["lon"]),
+                float(element.attrib["lat"]),
+            )
+        elif tag == "way":
+            refs = [int(nd.attrib["ref"]) for nd in element.iter("nd")]
+            ways[int(element.attrib["id"])] = _Way(refs, _tags(element))
+        elif tag == "relation":
+            members = [
+                (m.attrib["type"], int(m.attrib["ref"]), m.attrib.get("role", ""))
+                for m in element.iter("member")
+            ]
+            relations[int(element.attrib["id"])] = _Relation(members, _tags(element))
+        else:
+            continue
+        element.clear()
+    return nodes, ways, relations
+
+
+def _coords(refs: list[int], nodes: dict[int, Coord]) -> list[Coord] | None:
+    try:
+        return [nodes[ref] for ref in refs]
+    except KeyError:
+        return None
+
+
+def _valid_area(geom: BaseGeometry) -> Polygon | MultiPolygon | None:
+    """`geom` repaired, keeping only its polygonal parts; None if nothing with area is left."""
+    if not geom.is_valid:
+        geom = make_valid(geom)
+    if isinstance(geom, Polygon | MultiPolygon):
+        polygons = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
+    else:
+        polygons = [g for g in getattr(geom, "geoms", []) if isinstance(g, Polygon)]
+    polygons = [p for p in polygons if not p.is_empty and p.area > 0]
+    if not polygons:
+        return None
+    return polygons[0] if len(polygons) == 1 else MultiPolygon(polygons)
+
+
+def join_rings(segments: list[list[int]]) -> tuple[list[list[int]], int]:
+    """Join way node lists into closed rings by shared end nodes.
+
+    Returns the closed rings and the number of open chains that could not be closed.
+    """
+    pending = [list(seg) for seg in segments if len(seg) >= 2]
+    rings: list[list[int]] = []
+    unclosed = 0
+    while pending:
+        ring = pending.pop(0)
+        while ring[0] != ring[-1]:
+            for index, seg in enumerate(pending):
+                if seg[0] == ring[-1]:
+                    ring.extend(seg[1:])
+                elif seg[-1] == ring[-1]:
+                    ring.extend(reversed(seg[:-1]))
+                elif seg[-1] == ring[0]:
+                    ring[:0] = seg[:-1]
+                elif seg[0] == ring[0]:
+                    ring[:0] = list(reversed(seg[1:]))
+                else:
+                    continue
+                pending.pop(index)
+                break
+            else:
+                break
+        if ring[0] == ring[-1] and len(ring) >= 4:
+            rings.append(ring)
+        else:
+            unclosed += 1
+    return rings, unclosed
+
+
+@dataclass(frozen=True)
+class _RelationResult:
+    geometry: Polygon | MultiPolygon | None
+    reason: str = ""  # why it was skipped (geometry is None)
+    partial: tuple[str, ...] = ()  # what was missing although it was built
+
+
+def _ring_areas(rings: list[list[int]], nodes: dict[int, Coord]) -> list[Polygon | MultiPolygon]:
+    """Each closed ring as a repaired area (rings that collapse to nothing are dropped)."""
+    areas = [_valid_area(Polygon([nodes[ref] for ref in ring])) for ring in rings]
+    return [a for a in areas if a is not None]
+
+
+def _relation_geometry(
+    relation: _Relation, ways: dict[int, _Way], nodes: dict[int, Coord]
+) -> _RelationResult:
+    """The relation's area from its closed rings; outer and inner rings are both repaired."""
+    by_role: dict[str, list[list[int]]] = {"outer": [], "inner": []}
+    missing = 0
+    for kind, ref, role in relation.members:
+        if kind != "way":
+            continue
+        way = ways.get(ref)
+        if way is None or _coords(way.refs, nodes) is None:
+            missing += 1
+            continue
+        by_role["inner" if role == "inner" else "outer"].append(way.refs)
+    outer_rings, open_outer = join_rings(by_role["outer"])
+    inner_rings, open_inner = join_rings(by_role["inner"])
+    problems: list[str] = []
+    if missing:
+        problems.append(f"{missing} member way(s) missing")
+    if open_outer:
+        problems.append(f"{open_outer} outer ring(s) not closed")
+    if open_inner:
+        problems.append(f"{open_inner} inner ring(s) not closed")
+    if not outer_rings:
+        detail = ", ".join(problems) or "no member ways"
+        return _RelationResult(None, f"incomplete multipolygon: no closed outer ring ({detail})")
+    outers = _ring_areas(outer_rings, nodes)
+    inners = _ring_areas(inner_rings, nodes)
+    if not outers:
+        return _RelationResult(None, "multipolygon has no area after repair")
+    outer = unary_union(outers)
+    geom = outer.difference(unary_union(inners)) if inners else outer
+    area = _valid_area(geom)
+    if area is None:
+        return _RelationResult(None, "multipolygon has no area after repair")
+    return _RelationResult(area, partial=tuple(problems))
+
+
+def read_osm_buildings(path: Path) -> OsmBuildings:
+    """Building footprints from closed ways and `type=multipolygon` building relations.
+
+    Relations can arrive incomplete (ADR 0005): unclosed rings are dropped, and a relation
+    with no closed outer ring is skipped. A relation built despite missing member ways or
+    unclosed rings is listed in `partial`. Geometry errors skip the feature with a reason.
+    Ways that are the outer ring of a building relation that was built are skipped as
+    duplicates.
+    """
+    nodes, ways, relations = _parse(path)
+    result = OsmBuildings()
+    used_outer_ways: dict[int, int] = {}
+
+    for rel_id, relation in sorted(relations.items()):
+        if not is_building(relation.tags):
+            continue
+        fid = f"osm:relation/{rel_id}"
+        if relation.tags.get("type") != "multipolygon":
+            kind = relation.tags.get("type", "")
+            result.skipped.append(SkippedFeature(fid, f"unsupported relation type {kind!r}"))
+            continue
+        try:
+            built = _relation_geometry(relation, ways, nodes)
+        except (GEOSException, ValueError) as exc:
+            result.skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+            continue
+        if built.geometry is None:
+            result.skipped.append(SkippedFeature(fid, built.reason))
+            continue
+        if built.partial:
+            reason = "partial multipolygon: " + ", ".join(built.partial)
+            result.partial.append(SkippedFeature(fid, reason))
+        result.footprints.append(Footprint(fid, built.geometry, WGS84, dict(relation.tags)))
+        for kind, ref, role in relation.members:
+            if kind == "way" and role in ("outer", ""):
+                used_outer_ways[ref] = rel_id
+
+    for way_id, way in sorted(ways.items()):
+        if not is_building(way.tags):
+            continue
+        fid = f"osm:way/{way_id}"
+        if way_id in used_outer_ways:
+            reason = f"duplicate: outer ring of osm:relation/{used_outer_ways[way_id]}"
+            result.skipped.append(SkippedFeature(fid, reason))
+            continue
+        if len(way.refs) < 4 or way.refs[0] != way.refs[-1]:
+            result.skipped.append(SkippedFeature(fid, "way is not closed"))
+            continue
+        coords = _coords(way.refs, nodes)
+        if coords is None:
+            result.skipped.append(SkippedFeature(fid, "way has nodes missing from the data"))
+            continue
+        try:
+            area = _valid_area(Polygon(coords))
+        except (GEOSException, ValueError) as exc:
+            result.skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+            continue
+        if area is None:
+            result.skipped.append(SkippedFeature(fid, "footprint has no area after repair"))
+            continue
+        result.footprints.append(Footprint(fid, area, WGS84, dict(way.tags)))
+
+    result.footprints.sort(key=lambda f: f.id)
+    return result
+
+
 class OverpassAdapter(SourceAdapter):
     name = "osm_overpass"
     licence = "ODbL 1.0"
     Options = OverpassOptions
+    provides = frozenset({OSM_VECTOR})
+
+    def load(self, ctx: LoadContext) -> SourceData:
+        path = osm_path(ctx.raw_dir, ctx.map_config.id)
+        if not path.is_file():
+            raise SourceLoadError(
+                f"[{ctx.source_name}] {path} not found; run `mapgen download "
+                f"{ctx.map_config.id} --only {ctx.source_name}`"
+            )
+        try:
+            buildings = read_osm_buildings(path)
+        except (ET.ParseError, KeyError, ValueError) as exc:
+            raise SourceLoadError(f"[{ctx.source_name}] cannot read {path}: {exc}") from exc
+        return SourceData(
+            files=[path],
+            footprints=buildings.footprints,
+            skipped=buildings.skipped,
+            partial=buildings.partial,
+        )
 
     def attribution(self, retrieved_at: datetime) -> str:
         return "© OpenStreetMap contributors"
@@ -72,7 +345,7 @@ class OverpassAdapter(SourceAdapter):
         options = ctx.options
         assert isinstance(options, OverpassOptions)
         cfg = ctx.map_config
-        dest = ctx.raw_dir / "osm" / f"{cfg.id}.osm"
+        dest = osm_path(ctx.raw_dir, cfg.id)
         dataset = "OpenStreetMap"
 
         if dest.exists() and not ctx.force:

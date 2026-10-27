@@ -1,10 +1,12 @@
-"""Locating the repository, map configs and raw data folders."""
+"""Locating the repository, map configs, raw data, build work folders and map packs."""
 
 from pathlib import Path
 
 MAPS_DIR = "maps"
 MAPGEN_DIR = Path("tools") / "mapgen"
 RAW_DIR = MAPGEN_DIR / "data" / "raw"
+WORK_DIR = MAPGEN_DIR / "build"  # intermediate stage output, git-ignored
+PACKS_DIR = Path("game") / "maps"
 
 
 class RepoRootNotFoundError(RuntimeError):
@@ -38,3 +40,13 @@ def map_config_path(repo_root: Path, map_id: str) -> Path:
 
 def raw_dir(repo_root: Path, map_id: str) -> Path:
     return repo_root / RAW_DIR / map_id
+
+
+def work_dir(repo_root: Path, map_id: str, area: str) -> Path:
+    """Intermediate output of one build: `tools/mapgen/build/<map-id>/<area>/`."""
+    return repo_root / WORK_DIR / map_id / area
+
+
+def pack_dir(repo_root: Path, map_id: str) -> Path:
+    """The generated map pack: `game/maps/<map-id>/`."""
+    return repo_root / PACKS_DIR / map_id

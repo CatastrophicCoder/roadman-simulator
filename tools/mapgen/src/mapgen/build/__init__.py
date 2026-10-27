@@ -1,0 +1,222 @@
+"""`mapgen build`: run the pipeline stages in order and write the map pack.
+
+Stage output goes to the work folder (`tools/mapgen/build/<map-id>/<area>/`), the pack
+to `game/maps/<map-id>/` (or `--out`). Both areas write the same pack folder; the
+manifest's `area` says which one it holds. The pack is written to a temporary sibling
+folder and swapped in only when complete and valid (`pack_io`).
+"""
+
+import shutil
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from mapgen import __version__
+from mapgen.build.area import AreaName, build_area
+from mapgen.build.buildings import BuildingsResult, match_measured_heights, resolve_buildings
+from mapgen.build.export_glb import AXES, TERRAIN_NODE, MeshNode, export_glb
+from mapgen.build.pack_io import PackFolderError, check_pack_target, staging_dir, swap_in
+from mapgen.build.pack_manifest import (
+    BUILDINGS_NAME,
+    HEIGHT_DATUM,
+    MANIFEST_NAME,
+    SCHEMA_VERSION,
+    TILES_DIR,
+    ManifestError,
+    PackManifest,
+    credits_for,
+    validate_manifest_document,
+    validate_manifest_file,
+)
+from mapgen.build.stage1_load import BuildError, run_load
+from mapgen.build.stage_io import write_geojson, write_json
+from mapgen.build.terrain import MeshTerrainBuilder, TerrainBuilder, TerrainChunk
+from mapgen.config import MapConfig
+from mapgen.manifest import load_entries
+from mapgen.sources.base import isoformat_utc, utc_now
+
+__all__ = ["BuildError", "BuildReport", "run_build"]
+
+STAGE_DIRS = ("01-load", "02-terrain", "03-buildings")
+
+
+@dataclass
+class BuildReport:
+    map_id: str
+    area: AreaName
+    pack_dir: Path
+    work_dir: Path
+    tile_count: int = 0
+    building_count: int = 0
+    height_source_counts: dict[str, int] = field(default_factory=dict)
+    skipped: list[dict[str, str]] = field(default_factory=list)
+    timings_s: dict[str, float] = field(default_factory=dict)
+
+
+def _clear(folder: Path) -> None:
+    if folder.is_dir():
+        shutil.rmtree(folder)
+    folder.mkdir(parents=True)
+
+
+def _terrain_stats(tile_id: str, chunk: TerrainChunk) -> dict[str, Any]:
+    z = chunk.vertices[:, 2]
+    return {
+        "id": tile_id,
+        "vertices": int(len(chunk.vertices)),
+        "faces": int(len(chunk.faces)),
+        "z_min": float(z.min()),
+        "z_max": float(z.max()),
+    }
+
+
+def run_build(
+    config: MapConfig,
+    area_name: AreaName,
+    raw_dir: Path,
+    out_dir: Path,
+    work_dir: Path,
+    *,
+    terrain_builder: TerrainBuilder | None = None,
+    now: Callable[[], datetime] = utc_now,
+    log: Callable[[str], None] = print,
+) -> BuildReport:
+    """Build the map pack for `config` from the raw files in `raw_dir`."""
+    builder = terrain_builder or MeshTerrainBuilder()
+    try:
+        check_pack_target(out_dir)  # fail before the slow stages, and again before the swap
+    except PackFolderError as exc:
+        raise BuildError(str(exc)) from exc
+    area = build_area(config, area_name)
+    tiles = area.tiles()
+    report = BuildReport(config.id, area_name, out_dir, work_dir, tile_count=len(tiles))
+    origin = (config.origin.x, config.origin.y)
+
+    @contextmanager
+    def stage(name: str) -> Iterator[None]:
+        start = time.perf_counter()
+        yield
+        report.timings_s[name] = round(time.perf_counter() - start, 3)
+        log(f"[build] {name}: {report.timings_s[name]:.2f} s")
+
+    for name in STAGE_DIRS:
+        _clear(work_dir / name)
+
+    with stage("load"):
+        loaded = run_load(config, area, raw_dir, work_dir / "01-load", log=log)
+    report.skipped = list(loaded.report["skipped"])
+
+    with stage("terrain"):
+        chunks: dict[str, TerrainChunk] = {}
+        stats = []
+        for tile in tiles:
+            chunk = builder.build_tile(loaded.heightfield, tile)
+            chunks[tile.id] = chunk
+            stats.append(_terrain_stats(tile.id, chunk))
+            export_glb(
+                work_dir / "02-terrain" / f"{tile.id}.glb",
+                [MeshNode(TERRAIN_NODE, chunk.vertices, chunk.faces, chunk.normals)],
+            )
+        write_json(work_dir / "02-terrain" / "stats.json", {"tiles": stats})
+
+    with stage("buildings"):
+        measured = match_measured_heights(loaded.footprints, loaded.buildings_3d)
+        buildings = resolve_buildings(loaded.footprints, loaded.heightfield, area, measured)
+        _write_buildings_stage(work_dir / "03-buildings", buildings, config.crs, origin)
+    building_report = buildings.report()
+    report.building_count = building_report["building_count"]
+    report.height_source_counts = building_report["height_source_counts"]
+
+    with stage("export"):
+        by_tile = buildings.by_tile()
+        unknown = set(by_tile) - {t.id for t in tiles}
+        if unknown:
+            raise BuildError(f"buildings assigned to tiles outside the area: {sorted(unknown)}")
+        tile_entries = [
+            {
+                "id": tile.id,
+                "file": f"{TILES_DIR}/{tile.id}.glb",
+                "bounds_local": tile.bounds.as_list(),
+                "building_count": len(by_tile.get(tile.id, [])),
+            }
+            for tile in tiles
+        ]
+        # Everything that can fail on bad input is checked before the pack folder is touched.
+        try:
+            credits = credits_for(loaded.files, raw_dir, load_entries(raw_dir))
+            manifest = PackManifest.model_validate(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "map_id": config.id,
+                    "display_name": config.display_name,
+                    "area": area_name,
+                    "crs": config.crs,
+                    "origin": {"x": config.origin.x, "y": config.origin.y},
+                    "height_datum": HEIGHT_DATUM,
+                    "tile_size_m": config.tile_size_m,
+                    "axes": AXES,
+                    "tiles": tile_entries,
+                    "credits": [c.model_dump() for c in credits],
+                    "generated_at": isoformat_utc(now()),
+                    "tool": {"name": "mapgen", "version": __version__},
+                }
+            )
+            document = manifest.model_dump(mode="json")
+            validate_manifest_document(document)
+        except ManifestError as exc:
+            raise BuildError(str(exc)) from exc
+
+        staging = staging_dir(out_dir)
+        try:
+            for tile in tiles:
+                chunk = chunks[tile.id]
+                nodes = [MeshNode(TERRAIN_NODE, chunk.vertices, chunk.faces, chunk.normals)]
+                for building in by_tile.get(tile.id, []):
+                    nodes.append(MeshNode(building.node, *building.visual_mesh()))
+                    for name, vertices, faces in building.collision_meshes():
+                        nodes.append(MeshNode(name, vertices, faces))
+                export_glb(staging / TILES_DIR / f"{tile.id}.glb", nodes)
+            write_json(
+                staging / BUILDINGS_NAME,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "map_id": config.id,
+                    "buildings": [b.provenance() for b in buildings.buildings],
+                },
+            )
+            validate_manifest_file(write_json(staging / MANIFEST_NAME, document))
+            swap_in(staging, out_dir)
+        except (ManifestError, PackFolderError) as exc:
+            raise BuildError(str(exc)) from exc
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    write_json(work_dir / "timings.json", report.timings_s)
+    return report
+
+
+def _write_buildings_stage(
+    folder: Path, buildings: BuildingsResult, crs: str, origin: tuple[float, float]
+) -> None:
+    write_geojson(
+        folder / "buildings.geojson",
+        (
+            (
+                b.footprint,
+                {
+                    **b.provenance(),
+                    "top_z": round(b.top_z, 3),
+                    "height_tag": b.tags.get("height"),
+                    "levels_tag": b.tags.get("building:levels"),
+                },
+            )
+            for b in buildings.buildings
+        ),
+        crs,
+        origin,
+    )
+    write_json(folder / "report.json", buildings.report())

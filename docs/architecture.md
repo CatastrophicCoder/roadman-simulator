@@ -62,7 +62,7 @@ A Python pipeline that takes a map id and produces a self-contained map pack. Da
 Stages, each with output that can be inspected:
 
 1. Load and project to EPSG:3067, then subtract the local origin (ADR 0003).
-2. Terrain: mesh or Terrain3D heightmap. TODO: ADR 0004 is open.
+2. Terrain: behind a `TerrainBuilder` interface. Mesh terrain is the interim implementation; ADR 0004 (mesh or Terrain3D heightmap) is still open.
 3. Buildings: extruded footprints, with attributes resolved by the enhancement layer.
 4. Roads: buffered and triangulated, draped on the terrain, with bridges and layers.
 5. Water and land use.
@@ -78,23 +78,74 @@ Collision comes from glTF node name suffixes (`-col`, `-colonly`, `-convcolonly`
 
 Module layout (`tools/mapgen/src/mapgen/`):
 
-- `cli.py`: `mapgen download <map-id> [--only a,b] [--force]` and `mapgen origin <map-id>`, with `--repo-root` (found automatically by default). `build` and `enhance` will be added as further subcommands.
-- `config.py`: the `map.yaml` model and loader. `paths.py`: repo root, `maps/<map-id>/` and `data/raw/<map-id>/`.
-- `geo.py`: WGS84 to map CRS, projected bbox, world and local coordinates, test area.
+- `cli.py`: `mapgen download <map-id> [--only a,b] [--force]`, `mapgen origin <map-id>` and `mapgen build <map-id> [--area full|test] [--out DIR]`, with `--repo-root` (found automatically by default). `enhance` will be added as a further subcommand.
+- `config.py`: the `map.yaml` model and loader. `paths.py`: repo root, `maps/<map-id>/`, `data/raw/<map-id>/`, the build work folder and the pack folder.
+- `geo.py`: WGS84 to map CRS, projected bbox, world and local coordinates, test area, geometry reprojection and offsets.
 - `tm35.py`: ETRS-TM35FIN map sheet names for a bbox (used by MML adapters).
 - `http.py`: a small urllib client behind a protocol, so tests can stub it.
 - `sources/`: the adapter interface (`base.py`), the registry, and the adapters `osm_overpass`, `mml_dem_2m`, `mml_orthophoto`, `mml_buildings_3d` and `mml_topographic` (ADR 0005).
 - `download.py` and `manifest.py`: run the enabled sources and write `data/raw/<map-id>/download-manifest.json` with the checksum, licence and attribution of each file.
 
-Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, whose options model validates the source's `options`. `download(ctx)` gets the map config, the raw folder, the `--force` flag and an injected HTTP client, and returns one `DownloadedFile` record per file.
+Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, whose options model validates the source's `options`. `download(ctx)` gets the map config, the raw folder, the `--force` flag and an injected HTTP client, and returns one `DownloadedFile` record per file. Each adapter also declares what it can load in `provides` (`osm_vector`, `elevation`, `buildings_3d`), and `load(ctx)` reads its raw files for a build and returns a `SourceData` (footprints, an elevation raster, skipped features, and the files it read). The build picks enabled sources by capability, never by source name, and allows at most one source per capability.
 
-TODO: the build stages' module layout and the `build` and `enhance` commands.
+- `osm_overpass` loads building footprints from the `.osm` XML (standard library `iterparse`): closed ways and `type=multipolygon` relations, with rings joined from member ways and both outer and inner rings repaired with `make_valid`. Unclosed rings are dropped. Features that can't be built (no closed outer ring, geometry errors, duplicates of a relation's outer way) are skipped with a reason; relations built despite missing member ways or unclosed rings are listed as partial (ADR 0005).
+- `mml_dem_2m` loads its GeoTIFFs, mosaics them with `rasterio.merge`, and crops to the area plus a 10 m margin. A file is warped only when its CRS isn't equivalent to the map CRS (compared semantically, not as text); warped CRSs are listed in the load report. Nodata becomes NaN.
+- `mml_buildings_3d` has a stub `load` that returns no buildings, because its file format isn't confirmed (ADR 0005).
+
+Build stages (`build/`; ADR 0006):
+
+- `build/__init__.py`: `run_build(config, area, raw_dir, out_dir, work_dir)` runs the stages in order and writes the pack.
+- `build/area.py`: `BuildArea` (the full bbox or the test area in local coordinates, rounded outward to whole metres) and the tile grid.
+- `build/stage1_load.py`: loads the sources by capability, reprojects footprints to the map CRS, subtracts the origin, and keeps footprints whose centroid is in the area.
+- `build/heightfield.py`: `Heightfield`, the single terrain sampler for terrain, buildings and later road draping. `sample(x, y)` is bilinear. `min_under(footprint)` is the lowest node of every DEM cell the footprint touches, so a building base is never above the terrain mesh. Nodata is filled from neighbouring cells.
+- `build/terrain/`: the `TerrainBuilder` protocol (`build_tile(heightfield, tile) -> TerrainChunk`) and `MeshTerrainBuilder`, a regular grid at DEM resolution cut to the tile. Vertex normals come from the heightfield gradient (central differences of `Heightfield.sample`), so neighbouring tiles have identical edge vertices and normals.
+- `build/buildings.py`: height resolution, base height, flat-roof extrusion (holes supported) and collision boxes: one minimum rotated rectangle per footprint part. Courtyards and concave corners are filled in the collision box.
+- `build/export_glb.py`: one `.glb` per tile with trimesh, checking the node names after export.
+- `build/pack_manifest.py` and `build/schemas/manifest-v1.schema.json`: the manifest model, the committed JSON Schema, and the credits.
+- `build/pack_io.py`: replacing the pack folder safely. The pack is written to a temporary sibling folder, validated, then swapped in, so a failed build leaves the previous pack untouched. A non-empty target without a `manifest.json` is never replaced.
+
+Intermediate output goes to `tools/mapgen/build/<map-id>/<area>/` (git-ignored). The GeoJSON files are in map CRS world coordinates with a legacy `crs` member, so QGIS places them correctly:
+
+- `01-load/`: `footprints.geojson`, `dem.tif` (cropped), `report.json` (counts, skipped and partial features with reasons, DEM statistics including filled nodata cells and any warped CRSs).
+- `02-terrain/`: `<tile>.glb` (terrain only) and `stats.json`.
+- `03-buildings/`: `buildings.geojson` (resolved attributes and their sources) and `report.json` (count per height source, ignored tags).
+- `timings.json`: seconds per stage.
+
+Building heights: MML 3D measured height (when a 3D building covers at least half the footprint), OSM `height` (`12`, `12 m`, `12.5`; invalid or ≤ 0 values are ignored), `building:levels` × 3 m, then 2 floors × 3 m. Manual overrides and enhancement data come later (`mapgen enhance`).
+
+TODO: the `enhance` command.
 
 ### Map pack: `game/maps/<map-id>/`
 
-Data only: meshes, scenes and JSON, with no code (ADR 0002). Contents: tiles, road graph, markers, vegetation, minimap, `boundary.json`, and `manifest.json` with a schema version and the map's data credits. Map packs are git-ignored and regenerated by the pipeline.
+Data only: meshes, scenes and JSON, with no code (ADR 0002). Planned contents: tiles, road graph, markers, vegetation, minimap, `boundary.json`, and `manifest.json` with a schema version and the map's data credits. Map packs are git-ignored and regenerated by the pipeline. The full and test builds write the same folder; the manifest's `area` says which one it holds (ADR 0006).
 
-TODO: manifest schema and JSON formats. TODO: shipping packs as runtime-loaded `.pck` files.
+Contents so far:
+
+- `manifest.json` (schema version 1).
+- `tiles/tile_x{i}_y{j}.glb`: one file per tile. Tile (i, j) covers local [i·T, (i+1)·T) × [j·T, (j+1)·T), clipped to the area, where T is `tile_size_m`. Each file holds the terrain and the buildings whose footprint centroid is in the tile. Buildings are never split.
+- `buildings.json`: `schema_version`, `map_id` and `buildings`, one provenance entry per building: `id` (e.g. `osm:way/123`), `tile`, `node`, `collision_nodes` (a list, one per footprint part), `height_m`, `height_source` (`mml_3d`, `osm_height`, `osm_levels` or `default`), `base_z`, `base_source` (`dem`), `roof_shape` (`flat`) and `roof_shape_source` (`default`).
+
+Axes: glTF is Y-up. Local east is +X, up is +Y, and north is −Z. Units are metres from the map origin.
+
+glTF node names: `terrain-col` (visual mesh plus collision), `bld_<source>_<type>_<id>` (building visual, e.g. `bld_osm_way_123`) and `bld_<source>_<type>_<id>-colonly` (collision box only). A building with several footprint parts gets one box per part: `bld_<...>_c0-colonly`, `bld_<...>_c1-colonly`, and so on.
+
+Manifest v1 fields, validated against the committed JSON Schema `tools/mapgen/src/mapgen/build/schemas/manifest-v1.schema.json` after every build:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `map_id`, `display_name` | From `map.yaml` |
+| `area` | `full` or `test` |
+| `crs`, `origin` | The map CRS and the local origin `{x, y}` in it (ADR 0003) |
+| `height_datum` | What the heights are: currently `source DEM heights, metres` |
+| `tile_size_m` | Tile edge in metres |
+| `axes` | `{x: "east", y: "up", z: "-north"}` |
+| `tiles[]` | `id`, `file` (relative to the pack), `bounds_local` `[min_x, min_y, max_x, max_y]`, `building_count` |
+| `credits[]` | `source`, `dataset`, `licence`, `attribution`, `retrieved_at`, taken from the download manifest entries of the raw files the build read. Files with the same source, dataset, licence and attribution fold into one credit with the latest `retrieved_at` |
+| `generated_at` | UTC time of the build |
+| `tool` | `{name, version}` of the pipeline |
+
+TODO: the JSON formats of the road graph, markers, vegetation and boundary. TODO: shipping packs as runtime-loaded `.pck` files.
 
 ### MapLoader (Godot)
 

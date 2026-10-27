@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-made test data for mapgen (not from OpenStreetMap). Map: testtown.
+     Positions are local metres from the origin (309657, 6726616) in EPSG:3067,
+     converted to WGS84. Expected in the test area: 12 buildings (ways 101-106, 109,
+     relations 201, 203, 205-207); way 110 is outside; ways 108, 301 and relation 202
+     are skipped; relations 205 and 206 are partial. -->
+<osm version="0.6" generator="mapgen test fixture">
+  <node id="1001" lat="60.6290561" lon="23.5182769"/>
+  <node id="1002" lat="60.6290656" lon="23.5186417"/>
+  <node id="1003" lat="60.6292001" lon="23.5186272"/>
+  <node id="1004" lat="60.6291906" lon="23.5182624"/>
+  <node id="1005" lat="60.6291226" lon="23.5208308"/>
+  <node id="1006" lat="60.6291298" lon="23.5211045"/>
+  <node id="1007" lat="60.6292194" lon="23.5210948"/>
+  <node id="1008" lat="60.6292123" lon="23.5208212"/>
+  <node id="1009" lat="60.6304004" lon="23.5181318"/>
+  <node id="1010" lat="60.6304075" lon="23.5184054"/>
+  <node id="1011" lat="60.6305420" lon="23.5183909"/>
+  <node id="1012" lat="60.6305348" lon="23.5181173"/>
+  <node id="1013" lat="60.6305660" lon="23.5210411"/>
+  <node id="1014" lat="60.6305731" lon="23.5213147"/>
+  <node id="1015" lat="60.6306807" lon="23.5213031"/>
+  <node id="1016" lat="60.6306736" lon="23.5210295"/>
+  <node id="1017" lat="60.6296224" lon="23.5193134"/>
+  <node id="1018" lat="60.6296271" lon="23.5194958"/>
+  <node id="1019" lat="60.6297167" lon="23.5194862"/>
+  <node id="1020" lat="60.6297120" lon="23.5193037"/>
+  <node id="1021" lat="60.6301886" lon="23.5203500"/>
+  <node id="1022" lat="60.6301981" lon="23.5207148"/>
+  <node id="1023" lat="60.6302877" lon="23.5207052"/>
+  <node id="1024" lat="60.6302829" lon="23.5205227"/>
+  <node id="1025" lat="60.6303725" lon="23.5205131"/>
+  <node id="1026" lat="60.6303678" lon="23.5203306"/>
+  <node id="1027" lat="60.6308936" lon="23.5198165"/>
+  <node id="1028" lat="60.6309031" lon="23.5201814"/>
+  <node id="1029" lat="60.6309928" lon="23.5201718"/>
+  <node id="1030" lat="60.6309833" lon="23.5198069"/>
+  <node id="1031" lat="60.6356615" lon="23.5303721"/>
+  <node id="1032" lat="60.6356662" lon="23.5305546"/>
+  <node id="1033" lat="60.6357559" lon="23.5305449"/>
+  <node id="1034" lat="60.6357511" lon="23.5303625"/>
+  <node id="1035" lat="60.6288959" lon="23.5190259"/>
+  <node id="1036" lat="60.6289007" lon="23.5192083"/>
+  <node id="1037" lat="60.6289903" lon="23.5191987"/>
+  <node id="1038" lat="60.6289855" lon="23.5190162"/>
+  <node id="1039" lat="60.6286787" lon="23.5175859"/>
+  <node id="1040" lat="60.6288116" lon="23.5226938"/>
+  <node id="1041" lat="60.6309435" lon="23.5217321"/>
+  <node id="1042" lat="60.6309482" lon="23.5219146"/>
+  <node id="1043" lat="60.6310379" lon="23.5219049"/>
+  <node id="1044" lat="60.6310331" lon="23.5217225"/>
+  <node id="1045" lat="60.6300324" lon="23.5178056"/>
+  <node id="1046" lat="60.6300467" lon="23.5183529"/>
+  <node id="1047" lat="60.6303155" lon="23.5183239"/>
+  <node id="1048" lat="60.6303013" lon="23.5177766"/>
+  <node id="1049" lat="60.6301268" lon="23.5179784"/>
+  <node id="1050" lat="60.6301316" lon="23.5181608"/>
+  <node id="1051" lat="60.6302212" lon="23.5181511"/>
+  <node id="1052" lat="60.6302164" lon="23.5179687"/>
+  <node id="1053" lat="60.6296888" lon="23.5218674"/>
+  <node id="1054" lat="60.6297031" lon="23.5224147"/>
+  <node id="1055" lat="60.6299719" lon="23.5223857"/>
+  <node id="1056" lat="60.6299577" lon="23.5218384"/>
+  <node id="1057" lat="60.6308723" lon="23.5189956"/>
+  <node id="1058" lat="60.6308818" lon="23.5193605"/>
+  <node id="1059" lat="60.6310610" lon="23.5193411"/>
+  <node id="1060" lat="60.6293956" lon="23.5175085"/>
+  <node id="1061" lat="60.6294051" lon="23.5178733"/>
+  <node id="1062" lat="60.6295395" lon="23.5178588"/>
+  <node id="1063" lat="60.6295300" lon="23.5174939"/>
+  <node id="1064" lat="60.6296645" lon="23.5174794"/>
+  <node id="1065" lat="60.6296716" lon="23.5177531"/>
+  <node id="1066" lat="60.6297612" lon="23.5177434"/>
+  <node id="1067" lat="60.6297541" lon="23.5174698"/>
+  <node id="1068" lat="60.6302170" lon="23.5214446"/>
+  <node id="1069" lat="60.6302313" lon="23.5219919"/>
+  <node id="1070" lat="60.6304553" lon="23.5219677"/>
+  <node id="1071" lat="60.6304411" lon="23.5214204"/>
+  <node id="1072" lat="60.6302642" lon="23.5215310"/>
+  <node id="1073" lat="60.6302690" lon="23.5217134"/>
+  <node id="1074" lat="60.6303586" lon="23.5217037"/>
+  <node id="1075" lat="60.6305090" lon="23.5188518"/>
+  <node id="1076" lat="60.6305233" lon="23.5193991"/>
+  <node id="1077" lat="60.6307921" lon="23.5193701"/>
+  <node id="1078" lat="60.6307779" lon="23.5188228"/>
+  <node id="1079" lat="60.6305562" lon="23.5189382"/>
+  <node id="1080" lat="60.6307450" lon="23.5192837"/>
+  <node id="1081" lat="60.6305657" lon="23.5193031"/>
+  <node id="1082" lat="60.6307355" lon="23.5189189"/>
+  <!-- height 12 -->
+  <way id="101">
+    <nd ref="1001"/>
+    <nd ref="1002"/>
+    <nd ref="1003"/>
+    <nd ref="1004"/>
+    <nd ref="1001"/>
+    <tag k="building" v="yes"/>
+    <tag k="height" v="12"/>
+  </way>
+  <!-- height with unit -->
+  <way id="102">
+    <nd ref="1005"/>
+    <nd ref="1006"/>
+    <nd ref="1007"/>
+    <nd ref="1008"/>
+    <nd ref="1005"/>
+    <tag k="building" v="house"/>
+    <tag k="height" v="7.5 m"/>
+  </way>
+  <!-- levels 4 -->
+  <way id="103">
+    <nd ref="1009"/>
+    <nd ref="1010"/>
+    <nd ref="1011"/>
+    <nd ref="1012"/>
+    <nd ref="1009"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="4"/>
+  </way>
+  <!-- invalid height, levels 3 -->
+  <way id="104">
+    <nd ref="1013"/>
+    <nd ref="1014"/>
+    <nd ref="1015"/>
+    <nd ref="1016"/>
+    <nd ref="1013"/>
+    <tag k="building" v="yes"/>
+    <tag k="height" v="tall"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <!-- no height tags: default -->
+  <way id="105">
+    <nd ref="1017"/>
+    <nd ref="1018"/>
+    <nd ref="1019"/>
+    <nd ref="1020"/>
+    <nd ref="1017"/>
+    <tag k="building" v="yes"/>
+  </way>
+  <!-- L shape, height <= 0: default -->
+  <way id="106">
+    <nd ref="1021"/>
+    <nd ref="1022"/>
+    <nd ref="1023"/>
+    <nd ref="1024"/>
+    <nd ref="1025"/>
+    <nd ref="1026"/>
+    <nd ref="1021"/>
+    <tag k="building" v="yes"/>
+    <tag k="height" v="-3"/>
+  </way>
+  <!-- crosses the x = 0 tile edge, centroid east of it -->
+  <way id="109">
+    <nd ref="1027"/>
+    <nd ref="1028"/>
+    <nd ref="1029"/>
+    <nd ref="1030"/>
+    <nd ref="1027"/>
+    <tag k="building" v="yes"/>
+  </way>
+  <!-- outside the test area -->
+  <way id="110">
+    <nd ref="1031"/>
+    <nd ref="1032"/>
+    <nd ref="1033"/>
+    <nd ref="1034"/>
+    <nd ref="1031"/>
+    <tag k="building" v="yes"/>
+  </way>
+  <!-- not closed: skipped -->
+  <way id="108">
+    <nd ref="1035"/>
+    <nd ref="1036"/>
+    <nd ref="1037"/>
+    <nd ref="1038"/>
+    <tag k="building" v="yes"/>
+  </way>
+  <!-- not a building -->
+  <way id="107">
+    <nd ref="1039"/>
+    <nd ref="1040"/>
+    <tag k="highway" v="residential"/>
+  </way>
+  <!-- building=no: ignored -->
+  <way id="111">
+    <nd ref="1041"/>
+    <nd ref="1042"/>
+    <nd ref="1043"/>
+    <nd ref="1044"/>
+    <nd ref="1041"/>
+    <tag k="building" v="no"/>
+  </way>
+  <!-- outer of 201, also tagged: skipped as a duplicate -->
+  <way id="301">
+    <nd ref="1045"/>
+    <nd ref="1046"/>
+    <nd ref="1047"/>
+    <nd ref="1048"/>
+    <nd ref="1045"/>
+    <tag k="building" v="yes"/>
+  </way>
+  <!-- inner of 201 -->
+  <way id="302">
+    <nd ref="1049"/>
+    <nd ref="1050"/>
+    <nd ref="1051"/>
+    <nd ref="1052"/>
+    <nd ref="1049"/>
+  </way>
+  <!-- outer part 1 of 203 -->
+  <way id="305">
+    <nd ref="1053"/>
+    <nd ref="1054"/>
+    <nd ref="1055"/>
+  </way>
+  <!-- outer part 2 of 203 (reversed) -->
+  <way id="306">
+    <nd ref="1053"/>
+    <nd ref="1056"/>
+    <nd ref="1055"/>
+  </way>
+  <!-- open outer part of 202 -->
+  <way id="303">
+    <nd ref="1057"/>
+    <nd ref="1058"/>
+    <nd ref="1059"/>
+  </way>
+  <!-- outer 1 of 205 -->
+  <way id="311">
+    <nd ref="1060"/>
+    <nd ref="1061"/>
+    <nd ref="1062"/>
+    <nd ref="1063"/>
+    <nd ref="1060"/>
+  </way>
+  <!-- outer 2 of 205 -->
+  <way id="317">
+    <nd ref="1064"/>
+    <nd ref="1065"/>
+    <nd ref="1066"/>
+    <nd ref="1067"/>
+    <nd ref="1064"/>
+  </way>
+  <!-- outer of 206 -->
+  <way id="313">
+    <nd ref="1068"/>
+    <nd ref="1069"/>
+    <nd ref="1070"/>
+    <nd ref="1071"/>
+    <nd ref="1068"/>
+  </way>
+  <!-- open inner of 206 -->
+  <way id="314">
+    <nd ref="1072"/>
+    <nd ref="1073"/>
+    <nd ref="1074"/>
+  </way>
+  <!-- outer of 207 -->
+  <way id="315">
+    <nd ref="1075"/>
+    <nd ref="1076"/>
+    <nd ref="1077"/>
+    <nd ref="1078"/>
+    <nd ref="1075"/>
+  </way>
+  <!-- bow-tie inner of 207 -->
+  <way id="316">
+    <nd ref="1079"/>
+    <nd ref="1080"/>
+    <nd ref="1081"/>
+    <nd ref="1082"/>
+    <nd ref="1079"/>
+  </way>
+  <!-- multipolygon with a hole -->
+  <relation id="201">
+    <member type="way" ref="301" role="outer"/>
+    <member type="way" ref="302" role="inner"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="building" v="retail"/>
+    <tag k="height" v="10"/>
+  </relation>
+  <!-- outer ring joined from two ways -->
+  <relation id="203">
+    <member type="way" ref="305" role="outer"/>
+    <member type="way" ref="306" role="outer"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="building" v="yes"/>
+    <tag k="building:levels" v="2"/>
+  </relation>
+  <!-- incomplete: way 304 is not in the file -->
+  <relation id="202">
+    <member type="way" ref="303" role="outer"/>
+    <member type="way" ref="304" role="outer"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="building" v="yes"/>
+  </relation>
+  <!-- partial: inner way 312 is not in the file; two parts -->
+  <relation id="205">
+    <member type="way" ref="311" role="outer"/>
+    <member type="way" ref="317" role="outer"/>
+    <member type="way" ref="312" role="inner"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="building" v="yes"/>
+  </relation>
+  <!-- partial: inner ring not closed -->
+  <relation id="206">
+    <member type="way" ref="313" role="outer"/>
+    <member type="way" ref="314" role="inner"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="building" v="yes"/>
+    <tag k="height" v="8"/>
+  </relation>
+  <!-- invalid inner ring repaired with make_valid -->
+  <relation id="207">
+    <member type="way" ref="315" role="outer"/>
+    <member type="way" ref="316" role="inner"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="building" v="yes"/>
+    <tag k="building:levels" v="1"/>
+  </relation>
+  <!-- not a building -->
+  <relation id="204">
+    <member type="way" ref="301" role="outer"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="landuse" v="grass"/>
+  </relation>
+</osm>

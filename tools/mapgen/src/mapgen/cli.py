@@ -45,7 +45,23 @@ def build_parser() -> argparse.ArgumentParser:
     origin.add_argument("map_id", metavar="<map-id>")
     origin.set_defaults(handler=cmd_origin)
 
-    # Later: `build <map-id>` and `enhance <map-id>` are added here as further subcommands.
+    build = commands.add_parser("build", help="build the map pack from the raw data")
+    build.add_argument("map_id", metavar="<map-id>")
+    build.add_argument(
+        "--area",
+        choices=["full", "test"],
+        default="full",
+        help="full: the whole bbox (default); test: the small test area from map.yaml",
+    )
+    build.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="pack folder (default: game/maps/<map-id>/; meant for tests)",
+    )
+    build.set_defaults(handler=cmd_build)
+
+    # Later: `enhance <map-id>` is added here as a further subcommand.
     return parser
 
 
@@ -62,6 +78,34 @@ def cmd_download(args: argparse.Namespace, repo_root: Path) -> int:
     if not report.ok:
         print(f"failed sources: {', '.join(report.failed)}", file=sys.stderr)
         return EXIT_FAILED
+    return EXIT_OK
+
+
+def cmd_build(args: argparse.Namespace, repo_root: Path) -> int:
+    from mapgen.build import BuildError, run_build
+    from mapgen.build.export_glb import ExportError
+
+    config = load_map_config(paths.map_config_path(repo_root, args.map_id))
+    out = (args.out or paths.pack_dir(repo_root, args.map_id)).resolve()
+    work = paths.work_dir(repo_root, args.map_id, args.area)
+    try:
+        report = run_build(
+            config,
+            args.area,
+            raw_dir=paths.raw_dir(repo_root, args.map_id),
+            out_dir=out,
+            work_dir=work,
+        )
+    except (BuildError, ExportError) as exc:
+        print(f"error: {_scrub(str(exc))}", file=sys.stderr)
+        return EXIT_FAILED
+    sources = ", ".join(f"{k} {v}" for k, v in report.height_source_counts.items())
+    print(f"pack: {report.pack_dir} ({report.area} area)")
+    print(f"tiles: {report.tile_count}, buildings: {report.building_count} ({sources})")
+    if report.skipped:
+        print(f"skipped features: {len(report.skipped)} (see {work / '01-load' / 'report.json'})")
+    print(f"stage output: {work}")
+    print(f"total: {sum(report.timings_s.values()):.2f} s")
     return EXIT_OK
 
 

@@ -1,5 +1,6 @@
 """Maps the `adapter` value in map.yaml to an adapter class."""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -49,3 +50,21 @@ def validate_source_options(config: MapConfig, path: Path | None = None) -> None
             parse_options(source_name, get_adapter(source.adapter), source.options)
         except ConfigError as exc:
             raise ConfigError(f"{prefix}{exc}") from exc
+
+
+@dataclass(frozen=True)
+class SelectedSource:
+    name: str
+    adapter: SourceAdapter
+    options: AdapterOptions
+
+
+def enabled_sources_providing(config: MapConfig, capability: str) -> list[SelectedSource]:
+    """The enabled sources whose adapter declares `capability`, in map.yaml order."""
+    selected: list[SelectedSource] = []
+    for source_name, source in config.enabled_sources().items():
+        adapter_cls = get_adapter(source.adapter)
+        if capability in adapter_cls.provides:
+            options = parse_options(source_name, adapter_cls, source.options)
+            selected.append(SelectedSource(source_name, adapter_cls(), options))
+    return selected

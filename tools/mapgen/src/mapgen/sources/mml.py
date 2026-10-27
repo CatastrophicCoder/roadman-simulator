@@ -6,6 +6,9 @@ environment variable and is never written to a file, log, manifest or error mess
 
 Without a key, each MML source prints the manual download steps for MML's
 Karttapaikka file service and registers any files already in its raw folder.
+
+For builds, the DEM adapter loads its GeoTIFFs (mosaicked and warped to the map CRS),
+and the 3D buildings adapter is a stub until its file format is confirmed.
 """
 
 import re
@@ -17,17 +20,33 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Literal
 
+import numpy as np
+import rasterio
 from pydantic import Field, field_validator
+from pyproj import CRS as ProjCRS
+from rasterio.crs import CRS as RasterioCRS
+from rasterio.enums import Resampling
+from rasterio.errors import RasterioError
+from rasterio.io import DatasetReader
+from rasterio.merge import merge
+from rasterio.transform import Affine
+from rasterio.vrt import WarpedVRT
 
 from mapgen import tm35
 from mapgen.geo import BBox, projected_bbox
 from mapgen.http import HttpError, redact, with_query_param
 from mapgen.sources.base import (
+    BUILDINGS_3D,
+    ELEVATION,
     AdapterOptions,
     DownloadContext,
     DownloadedFile,
+    ElevationRaster,
+    LoadContext,
     SourceAdapter,
+    SourceData,
     SourceError,
+    SourceLoadError,
 )
 
 DEFAULT_BASE_URL = "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/"
@@ -436,6 +455,81 @@ class Dem2mOptions(MmlBBoxOptions):
     file_format: str = "TIFF"
 
 
+GEOTIFF_SUFFIXES = frozenset({".tif", ".tiff"})
+
+
+def _snap_outward(bounds: BBox, transform: Affine) -> tuple[float, float, float, float]:
+    """`bounds` grown to whole pixels of `transform`'s grid, so cropping doesn't resample."""
+    res_x, res_y = abs(transform.a), abs(transform.e)
+    left = transform.c + np.floor((bounds.min_x - transform.c) / res_x) * res_x
+    right = transform.c + np.ceil((bounds.max_x - transform.c) / res_x) * res_x
+    top = transform.f - np.floor((transform.f - bounds.max_y) / res_y) * res_y
+    bottom = transform.f - np.ceil((transform.f - bounds.min_y) / res_y) * res_y
+    return (float(left), float(bottom), float(right), float(top))
+
+
+def same_raster_crs(crs: RasterioCRS, target: str) -> bool:
+    """True when a raster's CRS is equivalent to `target`, so no warp is needed.
+
+    GeoTIFF CRS definitions often differ textually from the EPSG definition (names,
+    axis order), so compare semantically: rasterio equality, EPSG code, then pyproj.
+    """
+    target_crs = RasterioCRS.from_user_input(target)
+    if crs == target_crs:
+        return True
+    epsg = crs.to_epsg()
+    if epsg is not None and epsg == target_crs.to_epsg():
+        return True
+    return ProjCRS.from_wkt(crs.to_wkt()).equals(
+        ProjCRS.from_user_input(target), ignore_axis_order=True
+    )
+
+
+def read_dem(files: list[Path], target_crs: str, bounds: BBox) -> ElevationRaster:
+    """Mosaic GeoTIFF DEM files, warp them to `target_crs` if needed, and crop to `bounds`.
+
+    `bounds` are in `target_crs` and are grown to whole pixels. Each file's nodata value
+    becomes NaN; areas outside every file are NaN too.
+    """
+    if not files:
+        raise SourceLoadError("no DEM files to read")
+    datasets: list[DatasetReader | WarpedVRT] = []
+    opened: list[DatasetReader] = []
+    warped: list[str] = []
+    try:
+        for path in files:
+            src = rasterio.open(path)
+            opened.append(src)
+            if src.crs is None:
+                raise SourceLoadError(f"{path} has no CRS")
+            if not same_raster_crs(src.crs, target_crs):
+                warped.append(src.crs.to_string())
+                datasets.append(WarpedVRT(src, crs=target_crs, resampling=Resampling.bilinear))
+            else:
+                datasets.append(src)
+        first = datasets[0]
+        if first.transform.b != 0 or first.transform.d != 0 or first.transform.e >= 0:
+            raise SourceLoadError(f"{files[0]}: only north-up rasters are supported")
+        crop = _snap_outward(bounds, first.transform)
+        data, transform = merge(
+            datasets,
+            bounds=crop,
+            res=(abs(first.transform.a), abs(first.transform.e)),
+            nodata=np.nan,
+            dtype="float64",
+            indexes=[1],
+        )
+    finally:
+        for dataset in datasets:
+            if isinstance(dataset, WarpedVRT):
+                dataset.close()
+        for src in opened:
+            src.close()
+    return ElevationRaster(
+        data=data[0], transform=transform, crs=target_crs, warped_from=tuple(sorted(set(warped)))
+    )
+
+
 class MmlDem2mAdapter(MmlBBoxAdapter):
     name = "mml_dem_2m"
     Options = Dem2mOptions
@@ -443,6 +537,21 @@ class MmlDem2mAdapter(MmlBBoxAdapter):
     product_name = "Korkeusmalli 2 m (Elevation model 2 m)"
     layer = "dem_2m"
     default_process_id = "korkeusmalli_2m_bbox"
+    provides = frozenset({ELEVATION})
+
+    def load(self, ctx: LoadContext) -> SourceData:
+        folder = ctx.raw_dir / "mml" / self.layer
+        files = [p for p in list_files(folder) if p.suffix.lower() in GEOTIFF_SUFFIXES]
+        if not files:
+            raise SourceLoadError(
+                f"[{ctx.source_name}] no GeoTIFF files in {folder}; run `mapgen download "
+                f"{ctx.map_config.id} --only {ctx.source_name}`"
+            )
+        try:
+            raster = read_dem(files, ctx.target_crs, ctx.bounds)
+        except RasterioError as exc:
+            raise SourceLoadError(f"[{ctx.source_name}] cannot read the DEM: {exc}") from exc
+        return SourceData(files=files, elevation=raster)
 
 
 class TopographicOptions(MmlBBoxOptions):
@@ -560,6 +669,18 @@ class MmlBuildings3dAdapter(MmlSheetAdapter):
     product_name = "3D-rakennukset (3D buildings)"
     layer = "buildings_3d"
     default_process_id = "3d-rakennukset_karttalehti"
+    provides = frozenset({BUILDINGS_3D})
+
+    def load(self, ctx: LoadContext) -> SourceData:
+        """Stub: returns no buildings and reads no files.
+
+        The file format of MML's 3D buildings (delivery format, id field and how the
+        height is stored) isn't confirmed yet (ADR 0005), so there is nothing to parse
+        reliably. Once it is, this returns footprints with `measured_height_m` set, and
+        the build already uses those heights first.
+        """
+        ctx.log(f"[{ctx.source_name}] 3D buildings reader not implemented yet; no heights used")
+        return SourceData()
 
     def extra_inputs(self, options: MmlSheetOptions) -> dict[str, Any]:
         assert isinstance(options, Buildings3dOptions)

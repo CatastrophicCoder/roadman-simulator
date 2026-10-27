@@ -24,6 +24,8 @@ The pipeline builds terrain from the MML 2 m elevation model. Roads and building
 
 TODO: not decided yet.
 
+Interim: the pipeline builds terrain through a `TerrainBuilder` interface (`tools/mapgen/src/mapgen/build/terrain/`), and mesh terrain (option A) is its interim implementation until this decision is made.
+
 ## Consequences
 
 TODO: fill in once the decision is made. Option B also requires adding Terrain3D to `game/addons/` and to `CREDITS.md`.
