@@ -268,6 +268,35 @@ Every map ends at a physical barrier, and anything that crosses it falls off the
 - On respawn, the game picks a random point inside the area, redraws it if it lands inside a building, in water or on another object, and drops the player onto the ground there.
 - A pipeline test checks that the spawn area has enough open ground to spawn on.
 
+## Art direction: low-poly 3D
+
+The game uses a low-poly 3D look: simple geometry, flat or near-flat shading, and a small colour palette instead of detailed textures. Somero stays recognisable through its real street layout, building footprints and heights, the river and terrain, and its colours, not through photographic detail.
+
+**What this means for the pipeline**
+
+- Buildings: the extruded footprints already fit. Simple pitched roofs can come later from the stored 90th-percentile roof height, and windows as simple dark quads or a small texture atlas rather than photo facades.
+- Roof colours: sample each building's average roof colour from the MML orthophoto and snap it to the palette. Real roof colours are one of the cheapest ways to make the town recognisable from above.
+- Terrain: a coarser grid than the 2 m elevation model (for example 4–8 m) with faceted shading. This bears on ADR 0004: faceted mesh terrain suits the look directly, while Terrain3D is built for smooth, detailed terrain.
+- Materials: one shared palette texture (a strip of colour swatches) or vertex colours, so most of the map uses a single material. This also keeps draw calls low on older Macs.
+- Style presets: `style_preset` in `map.yaml` becomes a palette plus facade rules per building type.
+
+**Assets**
+
+- Vehicles, characters, trees and props from CC0 low-poly kits, such as Kenney, Quaternius and KayKit, recorded in `CREDITS.md`. One or two kits keep the styles consistent.
+- Hand-made Blender models for a few Somero landmarks, kept to the same polygon budget and palette.
+
+**Effect on earlier sections**
+
+- Photo-based facade textures (Mapillary, your own photos) become optional. Your own photos stay useful as modelling references for landmarks and for picking palette colours.
+- The image sources table still applies to anything photo-derived you decide to use.
+
+**Still to decide** (in `docs/art-direction.md` with an ADR, after the first flyover in prompt 6)
+
+- [ ] Palette, and whether shading is fully flat or softly smoothed.
+- [ ] Season and time of day: summer light, autumn, or winter with snow.
+- [ ] Terrain grid size for the faceted look.
+- [ ] Which CC0 kits to use for vehicles and characters.
+
 ## Phase 4: Godot project skeleton and map import
 
 The Godot project should load the generated map and let Claude Code verify it without opening the editor.
