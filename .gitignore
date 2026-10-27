@@ -1,0 +1,38 @@
+# Godot
+game/.godot/
+game/.mcp.json
+*.mono
+mono_crash.*
+
+# Generated map packs (regenerate with the pipeline: uv run mapgen build <map-id>)
+game/maps/*/
+
+# IDEs
+.idea/
+.vscode/
+*.DotSettings.user
+
+# .NET
+bin/
+obj/
+
+# Build and export output
+build/
+dist/
+export/
+*.dmg
+*.exe
+*.pck
+*.zip
+
+# Map pipeline
+tools/mapgen/data/raw/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
