@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "dgSpecHash": "pHQ8tGsI1pc=",
+  "success": true,
+  "projectFilePath": "/Users/kimmo/Dev/roadman-simulator/game/RoadmanSimulator.csproj",
+  "expectedPackageFiles": [
+    "/Users/kimmo/.nuget/packages/godot.sourcegenerators/4.7.2/godot.sourcegenerators.4.7.2.nupkg.sha512",
+    "/Users/kimmo/.nuget/packages/godotsharp/4.7.2/godotsharp.4.7.2.nupkg.sha512",
+    "/Users/kimmo/.nuget/packages/godotsharpeditor/4.7.2/godotsharpeditor.4.7.2.nupkg.sha512",
+    "/Users/kimmo/.nuget/packages/microsoft.netcore.app.ref/8.0.33/microsoft.netcore.app.ref.8.0.33.nupkg.sha512",
+    "/Users/kimmo/.nuget/packages/microsoft.aspnetcore.app.ref/8.0.33/microsoft.aspnetcore.app.ref.8.0.33.nupkg.sha512"
+  ],
+  "logs": []
+}
