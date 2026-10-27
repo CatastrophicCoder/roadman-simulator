@@ -237,7 +237,7 @@ Every map ends at a physical barrier, and anything that crosses it falls off the
 
 **Pipeline (Phase 3)**
 
-- `map.yaml` defines the playable boundary: the bounding box by default, or a custom polygon. The pipeline reports every place where the boundary crosses water, so you can keep those crossings short.
+- `map.yaml` defines the playable boundary: the bounding box by default, or a custom polygon. The pipeline reports every place where the boundary crosses water, so you can keep those crossings short. OSM water multipolygons can arrive incomplete at the edge of the download (ADR 0005), which is exactly where the boundary runs, so this check must close or clip them, or use MML topographic water areas instead.
 - Roadblocks: wherever a road crosses the boundary, place a roadblock across it, sized from the road's class and width.
 - Fences: barbed-wire fence segments along the rest of the boundary, following terrain height, with gaps only at roadblocks. Segments over water get a separate water fence type with its own scene, placed at the water surface instead of on terrain.
 - Edge geometry: the terrain ends in a cliff face just outside the barrier, so the world reads as a slab floating in space.
