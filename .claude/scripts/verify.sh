@@ -28,21 +28,42 @@ step() { # step <name> <logname> <command...>
 }
 
 SLN="game/RoadmanSimulator.sln"
+GAME_CSPROJ="game/RoadmanSimulator.csproj"
+CORE_TESTS="game/Roadman.Core.Tests"
+RUNSETTINGS="game/.runsettings"
 MAPGEN="tools/mapgen"
 
-# C#
-if ! command -v dotnet >/dev/null 2>&1; then
-  report N/A "dotnet build" "dotnet not on PATH"
-  report N/A "dotnet test" "dotnet not on PATH"
-  report N/A "dotnet format" "dotnet not on PATH"
-else
-  step "dotnet build" dotnet-build dotnet build "$SLN"
-  if find "$ROOT/game" -name '*Tests.csproj' -not -path '*/maps/*' | grep -q .; then
-    step "dotnet test" dotnet-test dotnet test "$SLN"
+# Test code must not ship: build the game assembly as ExportRelease and check
+# that neither test assemblies nor test types end up in the output.
+release_check() {
+  local log="$LOGS/release-check.log" out="$LOGS/export-release"
+  {
+    rm -rf "$out" &&
+      dotnet build "$ROOT/$GAME_CSPROJ" -c ExportRelease -o "$out" &&
+      ! find "$out" -iname 'gdUnit4*' -o -iname 'xunit*' -o -iname 'Microsoft.TestPlatform*' \
+          -o -iname 'Microsoft.VisualStudio.TestPlatform*' -o -iname 'testhost*' -o -iname 'Moq*' |
+        grep . &&
+      dotnet run "$ROOT/.claude/scripts/check-release-assembly.cs" -- "$out/RoadmanSimulator.dll"
+  } >"$log" 2>&1
+  if [ $? -eq 0 ]; then
+    report PASS "release has no tests" "log: $log"
   else
-    report N/A "dotnet test" "no *Tests.csproj project yet"
+    report FAIL "release has no tests" "$(tail -3 "$log" | tr '\n' ' ') (log: $log)"
   fi
+}
+
+# C#
+HAVE_DOTNET=0
+if ! command -v dotnet >/dev/null 2>&1; then
+  for s in "dotnet build" "dotnet test" "dotnet format" "release has no tests"; do
+    report N/A "$s" "dotnet not on PATH"
+  done
+else
+  HAVE_DOTNET=1
+  step "dotnet build" dotnet-build dotnet build "$SLN"
+  step "dotnet test" dotnet-test dotnet test "$CORE_TESTS"
   step "dotnet format" dotnet-format dotnet format "$SLN" --verify-no-changes
+  release_check
 fi
 
 # Python pipeline
@@ -60,22 +81,31 @@ else
   step "ruff format --check" ruff-format uv run --project "$MAPGEN" ruff format --check "$MAPGEN"
 fi
 
-# Godot
+# Godot. The import also builds the .godot/ cache that the gdUnit4 run needs.
 if GODOT_BIN="$(find_godot)"; then
   if godot_import "$GODOT_BIN" "$LOGS/godot-import.log"; then
     report PASS "godot headless import" "$IMPORT_DETAIL (log: $LOGS/godot-import.log)"
   else
     report FAIL "godot headless import" "$IMPORT_DETAIL (log: $LOGS/godot-import.log)"
   fi
+  if [ "$HAVE_DOTNET" -eq 0 ]; then
+    report N/A "gdunit4 tests" "dotnet not on PATH"
+  else
+    log="$LOGS/gdunit4.log"
+    (cd "$ROOT" && GODOT_BIN="$GODOT_BIN" run_with_timeout "${GDUNIT_TIMEOUT:-600}" "$log" \
+      dotnet test "$GAME_CSPROJ" --settings "$RUNSETTINGS")
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      report PASS "gdunit4 tests" "log: $log"
+    elif [ "$rc" -eq 124 ]; then
+      report FAIL "gdunit4 tests" "timed out after ${GDUNIT_TIMEOUT:-600}s (log: $log)"
+    else
+      report FAIL "gdunit4 tests" "$(tail -3 "$log" | tr '\n' ' ') (log: $log)"
+    fi
+  fi
 else
   report N/A "godot headless import" "godot not on PATH and \$GODOT not set"
-fi
-
-# TODO: gdUnit4 headless command once the add-on is installed.
-if [ -d "$ROOT/game/addons/gdUnit4" ]; then
-  report FAIL "gdunit4 tests" "add-on present but verify.sh has no run command yet; add it"
-else
-  report N/A "gdunit4 tests" "game/addons/gdUnit4 not installed"
+  report N/A "gdunit4 tests" "godot not on PATH and \$GODOT not set"
 fi
 
 # TODO (prompt 6): screenshot script. Headless mode can't render, so it needs a windowed run.

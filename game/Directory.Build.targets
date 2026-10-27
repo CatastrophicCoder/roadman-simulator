@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    Microsoft.NET.Test.Sdk (Debug-only gdUnit4 tests) sets OutputType to Exe in its .targets, after the project body.
+    This file is imported later, so it keeps the Godot game assembly a library without a generated entry point.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'RoadmanSimulator'">
+    <OutputType>Library</OutputType>
+    <GenerateProgramFile>false</GenerateProgramFile>
+  </PropertyGroup>
+</Project>

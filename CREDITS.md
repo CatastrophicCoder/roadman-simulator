@@ -53,7 +53,21 @@ TODO: include the full MIT text and Godot's third-party licences in the game (Go
 
 ## Add-ons
 
-TODO: none yet. Record the name, version, licence and URL of each add-on (for example gdUnit4, and Terrain3D if used).
+Record the name, version, licence and URL of each add-on.
+
+| Add-on | Version | Licence | URL |
+| --- | --- | --- | --- |
+| gdUnit4 (`game/addons/gdUnit4/`) | 6.2.2 | MIT, Copyright (c) 2023 Mike Schulze | https://github.com/godot-gdunit-labs/gdUnit4 |
+
+## Test libraries
+
+NuGet packages used only by the tests. They are referenced in Debug builds only and are not shipped with the game.
+
+| Package | Version | Licence | URL |
+| --- | --- | --- | --- |
+| gdUnit4.api, gdUnit4.test.adapter, gdUnit4.analyzers (gdUnit4Net) | 5.1.0-rc6, 3.2.0, 1.1.0 | MIT | https://github.com/godot-gdunit-labs/gdUnit4Net |
+| xUnit (xunit, xunit.runner.visualstudio) | 2.9.3, 3.1.5 | Apache-2.0 | https://github.com/xunit/xunit |
+| Microsoft.NET.Test.Sdk | 18.11.0 | MIT | https://github.com/microsoft/vstest |
 
 ## Assets
 

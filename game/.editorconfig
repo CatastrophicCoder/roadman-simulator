@@ -2,3 +2,7 @@ root = true
 
 [*]
 charset = utf-8
+
+# Runner scene written by the gdUnit4 test adapter on each test run
+[gdunit4_testadapter_v*/**.cs]
+generated_code = true

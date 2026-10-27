@@ -1,7 +1,42 @@
 <Project Sdk="Godot.NET.Sdk/4.7.2">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <TargetFramework Condition=" '$(GodotTargetPlatform)' == 'android' ">net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!-- Roadman.Core and its tests are separate projects; keep their files out of the game assembly. -->
+  <ItemGroup>
+    <Compile Remove="Roadman.Core/**;Roadman.Core.Tests/**" />
+    <None Remove="Roadman.Core/**;Roadman.Core.Tests/**" />
+    <Content Remove="Roadman.Core/**;Roadman.Core.Tests/**" />
+    <EmbeddedResource Remove="Roadman.Core/**;Roadman.Core.Tests/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Roadman.Core/Roadman.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    gdUnit4 tests (tests/**) build only in Debug, the configuration used by the editor and dotnet test.
+    Export builds (ExportDebug, ExportRelease) contain no test code or test packages.
+    Directory.Build.targets keeps OutputType a library, which Microsoft.NET.Test.Sdk would change to Exe.
+  -->
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="gdUnit4.api" Version="5.1.0-rc6" />
+    <PackageReference Include="gdUnit4.test.adapter" Version="3.2.0" />
+    <PackageReference Include="gdUnit4.analyzers" Version="1.1.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!--
+    Also kept out of export builds: the gdUnit4 add-on's C# bridge (without the gdUnit4 packages it compiles to a stub
+    class) and gdunit4_testadapter_v*/, the runner scene the gdUnit4 test adapter writes into the project on each run.
+  -->
+  <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+    <Compile Remove="tests/**;addons/gdUnit4/**;gdunit4_testadapter_v*/**" />
+  </ItemGroup>
 </Project>

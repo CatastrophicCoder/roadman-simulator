@@ -2,6 +2,10 @@
 # Visual Studio 2012
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RoadmanSimulator", "RoadmanSimulator.csproj", "{60E0BDE9-6920-491E-9227-BB61A50816BF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Roadman.Core", "Roadman.Core\Roadman.Core.csproj", "{E5E78FA4-4A03-42D1-95C7-F367E6B49C22}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Roadman.Core.Tests", "Roadman.Core.Tests\Roadman.Core.Tests.csproj", "{F085EC50-0E34-4744-8FD8-875D311AB661}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 	Debug|Any CPU = Debug|Any CPU
@@ -15,5 +19,17 @@ Global
 		{60E0BDE9-6920-491E-9227-BB61A50816BF}.ExportDebug|Any CPU.Build.0 = ExportDebug|Any CPU
 		{60E0BDE9-6920-491E-9227-BB61A50816BF}.ExportRelease|Any CPU.ActiveCfg = ExportRelease|Any CPU
 		{60E0BDE9-6920-491E-9227-BB61A50816BF}.ExportRelease|Any CPU.Build.0 = ExportRelease|Any CPU
+		{E5E78FA4-4A03-42D1-95C7-F367E6B49C22}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5E78FA4-4A03-42D1-95C7-F367E6B49C22}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5E78FA4-4A03-42D1-95C7-F367E6B49C22}.ExportDebug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5E78FA4-4A03-42D1-95C7-F367E6B49C22}.ExportDebug|Any CPU.Build.0 = Debug|Any CPU
+		{E5E78FA4-4A03-42D1-95C7-F367E6B49C22}.ExportRelease|Any CPU.ActiveCfg = Release|Any CPU
+		{E5E78FA4-4A03-42D1-95C7-F367E6B49C22}.ExportRelease|Any CPU.Build.0 = Release|Any CPU
+		{F085EC50-0E34-4744-8FD8-875D311AB661}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F085EC50-0E34-4744-8FD8-875D311AB661}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F085EC50-0E34-4744-8FD8-875D311AB661}.ExportDebug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F085EC50-0E34-4744-8FD8-875D311AB661}.ExportDebug|Any CPU.Build.0 = Debug|Any CPU
+		{F085EC50-0E34-4744-8FD8-875D311AB661}.ExportRelease|Any CPU.ActiveCfg = Release|Any CPU
+		{F085EC50-0E34-4744-8FD8-875D311AB661}.ExportRelease|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

@@ -1,0 +1,5 @@
+# Runner scene written by the gdUnit4 test adapter on every `dotnet test` run
+/gdunit4_testadapter_v*/
+
+# The root .gitignore ignores bin/ (.NET output); gdUnit4 keeps scripts in addons/gdUnit4/bin/
+!/addons/gdUnit4/bin/

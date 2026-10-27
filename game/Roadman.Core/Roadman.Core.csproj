@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Engine-free game logic. No Godot references. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!--
+    Building RoadmanSimulator.csproj directly (as a Godot export does) passes its configuration
+    (ExportDebug or ExportRelease) to this project. Treat ExportRelease like Release.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'ExportRelease'">
+    <Optimize>true</Optimize>
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+</Project>

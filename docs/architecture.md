@@ -166,7 +166,20 @@ TODO: the streaming design, and the import presets for `.glb` files.
 
 A plain C# class library with no Godot dependency, tested with `dotnet test`. It contains the road graph types and parsing, routing, the wanted level, mission state, and the death and respawn state machine (including clearing money and gear).
 
-TODO: the project structure and the public API (prompt 5).
+Projects (all `net10.0`, ADR 0007):
+
+- `game/Roadman.Core/`: the library. The Godot project references it and excludes its folder from its own compile glob. A `.gdignore` keeps Godot from scanning it.
+- `game/Roadman.Core.Tests/`: xUnit tests, run with `dotnet test game/Roadman.Core.Tests`.
+
+**`PlayerState`** holds the player's money, gear and wanted level. The `GameState` autoload owns one instance and forwards its events as `Events` signals; the rules live here, not in the autoload.
+
+- Money is a whole number, never negative. Adding or spending a negative amount is an error. A purchase the player can't afford fails and changes nothing.
+- Gear is a set of string item ids.
+- The wanted level runs from 0 to 5 (`MaxWantedLevel`). Setting it outside that range clamps it.
+- Death clears all money and gear, and resets the wanted level to 0.
+- `MoneyChanged`, `GearChanged` and `WantedLevelChanged` fire only when the value actually changes; `Died` fires on every death.
+
+TODO: road graph types and routing, mission state, and the respawn state machine.
 
 ### Gameplay (Godot C#)
 
