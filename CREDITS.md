@@ -21,11 +21,27 @@ Each dataset is listed with its source, name and download date, as MML's terms r
 | Dataset | Source | Date |
 | --- | --- | --- |
 | Elevation model 2 m | MML file service (OGC API Processes, `korkeusmalli_2m_bbox`) or Karttapaikka | 2026-10-27 |
-| Orthophoto | MML file service (`ortoilmakuva_karttalehti`) or Karttapaikka | 2026-10-27 (latest year version) |
-| 3D buildings (if available for Somero) | MML file service (`3d-rakennukset_karttalehti`) | TODO: not downloaded yet |
-| Topographic database (if used) | MML file service (`maastotietokanta_bbox`) | TODO: not downloaded yet |
+| Laser scanning data 0,5 p | MML file service (`laserkeilausaineisto_05_karttalehti`, latest dataset) or Karttapaikka | 2026-10-27 |
+| NLS orthophotos | MML file service (`ortoilmakuva_karttalehti`) or Karttapaikka | 2026-10-27 (latest year version) |
+| Buildings 3D (not available for Somero) | MML file service (`3d-rakennukset_karttalehti`) | Not used: no coverage for Somero |
+| Topographic Database (if used) | MML file service (`maastotietokanta_bbox`) | TODO: not downloaded yet |
+
+Dataset names follow MML's product descriptions (https://www.maanmittauslaitos.fi/en/maps-and-spatial-data/datasets-and-interfaces/product-descriptions), checked on 2026-10-27.
 
 Each map pack's `manifest.json` also lists its own data credits.
+
+### Test fixture
+
+`tools/mapgen/tests/fixtures/raw/somero-test-area/` contains cuts of the OpenStreetMap data (ODbL 1.0, contributor metadata removed), MML's Elevation model 2 m and MML's Laser scanning data 0,5 p (CC BY 4.0) for the Somero test area. Its `NOTICE.md` gives the attributions.
+
+## Pipeline tools
+
+Python libraries used by the map pipeline (`tools/mapgen/`). They are not shipped with the game.
+
+| Library | Licence | URL |
+| --- | --- | --- |
+| laspy | BSD-2-Clause | https://github.com/laspy/laspy |
+| lazrs (lazrs-python) | MIT | https://github.com/laz-rs/laz-rs-python |
 
 ## Engine
 

@@ -11,8 +11,8 @@ A Python pipeline that turns a map's raw OSM and MML data into a Godot map pack 
 - Write output only to `game/maps/<map-id>/`. That folder is never edited by hand.
 - Name collision meshes with Godot's glTF suffixes (`-col`, `-colonly`, `-convcolonly`).
 - Every override and data source records its licence, and the pipeline writes them into the pack's credits.
-- Don't use MML's laser scanning data 5 p (it isn't open). Don't extract content from Google Street View.
-- Ask before adding a dependency. The planned libraries are geopandas, shapely, pyproj, rasterio, numpy, osmnx or pyrosm, networkx, trimesh.
+- Don't use MML's laser scanning data 5 p (it isn't open). The 0.5 p data is allowed only through the process `laserkeilausaineisto_05_karttalehti` (ADR 0005 amendment). Don't extract content from Google Street View.
+- Ask before adding a dependency. The planned libraries are geopandas, shapely, pyproj, rasterio, numpy, osmnx or pyrosm, networkx, trimesh, and laspy with lazrs (LAZ point clouds).
 
 ## Conventions
 
@@ -30,6 +30,7 @@ uv run pytest                             # tests
 uv run ruff check . && uv run ruff format --check .   # lint and format check
 uv run mapgen download <map-id>           # download raw data, e.g. somero
 uv run mapgen download <map-id> --only osm,mml_dem_2m --force   # some sources, replace existing files
+uv run mapgen download <map-id> --only mml_lidar   # lidar; a map with mml_lidar enabled doesn't build without it
 uv run mapgen origin <map-id>             # print the bbox centre to use as origin in map.yaml
 uv run mapgen build <map-id>              # TODO: build a map pack
 uv run mapgen enhance <map-id>            # TODO: merge building overrides

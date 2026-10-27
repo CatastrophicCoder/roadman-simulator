@@ -1,0 +1,857 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<osm version="0.6" generator="Overpass API 0.7.62.11 87bfad18">
+  <note>The data included in this document is from www.openstreetmap.org. The data is made available under ODbL.</note>
+  <meta osm_base="2026-10-27T14:32:56Z" />
+  <node id="4597368486" lat="60.6287504" lon="23.5189598" />
+  <node id="4597368487" lat="60.6286353" lon="23.5191006" />
+  <node id="4597368488" lat="60.6286629" lon="23.5191945" />
+  <node id="4597368489" lat="60.6287780" lon="23.5190537" />
+  <node id="4597368490" lat="60.6290751" lon="23.5189318" />
+  <node id="4597368491" lat="60.6288738" lon="23.5191799" />
+  <node id="4597368492" lat="60.6288280" lon="23.5190255" />
+  <node id="4597368493" lat="60.6290293" lon="23.5187774" />
+  <node id="4597368494" lat="60.6288330" lon="23.5184235" />
+  <node id="4597368495" lat="60.6288870" lon="23.5186341" />
+  <node id="4597368496" lat="60.6289740" lon="23.5185414" />
+  <node id="4597368497" lat="60.6289201" lon="23.5183308" />
+  <node id="4597368498" lat="60.6287811" lon="23.5179157" />
+  <node id="4597368499" lat="60.6286969" lon="23.5180136" />
+  <node id="4597368500" lat="60.6287372" lon="23.5181578" />
+  <node id="4597368501" lat="60.6288214" lon="23.5180599" />
+  <node id="4597368502" lat="60.6290646" lon="23.5175823" />
+  <node id="4597368503" lat="60.6289837" lon="23.5176909" />
+  <node id="4597368504" lat="60.6290240" lon="23.5178158" />
+  <node id="4597368505" lat="60.6291049" lon="23.5177072" />
+  <node id="4597368506" lat="60.6291797" lon="23.5180051" />
+  <node id="4597368507" lat="60.6291567" lon="23.5179192" />
+  <node id="4597368508" lat="60.6291279" lon="23.5179513" />
+  <node id="4597368509" lat="60.6291510" lon="23.5180371" />
+  <node id="4597368510" lat="60.6292817" lon="23.5180747" />
+  <node id="4597368511" lat="60.6291804" lon="23.5182021" />
+  <node id="4597368512" lat="60.6292108" lon="23.5183026" />
+  <node id="4597368513" lat="60.6293121" lon="23.5181752" />
+  <node id="4597368514" lat="60.6293919" lon="23.5171946" />
+  <node id="4597368515" lat="60.6295603" lon="23.5178517" />
+  <node id="4597368516" lat="60.6294706" lon="23.5179473" />
+  <node id="4597368517" lat="60.6293023" lon="23.5172901" />
+  <node id="4597368518" lat="60.6296274" lon="23.5180191" />
+  <node id="4597368519" lat="60.6291104" lon="23.5186870" />
+  <node id="4597368520" lat="60.6291681" lon="23.5188726" />
+  <node id="4597368521" lat="60.6296851" lon="23.5182047" />
+  <node id="4597368522" lat="60.6297061" lon="23.5177420" />
+  <node id="4597368523" lat="60.6297580" lon="23.5179083" />
+  <node id="4597368524" lat="60.6298271" lon="23.5178185" />
+  <node id="4597368525" lat="60.6297752" lon="23.5176522" />
+  <node id="4597368530" lat="60.6298271" lon="23.5171600" />
+  <node id="4597368531" lat="60.6297238" lon="23.5172982" />
+  <node id="4597368532" lat="60.6297614" lon="23.5174148" />
+  <node id="4597368533" lat="60.6298646" lon="23.5172767" />
+  <node id="4597368534" lat="60.6299222" lon="23.5175658" />
+  <node id="4597368535" lat="60.6298729" lon="23.5174156" />
+  <node id="4597368536" lat="60.6299324" lon="23.5173344" />
+  <node id="4597368537" lat="60.6299817" lon="23.5174846" />
+  <node id="4597368550" lat="60.6300218" lon="23.5174219" />
+  <node id="4597368551" lat="60.6300718" lon="23.5175694" />
+  <node id="4597368552" lat="60.6301415" lon="23.5174712" />
+  <node id="4597368553" lat="60.6300916" lon="23.5173236" />
+  <node id="4597368554" lat="60.6302207" lon="23.5174473" />
+  <node id="4597368555" lat="60.6301931" lon="23.5173319" />
+  <node id="4597368556" lat="60.6302284" lon="23.5172968" />
+  <node id="4597368557" lat="60.6302560" lon="23.5174122" />
+  <node id="4597368558" lat="60.6304160" lon="23.5172610" />
+  <node id="4597368559" lat="60.6302674" lon="23.5174461" />
+  <node id="4597368560" lat="60.6303231" lon="23.5176321" />
+  <node id="4597368561" lat="60.6304717" lon="23.5174470" />
+  <node id="4597368562" lat="60.6302351" lon="23.5186712" />
+  <node id="4597368563" lat="60.6302811" lon="23.5189019" />
+  <node id="4597368564" lat="60.6303665" lon="23.5188310" />
+  <node id="4597368565" lat="60.6303204" lon="23.5186004" />
+  <node id="4597368566" lat="60.6303819" lon="23.5180588" />
+  <node id="4597368567" lat="60.6304701" lon="23.5183860" />
+  <node id="4597368568" lat="60.6303888" lon="23.5184770" />
+  <node id="4597368569" lat="60.6303007" lon="23.5181498" />
+  <node id="4597368570" lat="60.6301515" lon="23.5181597" />
+  <node id="4597368571" lat="60.6302186" lon="23.5184494" />
+  <node id="4597368572" lat="60.6302652" lon="23.5184046" />
+  <node id="4597368573" lat="60.6301981" lon="23.5181149" />
+  <node id="4597368574" lat="60.6300954" lon="23.5188913" />
+  <node id="4597368575" lat="60.6301401" lon="23.5191595" />
+  <node id="4597368576" lat="60.6302270" lon="23.5190993" />
+  <node id="4597368577" lat="60.6301823" lon="23.5188310" />
+  <node id="4597368578" lat="60.6299190" lon="23.5184736" />
+  <node id="4597368579" lat="60.6299729" lon="23.5186452" />
+  <node id="4597368580" lat="60.6300442" lon="23.5185521" />
+  <node id="4597368581" lat="60.6299903" lon="23.5183804" />
+  <node id="4597368582" lat="60.6296690" lon="23.5186819" />
+  <node id="4597368583" lat="60.6297453" lon="23.5189903" />
+  <node id="4597368584" lat="60.6298324" lon="23.5189008" />
+  <node id="4597368585" lat="60.6297561" lon="23.5185923" />
+  <node id="4597368586" lat="60.6296022" lon="23.5189503" />
+  <node id="4597368587" lat="60.6295562" lon="23.5187893" />
+  <node id="4597368588" lat="60.6294963" lon="23.5188605" />
+  <node id="4597368589" lat="60.6295423" lon="23.5190215" />
+  <node id="4597368590" lat="60.6294635" lon="23.5191301" />
+  <node id="4597368591" lat="60.6293813" lon="23.5192066" />
+  <node id="4597368592" lat="60.6293483" lon="23.5190590" />
+  <node id="4597368593" lat="60.6294305" lon="23.5189826" />
+  <node id="4597368594" lat="60.6292824" lon="23.5191126" />
+  <node id="4597368595" lat="60.6293107" lon="23.5192293" />
+  <node id="4597368596" lat="60.6292667" lon="23.5192736" />
+  <node id="4597368597" lat="60.6292385" lon="23.5191569" />
+  <node id="4597368598" lat="60.6294278" lon="23.5192946" />
+  <node id="4597368599" lat="60.6293101" lon="23.5194207" />
+  <node id="4597368600" lat="60.6293503" lon="23.5195767" />
+  <node id="4597368601" lat="60.6294680" lon="23.5194506" />
+  <node id="4597368602" lat="60.6291864" lon="23.5193371" />
+  <node id="4597368603" lat="60.6291173" lon="23.5194216" />
+  <node id="4597368604" lat="60.6291464" lon="23.5195204" />
+  <node id="4597368605" lat="60.6292154" lon="23.5194359" />
+  <node id="4597368606" lat="60.6292189" lon="23.5196970" />
+  <node id="4597368607" lat="60.6290933" lon="23.5198338" />
+  <node id="4597368608" lat="60.6291306" lon="23.5199763" />
+  <node id="4597368609" lat="60.6292562" lon="23.5198396" />
+  <node id="4597368610" lat="60.6289692" lon="23.5198858" />
+  <node id="4597368611" lat="60.6290080" lon="23.5200159" />
+  <node id="4597368612" lat="60.6290497" lon="23.5199643" />
+  <node id="4597368613" lat="60.6290109" lon="23.5198342" />
+  <node id="4597368614" lat="60.6289234" lon="23.5196124" />
+  <node id="4597368615" lat="60.6289767" lon="23.5197801" />
+  <node id="4597368616" lat="60.6289063" lon="23.5198731" />
+  <node id="4597368617" lat="60.6288530" lon="23.5197054" />
+  <node id="4597368618" lat="60.6286653" lon="23.5199295" />
+  <node id="4597368619" lat="60.6287298" lon="23.5201011" />
+  <node id="4597368620" lat="60.6287951" lon="23.5199991" />
+  <node id="4597368621" lat="60.6287307" lon="23.5198275" />
+  <node id="4597368622" lat="60.6287476" lon="23.5202615" />
+  <node id="4597368623" lat="60.6287924" lon="23.5204251" />
+  <node id="4597368624" lat="60.6287471" lon="23.5204766" />
+  <node id="4597368625" lat="60.6287024" lon="23.5203130" />
+  <node id="4597368626" lat="60.6286760" lon="23.5204847" />
+  <node id="4597368627" lat="60.6286858" lon="23.5206067" />
+  <node id="4597368628" lat="60.6287379" lon="23.5205892" />
+  <node id="4597368629" lat="60.6287280" lon="23.5204672" />
+  <node id="4597370052" lat="60.6311799" lon="23.5198941" />
+  <node id="4597370053" lat="60.6311083" lon="23.5194741" />
+  <node id="4597370054" lat="60.6308798" lon="23.5194132" />
+  <node id="4597370055" lat="60.6310442" lon="23.5200402" />
+  <node id="4597370056" lat="60.6306299" lon="23.5199571" />
+  <node id="4597370057" lat="60.6305247" lon="23.5200979" />
+  <node id="4597370058" lat="60.6305562" lon="23.5201958" />
+  <node id="4597370059" lat="60.6306614" lon="23.5200550" />
+  <node id="4597370060" lat="60.6303162" lon="23.5199787" />
+  <node id="4597370061" lat="60.6303629" lon="23.5201370" />
+  <node id="4597370062" lat="60.6304417" lon="23.5200402" />
+  <node id="4597370063" lat="60.6303950" lon="23.5198820" />
+  <node id="4597370064" lat="60.6301418" lon="23.5202014" />
+  <node id="4597370065" lat="60.6301885" lon="23.5203677" />
+  <node id="4597370066" lat="60.6302576" lon="23.5202870" />
+  <node id="4597370067" lat="60.6302109" lon="23.5201207" />
+  <node id="4597370068" lat="60.6302760" lon="23.5207421" />
+  <node id="4597370069" lat="60.6303155" lon="23.5208829" />
+  <node id="4597370070" lat="60.6303885" lon="23.5207979" />
+  <node id="4597370071" lat="60.6303490" lon="23.5206571" />
+  <node id="4597370072" lat="60.6301563" lon="23.5210579" />
+  <node id="4597370073" lat="60.6301892" lon="23.5212161" />
+  <node id="4597370074" lat="60.6302464" lon="23.5211667" />
+  <node id="4597370075" lat="60.6302135" lon="23.5210085" />
+  <node id="4597370076" lat="60.6300133" lon="23.5215238" />
+  <node id="4597370077" lat="60.6299172" lon="23.5211818" />
+  <node id="4597370078" lat="60.6300083" lon="23.5210755" />
+  <node id="4597370079" lat="60.6301043" lon="23.5214175" />
+  <node id="4597370080" lat="60.6299224" lon="23.5215647" />
+  <node id="4597370081" lat="60.6299573" lon="23.5216854" />
+  <node id="4597370082" lat="60.6300017" lon="23.5216321" />
+  <node id="4597370083" lat="60.6299669" lon="23.5215114" />
+  <node id="4597370084" lat="60.6295903" lon="23.5217110" />
+  <node id="4597370085" lat="60.6296620" lon="23.5220235" />
+  <node id="4597370086" lat="60.6297518" lon="23.5219379" />
+  <node id="4597370087" lat="60.6296801" lon="23.5216254" />
+  <node id="4597370088" lat="60.6296413" lon="23.5212440" />
+  <node id="4597370089" lat="60.6294256" lon="23.5214559" />
+  <node id="4597370090" lat="60.6293874" lon="23.5212941" />
+  <node id="4597370091" lat="60.6296031" lon="23.5210823" />
+  <node id="4597370092" lat="60.6294170" lon="23.5219650" />
+  <node id="4597370093" lat="60.6293401" lon="23.5220240" />
+  <node id="4597370094" lat="60.6293690" lon="23.5221806" />
+  <node id="4597370095" lat="60.6294459" lon="23.5221216" />
+  <node id="4597370096" lat="60.6293893" lon="23.5221922" />
+  <node id="4597370097" lat="60.6294662" lon="23.5225450" />
+  <node id="4597370098" lat="60.6293815" lon="23.5226218" />
+  <node id="4597370099" lat="60.6293045" lon="23.5222691" />
+  <node id="4597370100" lat="60.6291260" lon="23.5214923" />
+  <node id="4597370101" lat="60.6292345" lon="23.5219201" />
+  <node id="4597370102" lat="60.6293117" lon="23.5218386" />
+  <node id="4597370103" lat="60.6292032" lon="23.5214108" />
+  <node id="4597370104" lat="60.6289028" lon="23.5213182" />
+  <node id="4597370105" lat="60.6287654" lon="23.5214698" />
+  <node id="4597370106" lat="60.6288013" lon="23.5216053" />
+  <node id="4597370107" lat="60.6289388" lon="23.5214537" />
+  <node id="4597370108" lat="60.6289779" lon="23.5214935" />
+  <node id="4597370109" lat="60.6289497" lon="23.5213862" />
+  <node id="4597370110" lat="60.6289835" lon="23.5213491" />
+  <node id="4597370111" lat="60.6290118" lon="23.5214564" />
+  <node id="4597370112" lat="60.6290371" lon="23.5217526" />
+  <node id="4597370113" lat="60.6290621" lon="23.5218505" />
+  <node id="4597370114" lat="60.6290986" lon="23.5218118" />
+  <node id="4597370115" lat="60.6290736" lon="23.5217139" />
+  <node id="4597370116" lat="60.6289993" lon="23.5219929" />
+  <node id="4597370117" lat="60.6289164" lon="23.5216267" />
+  <node id="4597370118" lat="60.6289848" lon="23.5215624" />
+  <node id="4597370119" lat="60.6290677" lon="23.5219285" />
+  <node id="4597370120" lat="60.6290408" lon="23.5228153" />
+  <node id="4597370121" lat="60.6289533" lon="23.5224599" />
+  <node id="4597370122" lat="60.6290401" lon="23.5223711" />
+  <node id="4597370123" lat="60.6291276" lon="23.5227264" />
+  <node id="4597370144" lat="60.6297960" lon="23.5225377" />
+  <node id="4597370145" lat="60.6298683" lon="23.5228193" />
+  <node id="4597370146" lat="60.6299603" lon="23.5227211" />
+  <node id="4597370147" lat="60.6298879" lon="23.5224395" />
+  <node id="4597370152" lat="60.6300849" lon="23.5219556" />
+  <node id="4597370153" lat="60.6301664" lon="23.5222614" />
+  <node id="4597370154" lat="60.6302405" lon="23.5221793" />
+  <node id="4597370155" lat="60.6301589" lon="23.5218735" />
+  <node id="4597370156" lat="60.6305612" lon="23.5225465" />
+  <node id="4597370157" lat="60.6304547" lon="23.5221227" />
+  <node id="4597370158" lat="60.6305930" lon="23.5219781" />
+  <node id="4597370159" lat="60.6306996" lon="23.5224019" />
+  <node id="4597370160" lat="60.6303860" lon="23.5214099" />
+  <node id="4597370161" lat="60.6304702" lon="23.5217451" />
+  <node id="4597370162" lat="60.6305733" lon="23.5216375" />
+  <node id="4597370163" lat="60.6304891" lon="23.5213022" />
+  <node id="4597370164" lat="60.6311013" lon="23.5223635" />
+  <node id="4597370165" lat="60.6311487" lon="23.5225271" />
+  <node id="4597370166" lat="60.6312126" lon="23.5224502" />
+  <node id="4597370167" lat="60.6311652" lon="23.5222866" />
+  <node id="4597370168" lat="60.6310839" lon="23.5216659" />
+  <node id="4597370169" lat="60.6311826" lon="23.5220951" />
+  <node id="4597370170" lat="60.6312797" lon="23.5220023" />
+  <node id="4597370171" lat="60.6311810" lon="23.5215731" />
+  <node id="9523461051" lat="60.6311800" lon="23.5197951" />
+  <node id="9523461052" lat="60.6310482" lon="23.5194133" />
+  <node id="9523461053" lat="60.6309667" lon="23.5197681" />
+  <node id="9523461054" lat="60.6308925" lon="23.5196817" />
+  <node id="9523461055" lat="60.6309219" lon="23.5197800" />
+  <node id="9523461056" lat="60.6309241" lon="23.5197116" />
+  <node id="14153286609" lat="60.6290841" lon="23.5180626" />
+  <node id="14153286610" lat="60.6291023" lon="23.5181341" />
+  <node id="14153286611" lat="60.6291508" lon="23.5180830" />
+  <node id="14153286612" lat="60.6291326" lon="23.5180115" />
+  <node id="14153286754" lat="60.6288231" lon="23.5220778" />
+  <node id="14153286755" lat="60.6288404" lon="23.5221712" />
+  <node id="14153286756" lat="60.6288911" lon="23.5221325" />
+  <node id="14153286757" lat="60.6288738" lon="23.5220390" />
+  <node id="14153286766" lat="60.6300212" lon="23.5221026" />
+  <node id="14153286767" lat="60.6300638" lon="23.5222751" />
+  <node id="14153286768" lat="60.6301041" lon="23.5222338" />
+  <node id="14153286769" lat="60.6300614" lon="23.5220614" />
+  <node id="14153286786" lat="60.6290843" lon="23.5212831" />
+  <node id="14153286787" lat="60.6290977" lon="23.5213481" />
+  <node id="14153286788" lat="60.6291233" lon="23.5213261" />
+  <node id="14153286789" lat="60.6291099" lon="23.5212612" />
+  <way id="464652823">
+    <nd ref="4597368489" />
+    <nd ref="4597368488" />
+    <nd ref="4597368487" />
+    <nd ref="4597368486" />
+    <nd ref="4597368489" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652824">
+    <nd ref="4597368493" />
+    <nd ref="4597368490" />
+    <nd ref="4597368491" />
+    <nd ref="4597368492" />
+    <nd ref="4597368493" />
+    <tag k="addr:housenumber" v="11" />
+    <tag k="addr:street" v="Peltotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652825">
+    <nd ref="4597368497" />
+    <nd ref="4597368496" />
+    <nd ref="4597368495" />
+    <nd ref="4597368494" />
+    <nd ref="4597368497" />
+    <tag k="addr:housenumber" v="17" />
+    <tag k="addr:street" v="Urheilutie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652826">
+    <nd ref="4597368501" />
+    <nd ref="4597368500" />
+    <nd ref="4597368499" />
+    <nd ref="4597368498" />
+    <nd ref="4597368501" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652827">
+    <nd ref="4597368505" />
+    <nd ref="4597368504" />
+    <nd ref="4597368503" />
+    <nd ref="4597368502" />
+    <nd ref="4597368505" />
+    <tag k="addr:housenumber" v="19" />
+    <tag k="addr:street" v="Urheilutie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652828">
+    <nd ref="4597368509" />
+    <nd ref="4597368508" />
+    <nd ref="4597368507" />
+    <nd ref="4597368506" />
+    <nd ref="4597368509" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652829">
+    <nd ref="4597368513" />
+    <nd ref="4597368512" />
+    <nd ref="4597368511" />
+    <nd ref="4597368510" />
+    <nd ref="4597368513" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652830">
+    <nd ref="4597368517" />
+    <nd ref="4597368514" />
+    <nd ref="4597368515" />
+    <nd ref="4597368516" />
+    <nd ref="4597368517" />
+    <tag k="addr:housenumber" v="11" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652831">
+    <nd ref="4597368521" />
+    <nd ref="4597368520" />
+    <nd ref="4597368519" />
+    <nd ref="4597368518" />
+    <nd ref="4597368521" />
+    <tag k="addr:housenumber" v="9" />
+    <tag k="addr:street" v="Peltotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652832">
+    <nd ref="4597368525" />
+    <nd ref="4597368524" />
+    <nd ref="4597368523" />
+    <nd ref="4597368522" />
+    <nd ref="4597368525" />
+    <tag k="addr:housenumber" v="10" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652834">
+    <nd ref="4597368533" />
+    <nd ref="4597368532" />
+    <nd ref="4597368531" />
+    <nd ref="4597368530" />
+    <nd ref="4597368533" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652835">
+    <nd ref="4597368537" />
+    <nd ref="4597368534" />
+    <nd ref="4597368535" />
+    <nd ref="4597368536" />
+    <nd ref="4597368537" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652839">
+    <nd ref="4597368553" />
+    <nd ref="4597368552" />
+    <nd ref="4597368551" />
+    <nd ref="4597368550" />
+    <nd ref="4597368553" />
+    <tag k="addr:housenumber" v="3" />
+    <tag k="addr:street" v="Peltotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652840">
+    <nd ref="4597368557" />
+    <nd ref="4597368554" />
+    <nd ref="4597368555" />
+    <nd ref="4597368556" />
+    <nd ref="4597368557" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652841">
+    <nd ref="4597368561" />
+    <nd ref="4597368560" />
+    <nd ref="4597368559" />
+    <nd ref="4597368558" />
+    <nd ref="4597368561" />
+    <tag k="addr:housenumber" v="1" />
+    <tag k="addr:street" v="Peltotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652842">
+    <nd ref="4597368565" />
+    <nd ref="4597368564" />
+    <nd ref="4597368563" />
+    <nd ref="4597368562" />
+    <nd ref="4597368565" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652843">
+    <nd ref="4597368569" />
+    <nd ref="4597368566" />
+    <nd ref="4597368567" />
+    <nd ref="4597368568" />
+    <nd ref="4597368569" />
+    <tag k="addr:housenumber" v="2" />
+    <tag k="addr:street" v="Peltotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652844">
+    <nd ref="4597368573" />
+    <nd ref="4597368572" />
+    <nd ref="4597368571" />
+    <nd ref="4597368570" />
+    <nd ref="4597368573" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652845">
+    <nd ref="4597368577" />
+    <nd ref="4597368576" />
+    <nd ref="4597368575" />
+    <nd ref="4597368574" />
+    <nd ref="4597368577" />
+    <tag k="addr:housenumber" v="14" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652846">
+    <nd ref="4597368581" />
+    <nd ref="4597368580" />
+    <nd ref="4597368579" />
+    <nd ref="4597368578" />
+    <nd ref="4597368581" />
+    <tag k="addr:housenumber" v="12" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652847">
+    <nd ref="4597368585" />
+    <nd ref="4597368584" />
+    <nd ref="4597368583" />
+    <nd ref="4597368582" />
+    <nd ref="4597368585" />
+    <tag k="addr:housenumber" v="13" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652848">
+    <nd ref="4597368589" />
+    <nd ref="4597368588" />
+    <nd ref="4597368587" />
+    <nd ref="4597368586" />
+    <nd ref="4597368589" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652849">
+    <nd ref="4597368593" />
+    <nd ref="4597368590" />
+    <nd ref="4597368591" />
+    <nd ref="4597368592" />
+    <nd ref="4597368593" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652850">
+    <nd ref="4597368597" />
+    <nd ref="4597368594" />
+    <nd ref="4597368595" />
+    <nd ref="4597368596" />
+    <nd ref="4597368597" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652851">
+    <nd ref="4597368601" />
+    <nd ref="4597368600" />
+    <nd ref="4597368599" />
+    <nd ref="4597368598" />
+    <nd ref="4597368601" />
+    <tag k="addr:housenumber" v="8" />
+    <tag k="addr:street" v="Peltotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652852">
+    <nd ref="4597368605" />
+    <nd ref="4597368604" />
+    <nd ref="4597368603" />
+    <nd ref="4597368602" />
+    <nd ref="4597368605" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652853">
+    <nd ref="4597368609" />
+    <nd ref="4597368608" />
+    <nd ref="4597368607" />
+    <nd ref="4597368606" />
+    <nd ref="4597368609" />
+    <tag k="addr:housenumber" v="10" />
+    <tag k="addr:street" v="Peltotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652854">
+    <nd ref="4597368613" />
+    <nd ref="4597368612" />
+    <nd ref="4597368611" />
+    <nd ref="4597368610" />
+    <nd ref="4597368613" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652855">
+    <nd ref="4597368617" />
+    <nd ref="4597368614" />
+    <nd ref="4597368615" />
+    <nd ref="4597368616" />
+    <nd ref="4597368617" />
+    <tag k="addr:housenumber" v="12" />
+    <tag k="addr:street" v="Peltotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652856">
+    <nd ref="4597368621" />
+    <nd ref="4597368620" />
+    <nd ref="4597368619" />
+    <nd ref="4597368618" />
+    <nd ref="4597368621" />
+    <tag k="addr:housenumber" v="8" />
+    <tag k="addr:street" v="Oikotie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652857">
+    <nd ref="4597368625" />
+    <nd ref="4597368622" />
+    <nd ref="4597368623" />
+    <nd ref="4597368624" />
+    <nd ref="4597368625" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464652858">
+    <nd ref="4597368629" />
+    <nd ref="4597368628" />
+    <nd ref="4597368627" />
+    <nd ref="4597368626" />
+    <nd ref="4597368629" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653177">
+    <nd ref="4597370055" />
+    <nd ref="9523461053" />
+    <nd ref="9523461055" />
+    <nd ref="9523461056" />
+    <nd ref="9523461054" />
+    <nd ref="4597370054" />
+    <nd ref="9523461052" />
+    <nd ref="4597370053" />
+    <nd ref="9523461051" />
+    <nd ref="4597370052" />
+    <nd ref="4597370055" />
+    <tag k="addr:housenumber" v="1" />
+    <tag k="addr:street" v="Hämeen härkätie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653178">
+    <nd ref="4597370059" />
+    <nd ref="4597370058" />
+    <nd ref="4597370057" />
+    <nd ref="4597370056" />
+    <nd ref="4597370059" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653179">
+    <nd ref="4597370063" />
+    <nd ref="4597370062" />
+    <nd ref="4597370061" />
+    <nd ref="4597370060" />
+    <nd ref="4597370063" />
+    <tag k="addr:housenumber" v="16" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653180">
+    <nd ref="4597370067" />
+    <nd ref="4597370066" />
+    <nd ref="4597370065" />
+    <nd ref="4597370064" />
+    <nd ref="4597370067" />
+    <tag k="addr:housenumber" v="17" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653181">
+    <nd ref="4597370071" />
+    <nd ref="4597370070" />
+    <nd ref="4597370069" />
+    <nd ref="4597370068" />
+    <nd ref="4597370071" />
+    <tag k="addr:housenumber" v="19" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653182">
+    <nd ref="4597370075" />
+    <nd ref="4597370074" />
+    <nd ref="4597370073" />
+    <nd ref="4597370072" />
+    <nd ref="4597370075" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653183">
+    <nd ref="4597370079" />
+    <nd ref="4597370076" />
+    <nd ref="4597370077" />
+    <nd ref="4597370078" />
+    <nd ref="4597370079" />
+    <tag k="addr:housenumber" v="23" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653184">
+    <nd ref="4597370083" />
+    <nd ref="4597370082" />
+    <nd ref="4597370081" />
+    <nd ref="4597370080" />
+    <nd ref="4597370083" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653185">
+    <nd ref="4597370087" />
+    <nd ref="4597370086" />
+    <nd ref="4597370085" />
+    <nd ref="4597370084" />
+    <nd ref="4597370087" />
+    <tag k="addr:housenumber" v="29" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653186">
+    <nd ref="4597370091" />
+    <nd ref="4597370088" />
+    <nd ref="4597370089" />
+    <nd ref="4597370090" />
+    <nd ref="4597370091" />
+    <tag k="addr:housenumber" v="27" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653187">
+    <nd ref="4597370095" />
+    <nd ref="4597370094" />
+    <nd ref="4597370093" />
+    <nd ref="4597370092" />
+    <nd ref="4597370095" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653188">
+    <nd ref="4597370099" />
+    <nd ref="4597370096" />
+    <nd ref="4597370097" />
+    <nd ref="4597370098" />
+    <nd ref="4597370099" />
+    <tag k="addr:housenumber" v="31" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653189">
+    <nd ref="4597370103" />
+    <nd ref="4597370102" />
+    <nd ref="4597370101" />
+    <nd ref="4597370100" />
+    <nd ref="4597370103" />
+    <tag k="addr:housenumber" v="33" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653190">
+    <nd ref="4597370107" />
+    <nd ref="4597370106" />
+    <nd ref="4597370105" />
+    <nd ref="4597370104" />
+    <nd ref="4597370107" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653191">
+    <nd ref="4597370111" />
+    <nd ref="4597370108" />
+    <nd ref="4597370109" />
+    <nd ref="4597370110" />
+    <nd ref="4597370111" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653192">
+    <nd ref="4597370115" />
+    <nd ref="4597370114" />
+    <nd ref="4597370113" />
+    <nd ref="4597370112" />
+    <nd ref="4597370115" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653193">
+    <nd ref="4597370119" />
+    <nd ref="4597370116" />
+    <nd ref="4597370117" />
+    <nd ref="4597370118" />
+    <nd ref="4597370119" />
+    <tag k="addr:housenumber" v="35" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653194">
+    <nd ref="4597370123" />
+    <nd ref="4597370120" />
+    <nd ref="4597370121" />
+    <nd ref="4597370122" />
+    <nd ref="4597370123" />
+    <tag k="addr:housenumber" v="42" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653200">
+    <nd ref="4597370147" />
+    <nd ref="4597370146" />
+    <nd ref="4597370145" />
+    <nd ref="4597370144" />
+    <nd ref="4597370147" />
+    <tag k="addr:housenumber" v="32" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653202">
+    <nd ref="4597370155" />
+    <nd ref="4597370154" />
+    <nd ref="4597370153" />
+    <nd ref="4597370152" />
+    <nd ref="4597370155" />
+    <tag k="addr:housenumber" v="30" />
+    <tag k="addr:street" v="Rengastie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653203">
+    <nd ref="4597370159" />
+    <nd ref="4597370156" />
+    <nd ref="4597370157" />
+    <nd ref="4597370158" />
+    <nd ref="4597370159" />
+    <tag k="addr:housenumber" v="23" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653204">
+    <nd ref="4597370163" />
+    <nd ref="4597370162" />
+    <nd ref="4597370161" />
+    <nd ref="4597370160" />
+    <nd ref="4597370163" />
+    <tag k="addr:housenumber" v="21" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653205">
+    <nd ref="4597370167" />
+    <nd ref="4597370166" />
+    <nd ref="4597370165" />
+    <nd ref="4597370164" />
+    <nd ref="4597370167" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="464653206">
+    <nd ref="4597370171" />
+    <nd ref="4597370170" />
+    <nd ref="4597370169" />
+    <nd ref="4597370168" />
+    <nd ref="4597370171" />
+    <tag k="addr:housenumber" v="22" />
+    <tag k="addr:street" v="Heikintie" />
+    <tag k="building" v="yes" />
+    <tag k="source" v="MML2017" />
+  </way>
+  <way id="1555933364">
+    <nd ref="14153286612" />
+    <nd ref="14153286611" />
+    <nd ref="14153286610" />
+    <nd ref="14153286609" />
+    <nd ref="14153286612" />
+    <tag k="building" v="yes" />
+  </way>
+  <way id="1555933398">
+    <nd ref="14153286757" />
+    <nd ref="14153286756" />
+    <nd ref="14153286755" />
+    <nd ref="14153286754" />
+    <nd ref="14153286757" />
+    <tag k="building" v="yes" />
+  </way>
+  <way id="1555933401">
+    <nd ref="14153286769" />
+    <nd ref="14153286768" />
+    <nd ref="14153286767" />
+    <nd ref="14153286766" />
+    <nd ref="14153286769" />
+    <tag k="building" v="yes" />
+  </way>
+  <way id="1555933406">
+    <nd ref="14153286789" />
+    <nd ref="14153286788" />
+    <nd ref="14153286787" />
+    <nd ref="14153286786" />
+    <nd ref="14153286789" />
+    <tag k="building" v="yes" />
+  </way>
+</osm>

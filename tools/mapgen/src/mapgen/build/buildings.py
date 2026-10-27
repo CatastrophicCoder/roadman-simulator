@@ -1,8 +1,11 @@
 """Stage 3: buildings. Resolve heights, set bases on the terrain and extrude footprints.
 
-Height priority: MML 3D measured height, OSM `height`, OSM `building:levels` x 3 m, then
-a default of 2 floors x 3 m. The base is `Heightfield.min_under(footprint)`. Roofs are
-flat for now. Each building belongs to the tile containing its centroid and is never split.
+Height priority: lidar (`mml_lidar`, see `mapgen.build.lidar`), MML 3D measured height
+(`mml_3d`, a stub that never has a value yet), OSM `height`, OSM `building:levels` x 3 m,
+then a default of 2 floors x 3 m. A manual override goes first once it exists. A lidar
+height is the median roof elevation minus the base, so the flat roof sits at the measured
+median elevation. The base is `Heightfield.min_under(footprint)`. Roofs are flat for now.
+Each building belongs to the tile containing its centroid and is never split.
 """
 
 import math
@@ -20,10 +23,18 @@ from trimesh.creation import triangulate_polygon
 
 from mapgen.build.area import BuildArea, tile_id
 from mapgen.build.heightfield import Heightfield
+from mapgen.build.lidar import REJECT_REASONS, LidarParams, LidarResult, PointIndex, lidar_height
 from mapgen.build.stage1_load import LocalFootprint
+from mapgen.sources.base import PointCloud
 
-HeightSource = Literal["mml_3d", "osm_height", "osm_levels", "default"]
-HEIGHT_SOURCES: tuple[HeightSource, ...] = ("mml_3d", "osm_height", "osm_levels", "default")
+HeightSource = Literal["mml_lidar", "mml_3d", "osm_height", "osm_levels", "default"]
+HEIGHT_SOURCES: tuple[HeightSource, ...] = (
+    "mml_lidar",
+    "mml_3d",
+    "osm_height",
+    "osm_levels",
+    "default",
+)
 LEVEL_HEIGHT_M = 3.0
 DEFAULT_LEVELS = 2
 MIN_MATCH_OVERLAP = 0.5  # share of the footprint a 3D building must cover to lend its height
@@ -59,13 +70,27 @@ class ResolvedHeight:
     problems: tuple[str, ...] = ()  # invalid tags that were ignored
 
 
-def resolve_height(tags: Mapping[str, str], measured_m: float | None = None) -> ResolvedHeight:
-    """The building height and where it came from, in priority order."""
+def _valid(value: float | None) -> bool:
+    return value is not None and math.isfinite(value) and value > 0
+
+
+def resolve_height(
+    tags: Mapping[str, str],
+    measured_m: float | None = None,
+    lidar_m: float | None = None,
+) -> ResolvedHeight:
+    """The building height and where it came from, in priority order.
+
+    `lidar_m` is an accepted lidar height (`LidarResult.height_m`), `measured_m` an MML 3D
+    height. Missing, NaN, zero or negative values fall through to the next source.
+    """
     problems: list[str] = []
     for key in ("height", "building:levels"):
         parse = parse_height if key == "height" else parse_levels
         if key in tags and parse(tags[key]) is None:
             problems.append(f"invalid {key}={tags[key]!r}")
+    if lidar_m is not None and _valid(lidar_m):
+        return ResolvedHeight(lidar_m, "mml_lidar", tuple(problems))
     if measured_m is not None and math.isfinite(measured_m) and measured_m > 0:
         return ResolvedHeight(measured_m, "mml_3d", tuple(problems))
     height = parse_height(tags.get("height"))
@@ -210,6 +235,13 @@ class Building:
     base_z: float
     tags: Mapping[str, str] = field(default_factory=dict)
     problems: tuple[str, ...] = ()
+    lidar: LidarResult | None = None  # None when the build has no point cloud source
+
+    def __post_init__(self) -> None:
+        if not (math.isfinite(self.height_m) and self.height_m > 0):
+            raise ValueError(f"{self.id}: height must be finite and positive, not {self.height_m}")
+        if not math.isfinite(self.base_z):
+            raise ValueError(f"{self.id}: base_z must be finite")
 
     @property
     def top_z(self) -> float:
@@ -227,8 +259,26 @@ class Building:
             for name, box in zip(self.collision_nodes, boxes, strict=True)
         ]
 
+    def lidar_provenance(self) -> dict[str, Any]:
+        """Lidar details: the selection for a lidar height, or why lidar was rejected."""
+        lidar = self.lidar
+        if lidar is None:
+            return {}
+        if lidar.rejected is not None:
+            return {"lidar_rejected": lidar.rejected}
+        if self.height_source != "mml_lidar":
+            return {}
+        assert lidar.roof_z_median is not None and lidar.roof_z_p90 is not None
+        return {
+            "lidar_points": lidar.points,
+            "lidar_buffer_m": lidar.buffer_m,
+            "lidar_returns": lidar.returns,
+            "roof_z_median": round(lidar.roof_z_median, 3),
+            "roof_z_p90": round(lidar.roof_z_p90, 3),
+        }
+
     def provenance(self) -> dict[str, Any]:
-        """The entry for the pack's `buildings.json`."""
+        """The entry for the pack's `buildings.json` (and the stage 3 GeoJSON)."""
         return {
             "id": self.id,
             "tile": self.tile,
@@ -240,6 +290,7 @@ class Building:
             "base_source": "dem",
             "roof_shape": "flat",
             "roof_shape_source": "default",
+            **self.lidar_provenance(),
         }
 
 
@@ -255,9 +306,19 @@ class BuildingsResult:
 
     def report(self) -> dict[str, Any]:
         counts = Counter(b.height_source for b in self.buildings)
+        lidar = [b for b in self.buildings if b.lidar is not None]
+        used = [b.lidar for b in lidar if b.height_source == "mml_lidar" and b.lidar is not None]
+        rejected = Counter(b.lidar.rejected for b in lidar if b.lidar and b.lidar.rejected)
+        buffers = Counter(str(float(r.buffer_m)) for r in used if r.buffer_m is not None)
         return {
             "building_count": len(self.buildings),
             "height_source_counts": {source: counts.get(source, 0) for source in HEIGHT_SOURCES},
+            "lidar": {
+                "buildings_checked": len(lidar),
+                "rejected_counts": {reason: rejected.get(reason, 0) for reason in REJECT_REASONS},
+                "buffer_counts": dict(sorted(buffers.items(), key=lambda kv: -float(kv[0]))),
+                "single_returns": sum(1 for r in used if r.returns == "single"),
+            },
             "ignored_tags": [
                 {"id": b.id, "problem": problem} for b in self.buildings for problem in b.problems
             ],
@@ -282,9 +343,16 @@ def resolve_buildings(
     heightfield: Heightfield,
     area: BuildArea,
     measured_heights: Mapping[str, float] | None = None,
+    points: PointCloud | None = None,
+    lidar_params: LidarParams | None = None,
 ) -> BuildingsResult:
-    """Resolve height, base and tile for every footprint whose centroid is in the area."""
+    """Resolve height, base and tile for every footprint whose centroid is in the area.
+
+    With `points` (non-ground lidar points in local coordinates), each footprint first
+    tries a lidar height with `lidar_params` (defaults when None).
+    """
     measured = measured_heights or {}
+    point_index = PointIndex(points) if points is not None else None
     used: set[str] = set()
     buildings: list[Building] = []
     for footprint in sorted(footprints, key=lambda f: f.id):
@@ -292,7 +360,15 @@ def resolve_buildings(
         index = area.tile_index(centroid.x, centroid.y)
         if index is None:
             raise ValueError(f"{footprint.id}: centroid is outside the build area")
-        height = resolve_height(footprint.tags, measured.get(footprint.id))
+        base_z = heightfield.min_under(footprint.geometry)
+        lidar = (
+            lidar_height(footprint.geometry, point_index, base_z, lidar_params)
+            if point_index is not None
+            else None
+        )
+        height = resolve_height(
+            footprint.tags, measured.get(footprint.id), lidar.height_m if lidar else None
+        )
         parts = len(_polygons(footprint.geometry))
         node, collisions = _unique_names(node_name(footprint.id), parts, used)
         buildings.append(
@@ -304,9 +380,10 @@ def resolve_buildings(
                 footprint=footprint.geometry,
                 height_m=height.height_m,
                 height_source=height.source,
-                base_z=heightfield.min_under(footprint.geometry),
+                base_z=base_z,
                 tags=footprint.tags,
                 problems=height.problems,
+                lidar=lidar,
             )
         )
     return BuildingsResult(buildings)

@@ -24,6 +24,7 @@ FileOrigin = Literal["downloaded", "manual"]
 OSM_VECTOR = "osm_vector"  # OpenStreetMap-style vector features (building footprints for now)
 ELEVATION = "elevation"  # a terrain elevation raster
 BUILDINGS_3D = "buildings_3d"  # building footprints with measured heights
+POINT_CLOUD = "point_cloud"  # classified lidar points (building heights)
 
 
 def utc_now() -> datetime:
@@ -216,6 +217,81 @@ class ElevationRaster:
         return (abs(self.transform.a), abs(self.transform.e))
 
 
+@dataclass(frozen=True)
+class PointCloud:
+    """Lidar points as parallel arrays of equal length, in `crs` coordinates.
+
+    `x`, `y` and `z` are float64 metres, `classification` the ASPRS class (uint8),
+    `return_number` and `number_of_returns` the pulse return counts (uint8).
+    """
+
+    x: np.ndarray
+    y: np.ndarray
+    z: np.ndarray
+    classification: np.ndarray
+    return_number: np.ndarray
+    number_of_returns: np.ndarray
+    crs: str
+
+    def __post_init__(self) -> None:
+        n = len(self.x)
+        arrays = (
+            self.y,
+            self.z,
+            self.classification,
+            self.return_number,
+            self.number_of_returns,
+        )
+        if any(a.ndim != 1 or len(a) != n for a in (self.x, *arrays)):
+            raise ValueError("point cloud arrays must be 1-D and of equal length")
+
+    def __len__(self) -> int:
+        return len(self.x)
+
+    @classmethod
+    def empty(cls, crs: str) -> "PointCloud":
+        f, u = np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.uint8)
+        return cls(f, f.copy(), f.copy(), u, u.copy(), u.copy(), crs)
+
+    def select(self, mask: np.ndarray) -> "PointCloud":
+        """The points where `mask` (a boolean array or an index array) selects."""
+        return PointCloud(
+            self.x[mask],
+            self.y[mask],
+            self.z[mask],
+            self.classification[mask],
+            self.return_number[mask],
+            self.number_of_returns[mask],
+            self.crs,
+        )
+
+    def offset(self, dx: float, dy: float, crs: str | None = None) -> "PointCloud":
+        """The points shifted by (dx, dy), e.g. to local coordinates."""
+        return PointCloud(
+            self.x + dx,
+            self.y + dy,
+            self.z,
+            self.classification,
+            self.return_number,
+            self.number_of_returns,
+            self.crs if crs is None else crs,
+        )
+
+    @classmethod
+    def concatenate(cls, clouds: "list[PointCloud]", crs: str) -> "PointCloud":
+        if not clouds:
+            return cls.empty(crs)
+        return cls(
+            np.concatenate([c.x for c in clouds]),
+            np.concatenate([c.y for c in clouds]),
+            np.concatenate([c.z for c in clouds]),
+            np.concatenate([c.classification for c in clouds]),
+            np.concatenate([c.return_number for c in clouds]),
+            np.concatenate([c.number_of_returns for c in clouds]),
+            crs,
+        )
+
+
 @dataclass
 class SourceData:
     """What one source loaded, plus the raw files it read (used for the pack credits)."""
@@ -223,6 +299,7 @@ class SourceData:
     files: list[Path] = field(default_factory=list)
     footprints: list[Footprint] = field(default_factory=list)
     elevation: ElevationRaster | None = None
+    points: PointCloud | None = None
     skipped: list[SkippedFeature] = field(default_factory=list)
     partial: list[SkippedFeature] = field(default_factory=list)  # built, but incomplete
 

@@ -100,6 +100,7 @@ def test_heights_follow_the_priority(fixture_build: FixtureBuild) -> None:
     assert buildings["osm:way/109"]["tile"] == "tile_x0_y0"  # crosses x = 0, centroid east
     report = _json(fixture_build.work_dir / "03-buildings" / "report.json")
     assert report["height_source_counts"] == {
+        "mml_lidar": 0,
         "mml_3d": 0,
         "osm_height": 4,
         "osm_levels": 4,

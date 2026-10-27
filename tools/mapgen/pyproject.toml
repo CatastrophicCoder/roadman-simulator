@@ -5,6 +5,8 @@ description = "Map generation pipeline for Roadman Simulator: Somero-City"
 requires-python = ">=3.12"
 dependencies = [
     "jsonschema>=4.26.0",
+    "laspy>=2.7.0",
+    "lazrs>=0.8.2",
     "mapbox-earcut>=2.1.0",
     "numpy>=2.5.4",
     "pydantic>=2.7",

@@ -1,8 +1,10 @@
 """Stage 1: load the enabled sources, reproject to the map CRS and subtract the origin.
 
-Sources are picked by capability (`osm_vector`, `elevation`, `buildings_3d`), never by
-name. Footprints are kept when their centroid is inside the build area. Output in
-`01-load/`: `footprints.geojson` (world coordinates), `dem.tif` (cropped) and `report.json`.
+Sources are picked by capability (`osm_vector`, `elevation`, `buildings_3d`,
+`point_cloud`), never by name. Footprints are kept when their centroid is inside the build
+area. Lidar points are read only around those footprints (their combined bounds plus
+`POINT_MARGIN_M`), so the test area stays fast. Output in `01-load/`: `footprints.geojson`
+(world coordinates), `dem.tif` (cropped) and `report.json`.
 """
 
 from collections import Counter
@@ -16,6 +18,7 @@ from shapely.geometry import MultiPolygon, Polygon
 
 from mapgen.build.area import BuildArea, to_world
 from mapgen.build.heightfield import Heightfield, heightfield_from_raster
+from mapgen.build.lidar import LidarParams
 from mapgen.build.stage_io import write_geojson, write_geotiff, write_json
 from mapgen.config import MapConfig
 from mapgen.geo import BBox, offset_geometry, reproject_geometry
@@ -23,9 +26,11 @@ from mapgen.sources.base import (
     BUILDINGS_3D,
     ELEVATION,
     OSM_VECTOR,
+    POINT_CLOUD,
     ElevationRaster,
     Footprint,
     LoadContext,
+    PointCloud,
     SkippedFeature,
     SourceData,
     SourceLoadError,
@@ -33,6 +38,7 @@ from mapgen.sources.base import (
 from mapgen.sources.registry import SelectedSource, enabled_sources_providing
 
 DEM_MARGIN_M = 10.0  # elevation read around the area, so edge samples have neighbours
+POINT_MARGIN_M = 2.0  # lidar points read around the in-area footprints' combined bounds
 
 
 class BuildError(Exception):
@@ -57,6 +63,11 @@ class LoadResult:
     raster: ElevationRaster  # cropped, world coordinates
     files: list[Path]  # raw files read, for the credits
     report: dict[str, Any]
+    # Non-ground lidar points around the footprints, local coordinates (z unchanged), and
+    # the height thresholds from the point cloud source's options. None without a source.
+    points: PointCloud | None = None
+    lidar_source: str | None = None
+    lidar_params: LidarParams | None = None
 
 
 def _one(config: MapConfig, capability: str, required: bool) -> SelectedSource | None:
@@ -105,13 +116,16 @@ def run_load(
     )
 
     def load(source: SelectedSource) -> SourceData:
+        return load_bounded(source, read_bounds)
+
+    def load_bounded(source: SelectedSource, bounds: BBox) -> SourceData:
         ctx = LoadContext(
             map_config=config,
             source_name=source.name,
             options=source.options,
             raw_dir=raw_dir,
             target_crs=config.crs,
-            bounds=read_bounds,
+            bounds=bounds,
             log=log,
         )
         try:
@@ -123,6 +137,7 @@ def run_load(
     assert elevation_source is not None
     vector_source = _one(config, OSM_VECTOR, required=False)
     buildings_3d_source = _one(config, BUILDINGS_3D, required=False)
+    point_source = _one(config, POINT_CLOUD, required=False)
 
     files: list[Path] = []
     skipped: list[SkippedFeature] = []
@@ -161,6 +176,21 @@ def run_load(
         ]
 
     in_area = [f for f in all_footprints if _centroid_in(f, area)]
+
+    points: PointCloud | None = None
+    lidar_params: LidarParams | None = None
+    point_bounds: BBox | None = None
+    if point_source is not None:
+        lidar_params = LidarParams.from_options(point_source.options)
+        points = PointCloud.empty(config.crs)
+        point_bounds = points_read_bounds(in_area, config)
+        if point_bounds is not None:
+            data_points = load_bounded(point_source, point_bounds)
+            files += data_points.files
+            if data_points.points is None:
+                raise BuildError(f"source {point_source.name!r} returned no point cloud")
+            points = data_points.points.offset(-config.origin.x, -config.origin.y)
+        log(f"[{point_source.name}] {len(points)} lidar points around {len(in_area)} footprints")
     reasons = Counter(s.reason.split(":")[0] for s in skipped)
     report: dict[str, Any] = {
         "area": area.name,
@@ -169,6 +199,7 @@ def run_load(
             "elevation": elevation_source.name,
             "osm_vector": vector_source.name if vector_source else None,
             "buildings_3d": buildings_3d_source.name if buildings_3d_source else None,
+            "point_cloud": point_source.name if point_source else None,
         },
         "files_read": sorted(_rel(p, raw_dir) for p in files),
         "footprints": {
@@ -179,6 +210,12 @@ def run_load(
             "partial": len(partial),
         },
         "buildings_3d": {"in_area": len(buildings_3d)},
+        "point_cloud": {
+            "source": point_source.name if point_source else None,
+            "points": len(points) if points is not None else 0,
+            "bounds_world": point_bounds.as_list() if point_bounds else None,
+            "params": lidar_params.as_dict() if lidar_params else None,
+        },
         "skipped_reasons": dict(sorted(reasons.items())),
         "skipped": [{"id": s.id, "reason": s.reason} for s in skipped],
         "partial": [{"id": p.id, "reason": p.reason} for p in partial],
@@ -211,7 +248,29 @@ def run_load(
         raster=raster,
         files=files,
         report=report,
+        points=points,
+        lidar_source=point_source.name if point_source else None,
+        lidar_params=lidar_params,
     )
+
+
+def points_read_bounds(
+    footprints: list[LocalFootprint], config: MapConfig, margin_m: float = POINT_MARGIN_M
+) -> BBox | None:
+    """World bounds to read lidar points for `footprints`: their combined bounds plus a margin.
+
+    None when there are no footprints (then no point files are read).
+    """
+    if not footprints:
+        return None
+    bounds = np.array([f.geometry.bounds for f in footprints])
+    local = BBox(
+        float(bounds[:, 0].min()) - margin_m,
+        float(bounds[:, 1].min()) - margin_m,
+        float(bounds[:, 2].max()) + margin_m,
+        float(bounds[:, 3].max()) + margin_m,
+    )
+    return to_world(local, config)
 
 
 def _area_polygon(area: BuildArea) -> Polygon:
