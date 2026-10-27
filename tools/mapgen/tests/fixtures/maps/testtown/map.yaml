@@ -1,0 +1,62 @@
+# Frozen map config for tests. Do not change it when maps/somero/map.yaml changes:
+# test reference values (origin, projected bbox, TM35 sheets) depend on it.
+# The area is the first Somero bbox; the id is different on purpose, so map-specific
+# code that assumes "somero" fails the tests.
+
+id: testtown
+display_name: "Test Town"
+
+bbox_wgs84:
+  lat_min: 60.62
+  lat_max: 60.64
+  lon_min: 23.50
+  lon_max: 23.54
+
+crs: "EPSG:3067"
+
+# The bbox centre 60.63 N, 23.52 E in EPSG:3067 (309656.76, 6726616.03), rounded.
+origin:
+  x: 309657
+  y: 6726616
+
+tile_size_m: 256
+
+test_area:
+  size_m: 300
+
+style_preset: default
+
+sources:
+  osm:
+    adapter: osm_overpass
+    enabled: true
+    options: {}
+
+  mml_dem_2m:
+    adapter: mml_dem_2m
+    enabled: true
+    options:
+      file_format: TIFF
+
+  mml_orthophoto:
+    adapter: mml_orthophoto
+    enabled: true
+    options:
+      year: 9999
+      file_format: JPEG2000
+      sheet_scale: 10000
+      map_sheet_input: list
+
+  mml_buildings_3d:
+    adapter: mml_buildings_3d
+    enabled: false
+    options:
+      sheet_scale: 10000
+      map_sheet_input: list
+
+  mml_topographic:
+    adapter: mml_topographic
+    enabled: false
+    options:
+      theme: maastotietokanta_kaikki
+      file_format: GPKG

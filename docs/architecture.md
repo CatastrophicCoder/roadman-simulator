@@ -39,7 +39,21 @@ All map-specific input lives here, and the pipeline code contains none.
 - `markers.json`: spawn area (polygon), parking spots, points of interest with fictional names.
 - `overrides/`: per-building fixes and appearance, keyed by OSM or MML building id. Each override records its source and licence.
 
-TODO: the `map.yaml` and `markers.json` schemas (prompt 3).
+`map.yaml` schema (validated by `MapConfig` in `tools/mapgen/src/mapgen/config.py`; unknown keys are errors):
+
+| Key | Meaning |
+| --- | --- |
+| `id` | Lowercase slug, must equal the folder name |
+| `display_name` | Name shown in the game |
+| `bbox_wgs84` | `lat_min`, `lat_max`, `lon_min`, `lon_max` in degrees, min < max |
+| `crs` | Projected map CRS, e.g. `EPSG:3067` |
+| `origin` | `x`, `y` in metres in the map CRS, inside the bbox; print it with `mapgen origin <map-id>` |
+| `tile_size_m` | Tile edge in metres (> 0) |
+| `test_area` | `size_m`: a square centred on the origin, inside the bbox, used by fast tests |
+| `style_preset` | Style preset name (placeholder for now) |
+| `sources` | Named sources, each with `adapter`, `enabled` and adapter-specific `options` |
+
+The playable boundary is the bounding box for now. TODO: a custom boundary polygon, and the `markers.json` schema.
 
 ### Map pipeline: `tools/mapgen/`
 
@@ -62,7 +76,19 @@ Building attribute precedence: manual override, then enhancement data, then OSM 
 
 Collision comes from glTF node name suffixes (`-col`, `-colonly`, `-convcolonly`).
 
-TODO: module layout, adapter interface, CLI design.
+Module layout (`tools/mapgen/src/mapgen/`):
+
+- `cli.py`: `mapgen download <map-id> [--only a,b] [--force]` and `mapgen origin <map-id>`, with `--repo-root` (found automatically by default). `build` and `enhance` will be added as further subcommands.
+- `config.py`: the `map.yaml` model and loader. `paths.py`: repo root, `maps/<map-id>/` and `data/raw/<map-id>/`.
+- `geo.py`: WGS84 to map CRS, projected bbox, world and local coordinates, test area.
+- `tm35.py`: ETRS-TM35FIN map sheet names for a bbox (used by MML adapters).
+- `http.py`: a small urllib client behind a protocol, so tests can stub it.
+- `sources/`: the adapter interface (`base.py`), the registry, and the adapters `osm_overpass`, `mml_dem_2m`, `mml_orthophoto`, `mml_buildings_3d` and `mml_topographic` (ADR 0005).
+- `download.py` and `manifest.py`: run the enabled sources and write `data/raw/<map-id>/download-manifest.json` with the checksum, licence and attribution of each file.
+
+Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, whose options model validates the source's `options`. `download(ctx)` gets the map config, the raw folder, the `--force` flag and an injected HTTP client, and returns one `DownloadedFile` record per file.
+
+TODO: the build stages' module layout and the `build` and `enhance` commands.
 
 ### Map pack: `game/maps/<map-id>/`
 

@@ -22,12 +22,20 @@ A Python pipeline that turns a map's raw OSM and MML data into a Godot map pack 
 
 ## Commands
 
-All are TODO: there is no `pyproject.toml` yet (prompt 3).
+Run from `tools/mapgen/`, or from the repo root with `uv run --project tools/mapgen ...`.
 
 ```sh
-uv sync                              # TODO: install dependencies
-uv run pytest                        # TODO: tests
-uv run ruff check . && uv run ruff format --check .   # TODO: lint and format check
-uv run mapgen build <map-id>         # TODO: build a map pack, e.g. somero
-uv run mapgen enhance <map-id>       # TODO: merge building overrides
+uv sync                                   # install dependencies
+uv run pytest                             # tests
+uv run ruff check . && uv run ruff format --check .   # lint and format check
+uv run mapgen download <map-id>           # download raw data, e.g. somero
+uv run mapgen download <map-id> --only osm,mml_dem_2m --force   # some sources, replace existing files
+uv run mapgen origin <map-id>             # print the bbox centre to use as origin in map.yaml
+uv run mapgen build <map-id>              # TODO: build a map pack
+uv run mapgen enhance <map-id>            # TODO: merge building overrides
 ```
+
+Environment variables:
+
+- `MML_API_KEY`: MML open data API key for the MML sources. Never write it to a file. Without it, the MML sources print manual download steps and register files placed in `data/raw/<map-id>/mml/<layer>/`.
+- `MAPGEN_CONTACT` (optional): contact appended to the User-Agent of every HTTP request (Overpass and MML).
