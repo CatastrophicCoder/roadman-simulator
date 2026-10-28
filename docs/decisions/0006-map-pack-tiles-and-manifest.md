@@ -36,3 +36,12 @@ Spec: `docs/specs/building-heights.md`.
 - `height_source` in `buildings.json` can also be `mml_lidar`, which comes first: `mml_lidar`, `mml_3d`, `osm_height`, `osm_levels`, `default`.
 - Lidar buildings also record `lidar_points`, `lidar_buffer_m`, `lidar_returns`, `roof_z_median` and `roof_z_p90`. A building whose lidar value was rejected records `lidar_rejected` with the reason. These are additions to `buildings.json`, not to the manifest, so the manifest schema stays at version 1.
 - The last consequence above no longer holds for Somero: about 98% of its buildings get a measured lidar height.
+
+## Amendment (2026-10-28): camera presets
+
+Spec: `docs/specs/map-loading.md`.
+
+- A map can have an optional `maps/<map-id>/camera_presets.json`: `schema_version` 1 and `presets`, a non-empty object from preset name (lowercase slug) to `{position, look_at, fov, ground_relative}`. Coordinates are Godot local metres (+X east, +Y up, −Z north, from the map origin). `fov` is the vertical field of view in degrees (1–179, default 70). With `ground_relative` (default false), `position[1]` and `look_at[1]` are heights above the terrain at that point's x/z. Unknown keys, non-finite numbers and wrong types are errors.
+- It is defined by a pydantic model (`tools/mapgen/src/mapgen/build/camera_presets.py`), and the JSON Schema generated from it is committed (`tools/mapgen/src/mapgen/build/schemas/camera-presets-v1.schema.json`), with a test that the two match, as for the manifest.
+- `mapgen build` validates the file before the load stage, so an invalid file fails the build before the pack folder is touched. The validated bytes are copied unchanged into the pack as `camera_presets.json` as part of the atomic replacement. A missing file is allowed: the pack then has no `camera_presets.json`.
+- The manifest doesn't list the file, so the manifest schema stays at version 1. The game finds the file by its fixed name in the pack.

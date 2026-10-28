@@ -54,3 +54,35 @@ godot_import() {
   IMPORT_DETAIL="no errors"
   return 0
 }
+
+# Screenshot of one camera preset with a windowed (not headless) Godot run:
+# --headless disables rendering. Returns 0 (saved), 2 (preset outside the
+# built area, no PNG), 124 (timeout) or 1 (any other failure).
+# screenshot_preset <godot> <map-id> <preset> <out.png> <logfile>
+screenshot_preset() {
+  local godot="$1" map="$2" preset="$3" out="$4" log="$5" rc
+  mkdir -p "$(dirname "$out")"
+  rm -f "$out"
+  run_with_timeout "${GODOT_SCREENSHOT_TIMEOUT:-120}" "$log" \
+    "$godot" --path "$ROOT/game" --resolution "${SCREENSHOT_RESOLUTION:-1600x900}" \
+    -- --map "$map" --screenshot "$preset" "$out"
+  rc=$?
+  case "$rc" in
+    0)
+      [ -s "$out" ] && ! grep -qE '^(SCRIPT )?ERROR' "$log" && return 0
+      return 1
+      ;;
+    2)
+      # N/A only when nothing else went wrong (for example, a tile failed to load).
+      grep -qE '^(SCRIPT )?ERROR' "$log" && return 1
+      return 2
+      ;;
+    124) return 124 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Prints the preset names in a pack's camera_presets.json, one per line.
+camera_preset_names() {
+  python3 -I -c 'import json, sys; print("\n".join(json.load(open(sys.argv[1]))["presets"]))' "$1"
+}

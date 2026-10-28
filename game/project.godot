@@ -33,6 +33,16 @@ project/assembly_name="RoadmanSimulator"
 
 enabled=PackedStringArray("res://addons/gdUnit4/plugin.cfg")
 
+[importer_defaults]
+
+scene={
+"meshes/create_shadow_meshes": true,
+"meshes/force_disable_compression": true,
+"meshes/generate_lods": false,
+"meshes/light_baking": 1,
+"nodes/use_name_suffixes": true
+}
+
 [input]
 
 debug_forward={
@@ -74,6 +84,10 @@ debug_fast={
 [physics]
 
 3d/physics_engine="Jolt Physics"
+
+[roadman]
+
+map/id="somero"
 
 [rendering]
 

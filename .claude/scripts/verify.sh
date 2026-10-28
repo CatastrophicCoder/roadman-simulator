@@ -24,6 +24,7 @@ step() { # step <name> <logname> <command...>
     report PASS "$name" "log: $log"
   else
     report FAIL "$name" "$(tail -3 "$log" | tr '\n' ' ') (log: $log)"
+    return 1
   fi
 }
 
@@ -54,13 +55,14 @@ release_check() {
 
 # C#
 HAVE_DOTNET=0
+BUILD_OK=0
 if ! command -v dotnet >/dev/null 2>&1; then
   for s in "dotnet build" "dotnet test" "dotnet format" "release has no tests"; do
     report N/A "$s" "dotnet not on PATH"
   done
 else
   HAVE_DOTNET=1
-  step "dotnet build" dotnet-build dotnet build "$SLN"
+  step "dotnet build" dotnet-build dotnet build "$SLN" && BUILD_OK=1
   step "dotnet test" dotnet-test dotnet test "$CORE_TESTS"
   step "dotnet format" dotnet-format dotnet format "$SLN" --verify-no-changes
   release_check
@@ -108,8 +110,37 @@ else
   report N/A "gdunit4 tests" "godot not on PATH and \$GODOT not set"
 fi
 
-# TODO (prompt 6): screenshot script. Headless mode can't render, so it needs a windowed run.
-report N/A "screenshots" "no screenshot script yet (prompt 6)"
+# Screenshots: one per camera preset in the pack, to build/screenshots/<preset>.png.
+# Headless mode can't render, so each one is a short windowed run (see game/CLAUDE.md).
+MAP_ID="${MAP_ID:-somero}"
+PACK="$ROOT/game/maps/$MAP_ID"
+SHOTS="$ROOT/build/screenshots"
+if ! GODOT_BIN="$(find_godot)"; then
+  report N/A "screenshots" "godot not on PATH and \$GODOT not set"
+elif [ "$BUILD_OK" -eq 0 ]; then
+  report N/A "screenshots" "dotnet build failed or didn't run; the game would run stale code"
+elif [ ! -f "$PACK/manifest.json" ]; then
+  report N/A "screenshots" "no map pack at game/maps/$MAP_ID (run /regen-map $MAP_ID)"
+elif [ ! -f "$PACK/camera_presets.json" ]; then
+  report N/A "screenshots" "pack has no camera_presets.json (run /regen-map $MAP_ID)"
+elif ! command -v python3 >/dev/null 2>&1; then
+  report N/A "screenshots" "python3 not on PATH (needed to read the preset names)"
+elif ! PRESETS="$(camera_preset_names "$PACK/camera_presets.json" 2>"$LOGS/screenshot-presets.log")"; then
+  report FAIL "screenshots" "can't read camera_presets.json (log: $LOGS/screenshot-presets.log)"
+else
+  [ -n "$PRESETS" ] || report FAIL "screenshots" "camera_presets.json lists no presets"
+  while IFS= read -r preset; do
+    [ -n "$preset" ] || continue
+    log="$LOGS/screenshot-$preset.log"
+    screenshot_preset "$GODOT_BIN" "$MAP_ID" "$preset" "$SHOTS/$preset.png" "$log"
+    case $? in
+      0) report PASS "screenshot $preset" "build/screenshots/$preset.png" ;;
+      2) report N/A "screenshot $preset" "outside built area (log: $log)" ;;
+      124) report FAIL "screenshot $preset" "timed out after ${GODOT_SCREENSHOT_TIMEOUT:-120}s (log: $log)" ;;
+      *) report FAIL "screenshot $preset" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
+    esac
+  done <<<"$PRESETS"
+fi
 
 echo "verify summary (logs: $LOGS)"
 printf '%s\n' "${SUMMARY[@]}"

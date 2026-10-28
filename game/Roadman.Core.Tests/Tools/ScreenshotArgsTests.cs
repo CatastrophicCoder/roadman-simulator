@@ -1,0 +1,126 @@
+using Roadman.Core.Tools;
+
+namespace Roadman.Core.Tests.Tools;
+
+public class ScreenshotArgsTests
+{
+    [Theory]
+    [InlineData]
+    [InlineData("--some-runner-flag", "value")]
+    [InlineData("--presets", "p.json")]
+    public void Parse_WithoutScreenshotFlag_ReturnsNullAndIgnoresOtherArgs(params string[] args)
+    {
+        Assert.Null(ScreenshotArgs.Parse(args));
+    }
+
+    [Fact]
+    public void Parse_PresetAndOutput()
+    {
+        var args = ScreenshotArgs.Parse(["--screenshot", "overview", "build/screenshots/overview.png"]);
+
+        Assert.Equal(new ScreenshotArgs("overview", "build/screenshots/overview.png", null), args);
+    }
+
+    [Fact]
+    public void Parse_PresetsOverride_InEitherOrder()
+    {
+        var after = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--presets", "/tmp/p.json"]);
+        var before = ScreenshotArgs.Parse(["--presets", "/tmp/p.json", "--screenshot", "a", "a.png"]);
+
+        Assert.Equal(new ScreenshotArgs("a", "a.png", "/tmp/p.json"), after);
+        Assert.Equal(after, before);
+    }
+
+    [Fact]
+    public void Parse_MapId_InAnyPosition()
+    {
+        var after = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--map", "other-town"]);
+        var before = ScreenshotArgs.Parse(["--map", "other-town", "--screenshot", "a", "a.png"]);
+        var withPresets = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--map", "x_1", "--presets", "p.json"]);
+
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, "other-town"), after);
+        Assert.Equal(after, before);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", "p.json", "x_1"), withPresets);
+    }
+
+    [Fact]
+    public void Parse_WithoutMap_LeavesMapIdNull()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--screenshot", "a", "a.png"])!.MapId);
+    }
+
+    [Fact]
+    public void Parse_WithoutScreenshotFlag_IgnoresMap()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--map", "Not A Slug"]));
+    }
+
+    [Theory]
+    [InlineData("Somero")]
+    [InlineData("../somero")]
+    [InlineData("somero-")]
+    [InlineData("some--ro")]
+    [InlineData("some ro")]
+    public void Parse_MapIdNotASlug_Throws(string mapId)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--map", mapId]));
+        Assert.Contains(mapId, ex.Message);
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--map")]
+    [InlineData("--screenshot", "a", "a.png", "--map", "")]
+    [InlineData("--screenshot", "a", "a.png", "--map", "--presets", "p.json")]
+    [InlineData("--screenshot", "a", "a.png", "--map", "x", "--map", "y")]
+    public void Parse_MapMissingOrRepeated_Throws(params string[] args)
+    {
+        Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+    }
+
+    [Theory]
+    [InlineData(3, 3, null)]
+    [InlineData(2, 3, ScreenshotExitCode.Error)]
+    [InlineData(0, 3, ScreenshotExitCode.Error)]
+    [InlineData(0, 0, ScreenshotExitCode.Error)]
+    [InlineData(0, null, ScreenshotExitCode.Error)]
+    public void AfterMapLoad_OnlyACompleteLoadGoesOn(int loaded, int? manifestTiles, int? expected)
+    {
+        Assert.Equal(expected, ScreenshotExitCode.AfterMapLoad(loaded, manifestTiles));
+    }
+
+    [Theory]
+    [InlineData(2, 3)]
+    [InlineData(0, null)]
+    public void AfterMapLoad_IncompleteLoad_NeverGivesOutsideBuiltArea(int loaded, int? manifestTiles)
+    {
+        Assert.NotEqual(ScreenshotExitCode.OutsideBuiltArea, ScreenshotExitCode.AfterMapLoad(loaded, manifestTiles));
+    }
+
+    [Theory]
+    [InlineData("--screenshot")]
+    [InlineData("--screenshot", "overview")]
+    [InlineData("--screenshot", "overview", "--presets", "p.json")]
+    [InlineData("--screenshot", "--presets", "out.png")]
+    [InlineData("--screenshot", "overview", "")]
+    public void Parse_MissingValues_Throw(params string[] args)
+    {
+        Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "overview", "out.png", "extra")]
+    [InlineData("--screenshot", "a", "a.png", "--screenshot", "b", "b.png")]
+    [InlineData("--screenshot", "a", "a.png", "--presets", "p.json", "--presets", "q.json")]
+    [InlineData("--screenshot", "a", "a.png", "--verbose")]
+    public void Parse_ExtraOrRepeatedArguments_Throw(params string[] args)
+    {
+        Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+    }
+
+    [Fact]
+    public void Parse_OutputNotPng_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.jpg"]));
+        Assert.Contains(".png", ex.Message);
+    }
+}

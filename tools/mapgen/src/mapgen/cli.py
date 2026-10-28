@@ -95,6 +95,7 @@ def cmd_build(args: argparse.Namespace, repo_root: Path) -> int:
             raw_dir=paths.raw_dir(repo_root, args.map_id),
             out_dir=out,
             work_dir=work,
+            map_dir=paths.map_dir(repo_root, args.map_id),
         )
     except (BuildError, ExportError) as exc:
         print(f"error: {_scrub(str(exc))}", file=sys.stderr)

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "camera-presets-v1.schema.json",
+  "$defs": {
+    "CameraPreset": {
+      "additionalProperties": false,
+      "properties": {
+        "position": {
+          "description": "camera position [x, y, z] in local metres",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Position",
+          "type": "array"
+        },
+        "look_at": {
+          "description": "point the camera looks at [x, y, z] in local metres",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Look At",
+          "type": "array"
+        },
+        "fov": {
+          "default": 70.0,
+          "description": "vertical field of view, degrees",
+          "maximum": 179,
+          "minimum": 1,
+          "title": "Fov",
+          "type": "number"
+        },
+        "ground_relative": {
+          "default": false,
+          "description": "y values are heights above the terrain at their x/z",
+          "title": "Ground Relative",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "position",
+        "look_at"
+      ],
+      "title": "CameraPreset",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "presets": {
+      "additionalProperties": false,
+      "description": "preset name (lowercase slug) -> preset",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z0-9]+(?:[-_][a-z0-9]+)*$": {
+          "$ref": "#/$defs/CameraPreset"
+        }
+      },
+      "title": "Presets",
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "presets"
+  ],
+  "title": "CameraPresets",
+  "type": "object"
+}

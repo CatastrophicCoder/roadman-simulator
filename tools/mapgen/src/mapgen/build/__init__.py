@@ -3,7 +3,8 @@
 Stage output goes to the work folder (`tools/mapgen/build/<map-id>/<area>/`), the pack
 to `game/maps/<map-id>/` (or `--out`). Both areas write the same pack folder; the
 manifest's `area` says which one it holds. The pack is written to a temporary sibling
-folder and swapped in only when complete and valid (`pack_io`).
+folder and swapped in only when complete and valid (`pack_io`). An optional
+`maps/<map-id>/camera_presets.json` is validated first and copied unchanged into the pack.
 """
 
 import shutil
@@ -18,6 +19,11 @@ from typing import Any
 from mapgen import __version__
 from mapgen.build.area import AreaName, build_area
 from mapgen.build.buildings import BuildingsResult, match_measured_heights, resolve_buildings
+from mapgen.build.camera_presets import (
+    PRESETS_NAME,
+    CameraPresetsError,
+    read_camera_presets,
+)
 from mapgen.build.export_glb import AXES, TERRAIN_NODE, MeshNode, export_glb
 from mapgen.build.pack_io import PackFolderError, check_pack_target, staging_dir, swap_in
 from mapgen.build.pack_manifest import (
@@ -81,15 +87,25 @@ def run_build(
     out_dir: Path,
     work_dir: Path,
     *,
+    map_dir: Path | None = None,
     terrain_builder: TerrainBuilder | None = None,
     now: Callable[[], datetime] = utc_now,
     log: Callable[[str], None] = print,
 ) -> BuildReport:
-    """Build the map pack for `config` from the raw files in `raw_dir`."""
+    """Build the map pack for `config` from the raw files in `raw_dir`.
+
+    `map_dir` is the map's config folder (`maps/<map-id>/`). Its optional
+    `camera_presets.json` is validated before the slow stages and copied unchanged into
+    the pack. Without `map_dir`, the pack has no camera presets.
+    """
     builder = terrain_builder or MeshTerrainBuilder()
     try:
         check_pack_target(out_dir)  # fail before the slow stages, and again before the swap
     except PackFolderError as exc:
+        raise BuildError(str(exc)) from exc
+    try:
+        presets_bytes = read_camera_presets(map_dir / PRESETS_NAME) if map_dir else None
+    except CameraPresetsError as exc:
         raise BuildError(str(exc)) from exc
     area = build_area(config, area_name)
     tiles = area.tiles()
@@ -195,6 +211,8 @@ def run_build(
                     "buildings": [b.provenance() for b in buildings.buildings],
                 },
             )
+            if presets_bytes is not None:
+                (staging / PRESETS_NAME).write_bytes(presets_bytes)  # unchanged
             validate_manifest_file(write_json(staging / MANIFEST_NAME, document))
             swap_in(staging, out_dir)
         except (ManifestError, PackFolderError) as exc:

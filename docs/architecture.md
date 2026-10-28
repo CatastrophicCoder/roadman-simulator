@@ -38,6 +38,7 @@ All map-specific input lives here, and the pipeline code contains none.
 - `map.yaml`: name, bounding box, origin, CRS, tile size, data sources, style preset, playable boundary (the bounding box by default, or a custom polygon).
 - `markers.json`: spawn area (polygon), parking spots, points of interest with fictional names.
 - `overrides/`: per-building fixes and appearance, keyed by OSM or MML building id. Each override records its source and licence.
+- `camera_presets.json` (optional): named camera positions for screenshots, copied unchanged into the pack (see the map pack section below).
 
 `map.yaml` schema (validated by `MapConfig` in `tools/mapgen/src/mapgen/config.py`; unknown keys are errors):
 
@@ -104,6 +105,7 @@ Build stages (`build/`; ADR 0006):
 - `build/buildings.py`: height resolution, base height, flat-roof extrusion (holes supported) and collision boxes: one minimum rotated rectangle per footprint part. Courtyards and concave corners are filled in the collision box.
 - `build/export_glb.py`: one `.glb` per tile with trimesh, checking the node names after export.
 - `build/pack_manifest.py` and `build/schemas/manifest-v1.schema.json`: the manifest model, the committed JSON Schema, and the credits.
+- `build/camera_presets.py` and `build/schemas/camera-presets-v1.schema.json`: the optional camera presets model and its committed JSON Schema. `run_build` validates `maps/<map-id>/camera_presets.json` before the load stage and copies it into the pack.
 - `build/pack_io.py`: replacing the pack folder safely. The pack is written to a temporary sibling folder, validated, then swapped in, so a failed build leaves the previous pack untouched. A non-empty target without a `manifest.json` is never replaced.
 
 Intermediate output goes to `tools/mapgen/build/<map-id>/<area>/` (git-ignored). The GeoJSON files are in map CRS world coordinates with a legacy `crs` member, so QGIS places them correctly:
@@ -133,6 +135,16 @@ Contents so far:
 - `manifest.json` (schema version 1).
 - `tiles/tile_x{i}_y{j}.glb`: one file per tile. Tile (i, j) covers local [i·T, (i+1)·T) × [j·T, (j+1)·T), clipped to the area, where T is `tile_size_m`. Each file holds the terrain and the buildings whose footprint centroid is in the tile. Buildings are never split.
 - `buildings.json`: `schema_version`, `map_id` and `buildings`, one provenance entry per building: `id` (e.g. `osm:way/123`), `tile`, `node`, `collision_nodes` (a list, one per footprint part), `height_m`, `height_source` (`mml_lidar`, `mml_3d`, `osm_height`, `osm_levels` or `default`), `base_z`, `base_source` (`dem`), `roof_shape` (`flat`) and `roof_shape_source` (`default`). Lidar buildings add `lidar_points`, `lidar_buffer_m`, `lidar_returns` (`all` or `single`), `roof_z_median` and `roof_z_p90` (absolute elevations; p90 is kept for pitched roofs later). A building whose lidar value was rejected adds `lidar_rejected` with the reason.
+- `camera_presets.json` (optional, ADR 0006 amendment): a byte-for-byte copy of `maps/<map-id>/camera_presets.json`, validated by the build and absent when the map has none. Not listed in the manifest. Fields: `schema_version` (`1`) and `presets`, a non-empty object from preset name (lowercase slug, e.g. `centre-street-level`) to:
+
+  | Field | Meaning |
+  | --- | --- |
+  | `position` | Camera position `[x, y, z]` in Godot local metres |
+  | `look_at` | Point the camera looks at, `[x, y, z]`; must differ from `position` |
+  | `fov` | Vertical field of view in degrees, 1–179, default 70 |
+  | `ground_relative` | Default false. When true, `position[1]` and `look_at[1]` are heights above the terrain at that point's x/z |
+
+  Unknown keys are errors. JSON Schema: `tools/mapgen/src/mapgen/build/schemas/camera-presets-v1.schema.json`.
 
 Axes: glTF is Y-up. Local east is +X, up is +Y, and north is −Z. Units are metres from the map origin.
 
@@ -160,7 +172,9 @@ TODO: the JSON formats of the road graph, markers, vegetation and boundary. TODO
 
 A node in the `World` scene. It reads the map id from settings or a menu, checks the manifest's schema version, and instances tiles. It loads all tiles at first and adds streaming near the camera later. It also places barrier scenes from `boundary.json`.
 
-TODO: the streaming design, and the import presets for `.glb` files.
+Tile `.glb` files import with the project-wide `[importer_defaults]` (ADR 0008). The screenshot tool renders the pack's camera presets for visual checks (ADR 0008, `game/CLAUDE.md`).
+
+TODO: the streaming design.
 
 ### Roadman.Core (engine-free C#)
 
@@ -196,5 +210,5 @@ TODO: traffic AI, pedestrian AI, police, missions, player character. Each of the
 - Pipeline: pytest, using a fixed small test area. `tools/mapgen/tests/fixtures/raw/somero-test-area/` holds the Somero test area's raw data (OSM without contributor metadata, DEM and lidar cuts, download manifest, attribution in `NOTICE.md`), laid out like `data/raw/<map-id>/`, so tests and CI can build the test-area pack offline. `tools/mapgen/scripts/cut_test_area.py` recreates it.
 - Core: xUnit on `Roadman.Core`.
 - Engine: gdUnit4Net, run headless.
-- Visual: headless screenshots from fixed camera positions.
+- Visual: screenshots from the camera presets in the map pack, taken with a short windowed run (ADR 0008).
 - CI: builds Somero plus a tiny second test area from another town. TODO: set up CI (prompt 7).

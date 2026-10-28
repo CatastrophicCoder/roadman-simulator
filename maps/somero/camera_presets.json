@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "presets": {
+    "overview": {
+      "position": [0, 500, 500],
+      "look_at": [0, 0, 0],
+      "fov": 70,
+      "ground_relative": true
+    },
+    "centre-street-level": {
+      "position": [19.4, 1.7, 63.6],
+      "look_at": [-6.4, 1.7, -6.1],
+      "fov": 70,
+      "ground_relative": true
+    }
+  }
+}
