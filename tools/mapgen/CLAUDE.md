@@ -31,12 +31,17 @@ uv run ruff check . && uv run ruff format --check .   # lint and format check
 uv run mapgen download <map-id>           # download raw data, e.g. somero
 uv run mapgen download <map-id> --only osm,mml_dem_2m --force   # some sources, replace existing files
 uv run mapgen download <map-id> --only mml_lidar   # lidar; a map with mml_lidar enabled doesn't build without it
+uv run mapgen download <map-id> --release --strict   # release: skip debug_only sources; fail if a source
+                                          #   gets no files or MML_API_KEY is missing
 uv run mapgen origin <map-id>             # print the bbox centre to use as origin in map.yaml
-uv run mapgen build <map-id>              # TODO: build a map pack
+uv run mapgen build <map-id>              # build the map pack (--area test: the small test area)
+uv run mapgen build <map-id> --release    # skip debug_only sources: no debug/orthophoto/ in the pack
+uv run mapgen notice <map-id>... --out build/NOTICE.txt   # plain-text NOTICE from the packs' manifest credits
+uv run mapgen notice --check build/NOTICE.txt <map-id>... # exit 1 if any credit or licence line is missing
 uv run mapgen enhance <map-id>            # TODO: merge building overrides
 ```
 
 Environment variables:
 
-- `MML_API_KEY`: MML open data API key for the MML sources. Never write it to a file. Without it, the MML sources print manual download steps and register files placed in `data/raw/<map-id>/mml/<layer>/`.
+- `MML_API_KEY`: MML open data API key for the MML sources. Never write it to a file. Without it, the MML sources print manual download steps and register files placed in `data/raw/<map-id>/mml/<layer>/`; with `--strict` they fail instead.
 - `MAPGEN_CONTACT` (optional): contact appended to the User-Agent of every HTTP request (Overpass and MML).

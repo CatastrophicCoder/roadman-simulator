@@ -338,6 +338,9 @@ class SourceAdapter(ABC):
     licence: ClassVar[str]
     Options: ClassVar[type[AdapterOptions]] = AdapterOptions
     provides: ClassVar[frozenset[str]] = frozenset()
+    # Environment variables needed to download automatically (e.g. an API key). Without
+    # them an adapter may fall back to manual steps; `download --strict` fails instead.
+    required_env: ClassVar[tuple[str, ...]] = ()
 
     @abstractmethod
     def attribution(self, retrieved_at: datetime) -> str:

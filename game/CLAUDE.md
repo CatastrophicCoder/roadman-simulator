@@ -70,4 +70,13 @@ Building with `-c ExportRelease` or `ExportDebug` re-restores the shared `obj/` 
 
 **macOS.** Godot has no off-screen display driver on macOS. The run opens a normal window (Metal) for about 3 s, and needs a logged-in GUI session. `--position` can't hide it: macOS moves the window back on screen (tried `-5000,-5000` and `20000,20000`). The saved image was byte-identical for every window position and for a 200x100 window. Don't minimise the window while it runs.
 
-**CI (Linux, not set up yet).** Run under a virtual X server, with Mesa's lavapipe software Vulkan driver so Forward+ renders without a GPU: `xvfb-run -a godot --path game --resolution 1600x900 -- --screenshot ...` with `xvfb` and `mesa-vulkan-drivers` installed on the runner. If Vulkan isn't available, add `--rendering-driver opengl3` (Compatibility renderer); its images look different from Forward+, so don't compare them with macOS ones. These are runner packages, not project dependencies. Untested so far.
+**CI (Linux).** CI doesn't run screenshots (ADR 0010). The route to try is to run under a virtual X server, with Mesa's lavapipe software Vulkan driver so Forward+ renders without a GPU: `xvfb-run -a godot --path game --resolution 1600x900 -- --screenshot ...` with `xvfb` and `mesa-vulkan-drivers` installed on the runner. If Vulkan isn't available, add `--rendering-driver opengl3` (Compatibility renderer); its images look different from Forward+, so don't compare them with macOS ones. These are runner packages, not project dependencies. Untested so far.
+
+## Export
+
+`game/export_presets.cfg` has two presets with no credentials: "Windows Desktop" (x86_64, PCK embedded) and "macOS" (universal, ad-hoc signed). Both exclude `addons/gdUnit4/*`, `tests/*` and `gdunit4_testadapter_v*/*` (ADR 0010). Export needs the .NET export templates; `.claude/scripts/check-export.sh <build-dir>` checks a build folder that also holds `NOTICE.txt` (`mapgen notice`) and `CREDITS.md`.
+
+```sh
+godot --headless --path game --export-release "Windows Desktop" "$PWD/build/export/windows/RoadmanSimulator.exe"
+godot --headless --path game --export-release "macOS" "$PWD/build/export/RoadmanSimulator-macos.zip"
+```

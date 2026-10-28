@@ -1,0 +1,94 @@
+# Tests and checks on every push and pull request. Uses no secrets.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Map pipeline
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: tools/mapgen/uv.lock
+      - name: uv sync
+        run: uv sync --project tools/mapgen --locked
+      - name: pytest
+        run: uv run --project tools/mapgen pytest tools/mapgen
+      - name: ruff check
+        run: uv run --project tools/mapgen ruff check tools/mapgen
+      - name: ruff format --check
+        run: uv run --project tools/mapgen ruff format --check tools/mapgen
+
+      # C#
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'game/**/*.csproj', 'game/Directory.Build.targets') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - name: dotnet build
+        run: dotnet build game/RoadmanSimulator.sln
+      - name: dotnet test (Roadman.Core)
+        run: dotnet test game/Roadman.Core.Tests
+      - name: dotnet format
+        run: dotnet format game/RoadmanSimulator.sln --verify-no-changes
+      - name: release assembly has no test code
+        run: |
+          out="$RUNNER_TEMP/export-release"
+          dotnet build game/RoadmanSimulator.csproj -c ExportRelease -o "$out"
+          if find "$out" -iname 'gdUnit4*' -o -iname 'xunit*' -o -iname 'Microsoft.TestPlatform*' \
+              -o -iname 'Microsoft.VisualStudio.TestPlatform*' -o -iname 'testhost*' -o -iname 'Moq*' | grep .; then
+            exit 1
+          fi
+          dotnet run .claude/scripts/check-release-assembly.cs -- "$out/RoadmanSimulator.dll"
+
+      # Godot
+      - name: Godot version
+        id: godot
+        run: echo "version=$(sed -n 's|.*Sdk="Godot\.NET\.Sdk/\([0-9.]*\)".*|\1|p' game/RoadmanSimulator.csproj)" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/godot/*/*.zip
+          key: godot-editor-${{ steps.godot.outputs.version }}-${{ hashFiles('.github/scripts/install-godot.sh') }}
+      - name: Install Godot
+        run: .github/scripts/install-godot.sh
+      - name: Build the test-area map pack from the fixture
+        run: |
+          mkdir -p tools/mapgen/data/raw
+          cp -R tools/mapgen/tests/fixtures/raw/somero-test-area tools/mapgen/data/raw/somero
+          uv run --project tools/mapgen mapgen build somero --area test
+      - name: Godot headless import
+        run: |
+          ROOT="$PWD"
+          . .claude/scripts/lib.sh
+          log="$RUNNER_TEMP/godot-import.log"
+          if godot_import "$(find_godot)" "$log"; then
+            echo "import: $IMPORT_DETAIL"
+          else
+            cat "$log"
+            echo "::error::Godot import failed: $IMPORT_DETAIL"
+            exit 1
+          fi
+      - name: gdUnit4 tests
+        run: GODOT_BIN="$GODOT" dotnet test game/RoadmanSimulator.csproj --settings game/.runsettings

@@ -7,6 +7,8 @@ folder and swapped in only when complete and valid (`pack_io`). An optional
 `maps/<map-id>/camera_presets.json` is validated first and copied unchanged into the pack.
 With an imagery source and its files, the pack also gets `debug/orthophoto/<tile>.jpg`
 per tile (plus `debug/.gdignore`); the terrain's UVs map each tile onto its texture.
+A release build (`release=True`) skips the sources marked `debug_only` in map.yaml, so
+the pack neither reads nor credits their files (no `debug/orthophoto/` for Somero).
 """
 
 import shutil
@@ -105,13 +107,19 @@ def run_build(
     terrain_builder: TerrainBuilder | None = None,
     now: Callable[[], datetime] = utc_now,
     log: Callable[[str], None] = print,
+    release: bool = False,
 ) -> BuildReport:
     """Build the map pack for `config` from the raw files in `raw_dir`.
 
     `map_dir` is the map's config folder (`maps/<map-id>/`). Its optional
     `camera_presets.json` is validated before the slow stages and copied unchanged into
-    the pack. Without `map_dir`, the pack has no camera presets.
+    the pack. Without `map_dir`, the pack has no camera presets. With `release`, the
+    `debug_only` sources are treated as disabled, even when their raw files exist.
     """
+    if release:
+        for name in config.debug_only_sources():
+            log(f"[{name}] skipped (debug only)")
+        config = config.for_release()
     builder = terrain_builder or MeshTerrainBuilder()
     try:
         check_pack_target(out_dir)  # fail before the slow stages, and again before the swap

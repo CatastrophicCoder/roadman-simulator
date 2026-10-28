@@ -37,6 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--only", type=_split_csv, default=None, help="comma-separated source names from map.yaml"
     )
     download.add_argument("--force", action="store_true", help="download again over existing files")
+    download.add_argument(
+        "--release",
+        action="store_true",
+        help="skip sources marked debug_only in map.yaml (naming one in --only is an error)",
+    )
+    download.add_argument(
+        "--strict",
+        action="store_true",
+        help="fail when a selected source returns no files or lacks its API key",
+    )
     download.set_defaults(handler=cmd_download)
 
     origin = commands.add_parser(
@@ -59,7 +69,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="pack folder (default: game/maps/<map-id>/; meant for tests)",
     )
+    build.add_argument(
+        "--release",
+        action="store_true",
+        help="skip sources marked debug_only in map.yaml (no debug/ folder in the pack)",
+    )
     build.set_defaults(handler=cmd_build)
+
+    notice = commands.add_parser(
+        "notice", help="write or check a NOTICE file with the credits of built map packs"
+    )
+    notice.add_argument("map_ids", nargs="+", metavar="<map-id>")
+    mode = notice.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--out", type=Path, help="write the NOTICE to this file")
+    mode.add_argument(
+        "--check",
+        type=Path,
+        metavar="FILE",
+        help="exit non-zero if FILE lacks any credit or licence line of the packs",
+    )
+    notice.set_defaults(handler=cmd_notice)
 
     # Later: `enhance <map-id>` is added here as a further subcommand.
     return parser
@@ -71,12 +100,20 @@ def cmd_download(args: argparse.Namespace, repo_root: Path) -> int:
     config = load_map_config(paths.map_config_path(repo_root, args.map_id))
     raw = paths.raw_dir(repo_root, args.map_id)
     report = run_download(
-        config, repo_root=repo_root, raw_dir=raw, only=args.only, force=args.force
+        config,
+        repo_root=repo_root,
+        raw_dir=raw,
+        only=args.only,
+        force=args.force,
+        release=args.release,
+        strict=args.strict,
     )
     if report.manifest_path:
         print(f"manifest: {report.manifest_path}")
     if not report.ok:
         print(f"failed sources: {', '.join(report.failed)}", file=sys.stderr)
+        for name, reason in report.failed.items():
+            print(f"  {name}: {_scrub(reason)}", file=sys.stderr)
         return EXIT_FAILED
     return EXIT_OK
 
@@ -96,17 +133,46 @@ def cmd_build(args: argparse.Namespace, repo_root: Path) -> int:
             out_dir=out,
             work_dir=work,
             map_dir=paths.map_dir(repo_root, args.map_id),
+            release=args.release,
         )
     except (BuildError, ExportError) as exc:
         print(f"error: {_scrub(str(exc))}", file=sys.stderr)
         return EXIT_FAILED
     sources = ", ".join(f"{k} {v}" for k, v in report.height_source_counts.items())
-    print(f"pack: {report.pack_dir} ({report.area} area)")
+    kind = "release" if args.release else "dev"
+    print(f"pack: {report.pack_dir} ({report.area} area, {kind} build)")
     print(f"tiles: {report.tile_count}, buildings: {report.building_count} ({sources})")
     if report.skipped:
         print(f"skipped features: {len(report.skipped)} (see {work / '01-load' / 'report.json'})")
     print(f"stage output: {work}")
     print(f"total: {sum(report.timings_s.values()):.2f} s")
+    return EXIT_OK
+
+
+def cmd_notice(args: argparse.Namespace, repo_root: Path) -> int:
+    from mapgen.notice import NoticeError, missing_lines, read_all, render_notice
+
+    try:
+        packs = read_all(repo_root, args.map_ids)
+        if args.check is not None:
+            if not args.check.is_file():
+                print(f"error: {args.check} not found", file=sys.stderr)
+                return EXIT_FAILED
+            missing = missing_lines(args.check.read_text(encoding="utf-8"), packs)
+            if missing:
+                print(f"error: {args.check} is missing {len(missing)} line(s):", file=sys.stderr)
+                for line in missing:
+                    print(f"  {line}", file=sys.stderr)
+                return EXIT_FAILED
+            print(f"{args.check}: all credit lines present ({', '.join(args.map_ids)})")
+            return EXIT_OK
+        text = render_notice(packs)
+    except NoticeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(text, encoding="utf-8")
+    print(f"notice: {args.out} ({len(packs)} map(s))")
     return EXIT_OK
 
 
@@ -138,13 +204,14 @@ def _scrub(text: str) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    map_id = getattr(args, "map_id", None)
-    if map_id is not None and not re.fullmatch(SLUG_PATTERN, map_id):
-        print(
-            f"error: invalid map id {map_id!r}: use lowercase letters, digits, '-' and '_'",
-            file=sys.stderr,
-        )
-        return EXIT_USAGE
+    map_ids = getattr(args, "map_ids", None) or [getattr(args, "map_id", None)]
+    for map_id in map_ids:
+        if map_id is not None and not re.fullmatch(SLUG_PATTERN, map_id):
+            print(
+                f"error: invalid map id {map_id!r}: use lowercase letters, digits, '-' and '_'",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
     try:
         repo_root = (args.repo_root or paths.find_repo_root()).resolve()
         return int(args.handler(args, repo_root))

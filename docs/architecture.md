@@ -53,7 +53,8 @@ All map-specific input lives here, and the pipeline code contains none.
 | `tile_size_m` | Tile edge in metres (> 0) |
 | `test_area` | `size_m`: a square centred on the origin, inside the bbox, used by fast tests |
 | `style_preset` | Style preset name (placeholder for now) |
-| `sources` | Named sources, each with `adapter`, `enabled` and adapter-specific `options` |
+| `sources` | Named sources, each with `adapter`, `enabled`, `debug_only` and adapter-specific `options` |
+| `sources.<name>.debug_only` | Optional, default `false`. The source feeds debug aids only (Somero: `mml_orthophoto`, ADR 0009). `download --release` and `build --release` skip it, so a release pack neither reads nor credits its files |
 
 The playable boundary is the bounding box for now. TODO: a custom boundary polygon, and the `markers.json` schema.
 
@@ -80,7 +81,12 @@ Collision comes from glTF node name suffixes (`-col`, `-colonly`, `-convcolonly`
 
 Module layout (`tools/mapgen/src/mapgen/`):
 
-- `cli.py`: `mapgen download <map-id> [--only a,b] [--force]`, `mapgen origin <map-id>` and `mapgen build <map-id> [--area full|test] [--out DIR]`, with `--repo-root` (found automatically by default). `enhance` will be added as a further subcommand.
+- `cli.py`: `mapgen download <map-id> [--only a,b] [--force] [--release] [--strict]`, `mapgen origin <map-id>`, `mapgen build <map-id> [--area full|test] [--out DIR] [--release]` and `mapgen notice <map-id>... (--out FILE | --check FILE)`, with `--repo-root` (found automatically by default). `enhance` will be added as a further subcommand.
+  - `download --release` skips `debug_only` sources (logs `[<name>] skipped (debug only)`); naming one in `--only` together with `--release` is a usage error (exit 2).
+  - `download --strict` fails (exit 1) when a selected source returned no files, or when its adapter's required environment variables are unset (the MML adapters need `MML_API_KEY`; with `--strict` they neither print manual steps nor register files already on disk). Each failed source is reported with its reason; the key is never printed. Without `--strict` nothing changes.
+  - `build --release` treats `debug_only` sources as disabled, even when their raw files exist.
+  - `notice` reads each built pack's `manifest.json` credits and writes a plain-text NOTICE: a heading, a sentence that the data was modified (processed into 3D map tiles), per map each credit's attribution exactly as in the manifest followed by `Licence: <name>, <url>`, and the licence URLs once each. A missing pack or manifest, an invalid manifest or a licence without a known URL fails (exit 1). `--check FILE` exits 1 and lists every attribution or licence line missing from FILE (whole lines, surrounding spaces ignored).
+- `notice.py`: the NOTICE text, its expected lines and the licence name to URL table.
 - `config.py`: the `map.yaml` model and loader. `paths.py`: repo root, `maps/<map-id>/`, `data/raw/<map-id>/`, the build work folder and the pack folder.
 - `geo.py`: WGS84 to map CRS, projected bbox, world and local coordinates, test area, geometry reprojection and offsets.
 - `tm35.py`: ETRS-TM35FIN map sheet names for a bbox (used by MML adapters).
@@ -98,7 +104,7 @@ Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, w
 
 Build stages (`build/`; ADR 0006):
 
-- `build/__init__.py`: `run_build(config, area, raw_dir, out_dir, work_dir)` runs the stages in order and writes the pack.
+- `build/__init__.py`: `run_build(config, area, raw_dir, out_dir, work_dir, *, release=False)` runs the stages in order and writes the pack. With `release`, `debug_only` sources are disabled first.
 - `build/area.py`: `BuildArea` (the full bbox or the test area in local coordinates, rounded outward to whole metres) and the tile grid.
 - `build/stage1_load.py`: loads the sources by capability, reprojects footprints to the map CRS, subtracts the origin, and keeps footprints whose centroid is in the area. The point cloud is read only around those footprints and moved to local coordinates.
 - `build/heightfield.py`: `Heightfield`, the single terrain sampler for terrain, buildings and later road draping. `sample(x, y)` is bilinear. `min_under(footprint)` is the lowest node of every DEM cell the footprint touches, so a building base is never above the terrain mesh. Nodata is filled from neighbouring cells.

@@ -48,6 +48,7 @@ sources:
   mml_orthophoto:
     adapter: mml_orthophoto
     enabled: true
+    debug_only: true        # debug view only (ADR 0009); skipped by download/build --release
     options:
       year: 9999            # MML: 9999 = latest year, 0 = all years
       file_format: JPEG2000

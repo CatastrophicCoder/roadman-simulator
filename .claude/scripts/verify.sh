@@ -110,6 +110,37 @@ else
   report N/A "gdunit4 tests" "godot not on PATH and \$GODOT not set"
 fi
 
+# Exported build: a Windows export (the faster one) checked by check-export.sh, the
+# same check release.yml runs on both platforms.
+GODOT_VERSION="$(sed -n 's|.*Sdk="Godot\.NET\.Sdk/\([0-9.]*\)".*|\1|p' "$ROOT/$GAME_CSPROJ")"
+TEMPLATES=""
+for d in "$HOME/Library/Application Support/Godot" "${XDG_DATA_HOME:-$HOME/.local/share}/godot" "${APPDATA:-}/Godot"; do
+  [ -d "$d/export_templates/$GODOT_VERSION.stable.mono" ] && TEMPLATES="$d/export_templates/$GODOT_VERSION.stable.mono"
+done
+if ! GODOT_BIN="$(find_godot)"; then
+  report N/A "exported build" "godot not on PATH and \$GODOT not set"
+elif [ -z "$TEMPLATES" ]; then
+  report N/A "exported build" "no export templates for $GODOT_VERSION.stable.mono installed"
+elif ! ls "$ROOT"/game/maps/*/manifest.json >/dev/null 2>&1; then
+  report N/A "exported build" "no map pack in game/maps/ (run /regen-map <map-id>)"
+else
+  log="$LOGS/export-check.log" out="$LOGS/export-windows"
+  maps=()
+  for m in "$ROOT"/game/maps/*/manifest.json; do maps+=("$(basename "$(dirname "$m")")"); done
+  rm -rf "$out" && mkdir -p "$out"
+  if {
+    run_with_timeout "${GODOT_EXPORT_TIMEOUT:-900}" "$LOGS/export-windows.log" \
+      "$GODOT_BIN" --headless --path "$ROOT/game" --export-release "Windows Desktop" "$out/RoadmanSimulator.exe" &&
+      cp "$ROOT/CREDITS.md" "$out/" &&
+      (cd "$ROOT" && uv run --project "$MAPGEN" mapgen notice "${maps[@]}" --out "$out/NOTICE.txt") &&
+      "$ROOT/.claude/scripts/check-export.sh" "$out"
+  } >"$log" 2>&1; then
+    report PASS "exported build" "Windows export checked (log: $log)"
+  else
+    report FAIL "exported build" "$(grep -m1 FAIL "$log" || tail -1 "$log") (log: $log, export log: $LOGS/export-windows.log)"
+  fi
+fi
+
 # Screenshots: one per camera preset in the pack, to build/screenshots/<preset>.png.
 # Headless mode can't render, so each one is a short windowed run (see game/CLAUDE.md).
 MAP_ID="${MAP_ID:-somero}"

@@ -1,0 +1,30 @@
+# 0010: CI and release builds
+
+Status: Accepted
+
+## Context
+
+The project outline ("Testing, CI and builds") asks for tests on every push and for release builds on tags, exported from Linux runners. The repository is public, and the release download needs the personal MML API key (ADR 0005), so the key must stay out of pull-request runs, logs and release files. Map packs are git-ignored, so CI has to build one before the Godot tests. OSM and MML data that ships needs attribution.
+
+## Decision
+
+- **Workflows.** `.github/workflows/ci.yml` runs on every push and pull request on `ubuntu-24.04`: uv sync, pytest, ruff, `dotnet build`, `dotnet test`, `dotnet format --verify-no-changes`, the release assembly check, Godot install, a test-area map pack, the headless import and the gdUnit4 tests. `.github/workflows/release.yml` runs on tags `v*` with three jobs: `maps` (download, build, NOTICE), `export` (Godot export and checks) and `publish` (GitHub release). A tag with a `-` makes a pre-release.
+- **Godot install.** `.github/scripts/install-godot.sh` downloads the Godot .NET editor and, for releases, the export templates from `godotengine/godot-builds`. It checks them against SHA-512 values committed in the script and sets `GODOT` to the real binary. The version comes from `Godot.NET.Sdk/<version>` in `game/RoadmanSimulator.csproj`. A Godot upgrade adds the new hashes to the script. Community actions were compared on 2026-10-28 (all MIT): `chickensoft-games/setup-godot` (v2.4.3, no checksum check found), `firebelley/godot-export` (v8.0.0, also exports), and the `abarichello/godot-ci` image. The script was chosen because it checks the downloads and runs no third-party code in the release jobs.
+- **Actions.** Only `actions/checkout`, `actions/setup-dotnet`, `actions/cache`, `actions/upload-artifact`, `actions/download-artifact` and `astral-sh/setup-uv`, each pinned to a full commit SHA with the version in a comment. Releases use the runner's `gh` CLI.
+- **Caches.** uv (setup-uv), `~/.nuget/packages`, and the Godot downloads in `~/.cache/godot/` keyed on the version and the install script.
+- **CI map pack.** CI copies the committed fixture `tools/mapgen/tests/fixtures/raw/somero-test-area/` to `tools/mapgen/data/raw/somero/` and runs `mapgen build somero --area test`. The fixture's `NOTICE.md` gives the attributions and says how the data was modified (OSM extract under ODbL 1.0, MML data under CC BY 4.0).
+- **Secret.** No workflow uses `pull_request_target`, and `ci.yml` uses no secrets. `MML_API_KEY` is set only on the download step and the leak-check step of the `maps` job; the export and publish jobs never see it, and only `publish` has `contents: write`. No step prints request URLs or turns on verbose HTTP logging. `.github/scripts/check-no-secret.sh` fails on any unredacted `api-key=` value and, where the key is in the environment, on the literal key; it unpacks zips first. The `maps` job runs the literal check on the packs, download manifests and NOTICE; the `export` job runs the pattern check on the final zips.
+- **Release data.** `mapgen download --release --strict --force` fails on a missing key, a failed source or a source without files, so no build is exported without a map. Sources with `debug_only: true` in `map.yaml` (Somero's `mml_orthophoto`, ADR 0009) are skipped by `download --release` and `build --release`, so release packs neither read nor credit them. The release checks that each pack's manifest says `area: full`. Each `download-manifest.json` is attached to the release as `download-manifest-<map-id>.json`.
+- **Attribution.** `mapgen notice <map-id>... --out NOTICE.txt` writes the credits of the built packs' manifests, the licence URLs and a statement that the data was modified. Both zips contain `NOTICE.txt` and `CREDITS.md` next to the game. `mapgen notice --check` fails if a credit line is missing; a new licence needs its URL in `notice.LICENCE_URLS`.
+- **Export presets.** `game/export_presets.cfg` holds no credentials. "Windows Desktop": x86_64, PCK embedded, `application/modify_resources=false` (no rcedit or wine needed on Linux). "macOS": universal, built-in ad-hoc signing, no notarization. Both exclude `addons/gdUnit4/*`, `tests/*` and `gdunit4_testadapter_v*/*`. The universal macOS export requires `rendering/textures/vram_compression/import_etc2_astc=true` in `project.godot`.
+- **Exported-build check.** `.claude/scripts/check-export.sh <build-dir>` checks NOTICE.txt and CREDITS.md, runs `check-release-assembly.cs` on every exported game assembly, looks for test framework files, and searches the PCK for every file path in `game/tests/` and `game/addons/gdUnit4/` (except `plugin.cfg`, whose path is in the project settings). For macOS it checks for both `x86_64` and `arm64` slices and a code signature. `/verify` runs it on a local Windows export when export templates are installed.
+- **Screenshots.** CI doesn't run screenshots. The `xvfb-run` and lavapipe route in ADR 0008 is still untested.
+
+## Consequences
+
+- A release needs the `MML_API_KEY` repository secret. Overpass busy errors fail the release; re-run the job.
+- Builds are unsigned for Gatekeeper and SmartScreen (ad-hoc only), as the outline's signing section describes.
+- A Godot upgrade changes the csproj SDK version and the hashes in `install-godot.sh`.
+- Open before the first public release: the zips contain the Godot export templates, GodotSharp and the .NET runtime (all MIT), but `CREDITS.md` doesn't have their full licence texts or Godot's third-party notices yet (the outline's "Legal, attribution and risks" checklist).
+- Caches saved by a tag run are scoped to that tag. The editor download is restored from main's CI cache; the export templates and the export's NuGet runtime packs are downloaded again on each release.
+- Importing ETC2/ASTC textures makes texture imports slower and the import cache larger.

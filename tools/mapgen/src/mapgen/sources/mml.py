@@ -300,6 +300,7 @@ class MmlProcessAdapter(SourceAdapter):
 
     licence = "CC BY 4.0"
     Options: ClassVar[type[AdapterOptions]] = MmlOptions
+    required_env: ClassVar[tuple[str, ...]] = (API_KEY_ENV,)
     dataset_name: ClassVar[str]
     product_name: ClassVar[str]
     layer: ClassVar[str]

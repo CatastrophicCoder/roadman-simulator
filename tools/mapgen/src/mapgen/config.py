@@ -67,10 +67,15 @@ class TestArea(StrictModel):
 
 
 class SourceConfig(StrictModel):
-    """One data source. `options` are validated by the adapter named in `adapter`."""
+    """One data source. `options` are validated by the adapter named in `adapter`.
+
+    `debug_only` sources (e.g. the orthophoto for the debug view) are skipped by
+    `download --release` and `build --release`, so release packs never contain their data.
+    """
 
     adapter: str = Field(min_length=1)
     enabled: bool = True
+    debug_only: bool = False
     options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -132,6 +137,18 @@ class MapConfig(StrictModel):
 
     def enabled_sources(self) -> dict[str, SourceConfig]:
         return {name: src for name, src in self.sources.items() if src.enabled}
+
+    def debug_only_sources(self) -> list[str]:
+        """Names of the enabled sources marked `debug_only`, in map.yaml order."""
+        return [name for name, src in self.enabled_sources().items() if src.debug_only]
+
+    def for_release(self) -> "MapConfig":
+        """This config with every `debug_only` source disabled (for release builds)."""
+        sources = {
+            name: src.model_copy(update={"enabled": False}) if src.debug_only else src
+            for name, src in self.sources.items()
+        }
+        return self.model_copy(update={"sources": sources})
 
 
 def read_yaml(path: Path) -> dict[str, Any]:

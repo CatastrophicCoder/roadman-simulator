@@ -72,6 +72,7 @@ LICENCE_LINKS = {
     "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
 }
 OSM_COPYRIGHT = "https://www.openstreetmap.org/copyright"
+MML_ATTRIBUTION_PREFIX = "Contains data from the National Land Survey of Finland"
 TIFF_SUFFIXES = {".tif", ".tiff"}
 LAZ_SUFFIXES = {".laz", ".las"}
 JP2_SUFFIXES = {".jp2"}
@@ -234,6 +235,24 @@ def _notice(map_id: str, entries: list[dict[str, Any]]) -> str:
         licence_text = f"[{licence}]({link})" if link else licence
         extra = f" ({OSM_COPYRIGHT})" if licence == "ODbL 1.0" else ""
         lines.append(f"- {attribution}{extra}. Licence: {licence_text}.")
+    licences = {licence for licence, _ in seen}
+    lines += ["", "## Modifications", ""]
+    cc_by = [attribution for licence, attribution in seen if licence == "CC BY 4.0"]
+    if cc_by:
+        mml = all(a.startswith(MML_ATTRIBUTION_PREFIX) for a in cc_by)
+        subject = "National Land Survey of Finland (MML) data" if mml else "CC BY 4.0 data"
+        lines.append(
+            f"- The {subject} listed above was modified, as CC BY 4.0 section 3(a)(1)(B) "
+            "requires us to state: every file was cut to the test area, and the orthophoto "
+            "was also re-encoded (lossy JPEG 2000) to keep it small. The originals are "
+            "identified by `source_size` and `source_sha256` in `download-manifest.json`."
+        )
+    if "ODbL 1.0" in licences:
+        lines.append(
+            "- The OpenStreetMap extract is a derivative database of the OpenStreetMap "
+            "database (cut to the test area, contributor metadata removed). It is offered "
+            "under the ODbL 1.0, https://opendatacommons.org/licenses/odbl/1-0/."
+        )
     lines += [
         "",
         "## How it was produced",

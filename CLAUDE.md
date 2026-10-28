@@ -20,11 +20,14 @@ Version 1 scope: one map area with no interiors, a few vehicle types, one player
 | `game/` | Godot project and C# solution. See `game/CLAUDE.md` |
 | `game/maps/<map-id>/` | Generated map packs (pipeline output, git-ignored) |
 | `.claude/` | Claude Code settings, commands, agents |
+| `.github/` | CI and release workflows and their scripts (ADR 0010) |
 | `CREDITS.md` | Data, engine, add-on and asset attributions |
 
 ## Commands
 
 Build and test commands are listed in `tools/mapgen/CLAUDE.md` and `game/CLAUDE.md`. Run all checks at once with `/verify` (or `.claude/scripts/verify.sh`).
+
+CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, without screenshots, against a test-area pack built from the committed fixture. Pushing a tag `v*` runs `release.yml`, which needs the `MML_API_KEY` repository secret and publishes Windows and macOS builds with the download manifests; a tag with `-` (for example `v0.1.0-test1`) makes a pre-release. See ADR 0010.
 
 ## Definition of done
 
@@ -54,7 +57,7 @@ Each feature goes through the loop in `docs/project-outline.md` ("Claude Code wo
 | --- | --- |
 | `/spec <feature>` | Drafts `docs/specs/<feature>.md` (goal, behaviour, acceptance criteria, test ideas, open questions). No code. Status stays `Draft` until the user approves it. |
 | `/implement <spec>` | Implements an `Approved` spec with tests: plan, subagents, `/verify`, reviewer. Doesn't commit. |
-| `/verify` | Runs `.claude/scripts/verify.sh`: dotnet build, test and format check, pytest and ruff, headless Godot import, gdUnit4, screenshots. Reports PASS, FAIL or N/A (not yet available) per step. |
+| `/verify` | Runs `.claude/scripts/verify.sh`: dotnet build, test and format check, pytest and ruff, headless Godot import, gdUnit4, an exported Windows build check, screenshots. Reports PASS, FAIL or N/A (not yet available) per step. |
 | `/regen-map <map-id>` | Runs `.claude/scripts/regen-map.sh`: `uv run mapgen build <map-id>`, then the headless Godot import. |
 
 `/spec`, `/implement` and `/regen-map` only run when the user types them. Claude may run `/verify` on its own.

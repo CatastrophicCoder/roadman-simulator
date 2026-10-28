@@ -1,0 +1,194 @@
+# Release builds on tags v*: download the source data, build every map in maps/,
+# export Windows and macOS builds and publish them with the download manifests.
+# MML_API_KEY reaches only the download and leak-check steps of the maps job.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  maps:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: tools/mapgen/uv.lock
+      - name: uv sync
+        run: uv sync --project tools/mapgen --locked
+
+      # Fails on a missing key, a failed download or a source without files.
+      # Never echo the key or request URLs here; the pipeline redacts it from errors.
+      - name: Download source data
+        env:
+          MML_API_KEY: ${{ secrets.MML_API_KEY }}
+        run: |
+          if [ -z "$MML_API_KEY" ]; then
+            echo "::error::MML_API_KEY repository secret is not set"
+            exit 1
+          fi
+          for config in maps/*/map.yaml; do
+            map="$(basename "$(dirname "$config")")"
+            uv run --project tools/mapgen mapgen download "$map" --release --strict --force
+          done
+
+      - name: Build map packs
+        run: |
+          mkdir -p dist/manifests
+          for config in maps/*/map.yaml; do
+            map="$(basename "$(dirname "$config")")"
+            uv run --project tools/mapgen mapgen build "$map" --release
+            python3 -I -c 'import json, sys; a = json.load(open(sys.argv[1]))["area"]; sys.exit(0 if a == "full" else f"{sys.argv[1]}: area {a}, expected full")' \
+              "game/maps/$map/manifest.json"
+            cp "tools/mapgen/data/raw/$map/download-manifest.json" "dist/manifests/download-manifest-$map.json"
+            maps+=("$map")
+          done
+          uv run --project tools/mapgen mapgen notice "${maps[@]}" --out dist/NOTICE.txt
+
+      - name: Check packs and manifests for the key
+        env:
+          MML_API_KEY: ${{ secrets.MML_API_KEY }}
+        run: .github/scripts/check-no-secret.sh game/maps dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: maps
+          path: |
+            game/maps/
+            dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  export:
+    needs: maps
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: maps
+          path: ${{ runner.temp }}/maps
+      - name: Place map packs
+        run: |
+          cp -R "$RUNNER_TEMP/maps/game/maps/." game/maps/
+          ls game/maps/*/manifest.json
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: tools/mapgen/uv.lock
+      - name: uv sync
+        run: uv sync --project tools/mapgen --locked
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'game/**/*.csproj', 'game/Directory.Build.targets') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - name: Godot version
+        id: godot
+        run: echo "version=$(sed -n 's|.*Sdk="Godot\.NET\.Sdk/\([0-9.]*\)".*|\1|p' game/RoadmanSimulator.csproj)" >>"$GITHUB_OUTPUT"
+      # Same path and key as ci.yml, so a tag run restores the editor cached on main.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/godot/*/*.zip
+          key: godot-editor-${{ steps.godot.outputs.version }}-${{ hashFiles('.github/scripts/install-godot.sh') }}
+      # Caches saved by a tag run are scoped to that tag, so this one hits only on a re-run.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/godot/*/*.tpz
+          key: godot-templates-${{ steps.godot.outputs.version }}-${{ hashFiles('.github/scripts/install-godot.sh') }}
+      - name: Install Godot and export templates
+        run: .github/scripts/install-godot.sh --templates
+
+      - name: dotnet build
+        run: dotnet build game/RoadmanSimulator.sln
+      - name: Godot headless import
+        run: |
+          ROOT="$PWD"
+          . .claude/scripts/lib.sh
+          log="$RUNNER_TEMP/godot-import.log"
+          GODOT_IMPORT_TIMEOUT=1200
+          if ! godot_import "$GODOT" "$log"; then
+            cat "$log"
+            echo "::error::Godot import failed: $IMPORT_DETAIL"
+            exit 1
+          fi
+
+      - name: Export Windows and macOS
+        run: |
+          out="$PWD/build/export"
+          mkdir -p "$out/windows" "$out/macos"
+          "$GODOT" --headless --path game --export-release "Windows Desktop" "$out/windows/RoadmanSimulator.exe"
+          "$GODOT" --headless --path game --export-release "macOS" "$out/RoadmanSimulator-macos.zip"
+          unzip -q "$out/RoadmanSimulator-macos.zip" -d "$out/macos"
+          rm "$out/RoadmanSimulator-macos.zip"
+          for d in windows macos; do
+            cp CREDITS.md "$RUNNER_TEMP/maps/dist/NOTICE.txt" "$out/$d/"
+          done
+
+      - name: Check exported builds
+        run: |
+          .claude/scripts/check-export.sh build/export/windows
+          .claude/scripts/check-export.sh build/export/macos
+
+      - name: Zip
+        run: |
+          mkdir -p dist
+          (cd build/export/windows && zip -qr "$GITHUB_WORKSPACE/dist/RoadmanSimulator-$GITHUB_REF_NAME-windows-x86_64.zip" .)
+          (cd build/export/macos && zip -qry "$GITHUB_WORKSPACE/dist/RoadmanSimulator-$GITHUB_REF_NAME-macos-universal.zip" .)
+          cp "$RUNNER_TEMP"/maps/dist/manifests/*.json dist/
+          ls -l dist
+
+      - name: Check release files for unredacted keys
+        run: .github/scripts/check-no-secret.sh dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "Windows (x86_64) and macOS (universal, ad-hoc signed) builds. The download-manifest-<map>.json files record the source data each map was built from. Map data © OpenStreetMap contributors (ODbL 1.0); contains data from the National Land Survey of Finland (CC BY 4.0); see NOTICE.txt in each zip." \
+            "${flags[@]}"
