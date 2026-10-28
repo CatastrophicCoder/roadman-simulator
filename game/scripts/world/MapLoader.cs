@@ -33,9 +33,23 @@ public partial class MapLoader : Node3D
     [Signal]
     public delegate void MapLoadFailedEventHandler(string message);
 
+    /// <summary>Prefix of the building visual mesh nodes (ADR 0006).</summary>
+    public const string BuildingNodePrefix = "bld_";
+
+    /// <summary>Folder of the placeholder map materials, until the art-direction palette replaces them.</summary>
+    public const string PlaceholderMaterialsPath = "res://materials/placeholder";
+
     /// <summary>Map to load. Empty means the <c>roadman/map/id</c> project setting.</summary>
     [Export]
     public string MapId { get; set; } = "";
+
+    /// <summary>Material for the terrain meshes. Null means the placeholder in <see cref="PlaceholderMaterialsPath"/>.</summary>
+    [Export]
+    public Material? TerrainMaterial { get; set; }
+
+    /// <summary>Material for the building meshes. Null means the placeholder in <see cref="PlaceholderMaterialsPath"/>.</summary>
+    [Export]
+    public Material? BuildingMaterial { get; set; }
 
     /// <summary>The parsed manifest, or null before a successful <see cref="Load"/>.</summary>
     public MapManifest? Manifest { get; private set; }
@@ -53,6 +67,8 @@ public partial class MapLoader : Node3D
     public override void _Ready()
     {
         EnsureTilesNode();
+        TerrainMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/terrain.tres");
+        BuildingMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/building.tres");
     }
 
     /// <summary>
@@ -109,7 +125,7 @@ public partial class MapLoader : Node3D
             var instance = scene.Instantiate<Node3D>();
             instance.Name = tile.Id;
             Tiles.AddChild(instance);
-            TagTerrainBodies(instance);
+            PrepareTile(instance);
             LoadedTileCount++;
         }
 
@@ -238,10 +254,11 @@ public partial class MapLoader : Node3D
     }
 
     /// <summary>
-    /// Puts the terrain's collision bodies in <see cref="TerrainGroup"/>. The importer turns <c>terrain-col</c>
-    /// into a mesh named <c>terrain</c> with a <see cref="StaticBody3D"/> child.
+    /// Puts the terrain's collision bodies in <see cref="TerrainGroup"/> and sets the terrain and building
+    /// materials. The importer turns <c>terrain-col</c> into a mesh named <c>terrain</c> with a
+    /// <see cref="StaticBody3D"/> child; building meshes keep their <c>bld_</c> names.
     /// </summary>
-    private static void TagTerrainBodies(Node tile)
+    private void PrepareTile(Node tile)
     {
         var pending = new Stack<Node>();
         pending.Push(tile);
@@ -251,6 +268,18 @@ public partial class MapLoader : Node3D
             if (node is StaticBody3D body && body.GetParent() is MeshInstance3D { Name: var name } && name == TerrainNodeName)
             {
                 body.AddToGroup(TerrainGroup, persistent: false);
+            }
+            else if (node is MeshInstance3D mesh)
+            {
+                var meshName = mesh.Name.ToString();
+                if (meshName == TerrainNodeName)
+                {
+                    mesh.MaterialOverride = TerrainMaterial;
+                }
+                else if (meshName.StartsWith(BuildingNodePrefix, System.StringComparison.Ordinal))
+                {
+                    mesh.MaterialOverride = BuildingMaterial;
+                }
             }
 
             foreach (var child in node.GetChildren())

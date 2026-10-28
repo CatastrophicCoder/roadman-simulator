@@ -201,6 +201,25 @@ public class MapLoaderTest
         AssertThat(failure).Contains("res://maps/no-such-map/manifest.json").Contains("/regen-map no-such-map");
     }
 
+    [TestCase]
+    public async Task Tiles_UseTheMapMaterials()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(WorldScenePath, true);
+        await runner.SimulateFrames(2);
+        var loader = Loader(runner);
+        AssertThat(loader.TerrainMaterial).IsNotNull();
+        AssertThat(loader.BuildingMaterial).IsNotNull();
+
+        var meshes = Descendants(loader.Tiles).OfType<MeshInstance3D>().ToList();
+        var terrain = meshes.Where(m => m.Name == MapLoader.TerrainNodeName).ToList();
+        var buildings = meshes.Where(m => m.Name.ToString().StartsWith(MapLoader.BuildingNodePrefix)).ToList();
+        AssertThat(terrain.Count).IsEqual(loader.LoadedTileCount);
+        AssertThat(buildings.Count).IsGreater(0);
+        AssertThat(terrain.All(m => m.MaterialOverride == loader.TerrainMaterial)).IsTrue();
+        AssertThat(buildings.All(m => m.MaterialOverride == loader.BuildingMaterial)).IsTrue();
+    }
+
     private static MapLoader Loader(ISceneRunner runner)
     {
         var loader = runner.Scene()!.GetNodeOrNull<MapLoader>("MapLoader");

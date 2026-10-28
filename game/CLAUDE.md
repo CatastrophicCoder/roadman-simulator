@@ -46,6 +46,7 @@ Building with `-c ExportRelease` or `ExportDebug` re-restores the shared `obj/` 
 
 - `World` adds a `MapLoader` (`scripts/world/MapLoader.cs`), which reads `res://maps/<id>/manifest.json` and instances every tile under `MapLoader/Tiles`. The id comes from `MapLoader.MapId` or the project setting `roadman/map/id` (default `somero`). Errors name the pack path and say to run `/regen-map <id>`.
 - Terrain collision bodies are in the group `map_terrain`. Use `MapLoader.TerrainHeightAt(x, z)` for ground heights; never hard-code them (Somero's terrain is about 81 to 138 m). New collision bodies are queryable only after a physics frame: await `MapLoader.WaitForTerrainCollisionAsync()` first.
+- Map materials: `MapLoader` sets `TerrainMaterial` on each tile's `terrain` mesh and `BuildingMaterial` on every `bld_` mesh. Both default to the placeholders in `materials/placeholder/` (`terrain.tres`; `building.tres` with `building.gdshader`, which colours up-facing faces as roof). Replace that folder, or set the two exports, when the art-direction palette exists. Lighting (sun energy and shadow distance, ambient energy, AgX tone mapping, exposure) is exported on `World`.
 - `[importer_defaults]` in `project.godot` sets every scene import to name suffixes on, mesh compression off, LODs off, shadow meshes on and static light baking. A hand-made `.glb` added later gets these too; correct its import settings and commit its `.import` file.
 
 ## Screenshots

@@ -18,6 +18,20 @@ public partial class World : Node3D
     [Export]
     public Vector3 SunRotationDegrees { get; set; } = new(-50f, -30f, 0f);
 
+    [Export]
+    public float SunEnergy { get; set; } = 0.9f;
+
+    /// <summary>How far from the camera the sun casts shadows, in metres; large enough for the overview preset.</summary>
+    [Export]
+    public float SunShadowMaxDistance { get; set; } = 1500f;
+
+    /// <summary>Strength of the sky's ambient light. Lower keeps flat surfaces from washing out.</summary>
+    [Export]
+    public float AmbientEnergy { get; set; } = 0.6f;
+
+    [Export]
+    public float TonemapExposure { get; set; } = 1f;
+
     /// <summary>Debug camera start, relative to the terrain at the map origin. The camera looks at that point.</summary>
     [Export]
     public Vector3 CameraStartOffset { get; set; } = new(0f, 30f, 40f);
@@ -82,7 +96,7 @@ public partial class World : Node3D
         EmitSignal(SignalName.CameraPlaced, Camera.GlobalPosition);
     }
 
-    private static WorldEnvironment CreateEnvironment()
+    private WorldEnvironment CreateEnvironment()
     {
         var sky = new Sky { SkyMaterial = new ProceduralSkyMaterial() };
         var environment = new Godot.Environment
@@ -91,7 +105,10 @@ public partial class World : Node3D
             Sky = sky,
             AmbientLightSource = Godot.Environment.AmbientSource.Sky,
             ReflectedLightSource = Godot.Environment.ReflectionSource.Sky,
-            TonemapMode = Godot.Environment.ToneMapper.Filmic,
+            AmbientLightEnergy = AmbientEnergy,
+            // AgX compresses highlights more gently than Filmic, so light surfaces keep their colour.
+            TonemapMode = Godot.Environment.ToneMapper.Agx,
+            TonemapExposure = TonemapExposure,
         };
         return new WorldEnvironment { Name = "WorldEnvironment", Environment = environment };
     }
@@ -102,5 +119,7 @@ public partial class World : Node3D
             Name = "Sun",
             ShadowEnabled = true,
             RotationDegrees = SunRotationDegrees,
+            LightEnergy = SunEnergy,
+            DirectionalShadowMaxDistance = SunShadowMaxDistance,
         };
 }
