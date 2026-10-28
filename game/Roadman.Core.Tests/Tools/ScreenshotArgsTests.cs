@@ -77,6 +77,44 @@ public class ScreenshotArgsTests
         Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
     }
 
+    [Fact]
+    public void Parse_Orthophoto_InAnyPosition()
+    {
+        var after = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--orthophoto"]);
+        var before = ScreenshotArgs.Parse(["--orthophoto", "--map", "x", "--screenshot", "a", "a.png"]);
+
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, null, Orthophoto: true), after);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, "x", Orthophoto: true), before);
+    }
+
+    [Fact]
+    public void Parse_WithoutOrthophoto_LeavesItOff()
+    {
+        Assert.False(ScreenshotArgs.Parse(["--screenshot", "a", "a.png"])!.Orthophoto);
+    }
+
+    [Fact]
+    public void Parse_WithoutScreenshotFlag_IgnoresOrthophoto()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--orthophoto"]));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--orthophoto", "--orthophoto")]
+    [InlineData("--screenshot", "a", "--orthophoto")]
+    [InlineData("--screenshot", "a", "a.png", "--orthophoto", "yes")]
+    public void Parse_OrthophotoRepeatedOrMisplaced_Throws(params string[] args)
+    {
+        Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+    }
+
+    [Fact]
+    public void Parse_UnknownArgument_ListsOrthophotoInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--ortho"]));
+        Assert.Contains("[--orthophoto]", ex.Message);
+    }
+
     [Theory]
     [InlineData(3, 3, null)]
     [InlineData(2, 3, ScreenshotExitCode.Error)]

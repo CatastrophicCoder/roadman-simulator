@@ -11,6 +11,7 @@ from mapgen.geo import BBox
 from mapgen.sources.base import (
     BUILDINGS_3D,
     ELEVATION,
+    IMAGERY,
     OSM_VECTOR,
     LoadContext,
     SourceAdapter,
@@ -90,7 +91,8 @@ def test_adapters_declare_capabilities() -> None:
     assert OSM_VECTOR in OverpassAdapter.provides
     assert ELEVATION in MmlDem2mAdapter.provides
     assert BUILDINGS_3D in MmlBuildings3dAdapter.provides
-    assert ADAPTERS["mml_orthophoto"].provides == frozenset()
+    assert ADAPTERS["mml_orthophoto"].provides == frozenset({IMAGERY})
+    assert ADAPTERS["mml_topographic"].provides == frozenset()
 
 
 def test_sources_are_selected_by_capability_not_name(tmp_repo: TmpRepo, fixture_data: dict) -> None:
@@ -103,6 +105,7 @@ def test_sources_are_selected_by_capability_not_name(tmp_repo: TmpRepo, fixture_
     assert [s.name for s in enabled_sources_providing(config, ELEVATION)] == ["heights"]
     assert [s.name for s in enabled_sources_providing(config, OSM_VECTOR)] == ["streets"]
     assert enabled_sources_providing(config, BUILDINGS_3D) == []
+    assert [s.name for s in enabled_sources_providing(config, IMAGERY)] == ["photo"]
 
 
 def _ctx(config: MapConfig, raw: Path, adapter: type[SourceAdapter]) -> LoadContext:
@@ -179,7 +182,7 @@ def test_buildings_3d_stub_reads_nothing(fixture_config: MapConfig, tmp_path: Pa
 
 
 def test_adapters_without_capability_cannot_load(fixture_config: MapConfig, tmp_path: Path) -> None:
-    adapter = ADAPTERS["mml_orthophoto"]
+    adapter = ADAPTERS["mml_topographic"]
     with pytest.raises(NotImplementedError):
         adapter().load(_ctx(fixture_config, tmp_path, adapter))
 

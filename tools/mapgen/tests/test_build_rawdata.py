@@ -6,8 +6,11 @@ the raw folder is linked into it read-only. Run only these with `uv run pytest -
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
+import rasterio
+from rasterio.errors import NotGeoreferencedWarning
 
 from conftest import REPO_ROOT, SOMERO_YAML
 from mapgen import paths
@@ -16,7 +19,12 @@ from mapgen.cli import EXIT_OK, main
 from mapgen.config import load_map_config
 from pack_checks import check_pack
 
-pytestmark = pytest.mark.rawdata
+pytestmark = [
+    pytest.mark.rawdata,
+    pytest.mark.filterwarnings(
+        f"ignore::{NotGeoreferencedWarning.__module__}.NotGeoreferencedWarning"
+    ),
+]
 
 MAP_ID = SOMERO_YAML.parent.name
 RAW = paths.raw_dir(REPO_ROOT, MAP_ID)
@@ -86,9 +94,34 @@ def test_raw_full_build_gets_lidar_heights_for_95_percent(tmp_path: Path) -> Non
         "too_low",
         "too_high",
     }
-    credits = json.loads((pack / "manifest.json").read_text(encoding="utf-8"))["credits"]
+    manifest = json.loads((pack / "manifest.json").read_text(encoding="utf-8"))
+    credits = manifest["credits"]
     assert "Laser scanning data 0,5 p" in {c["dataset"] for c in credits}
+    textures = _check_debug_textures(config, pack, manifest)
     print(
         f"\n{MAP_ID} full: {len(lidar)}/{len(buildings)} mml_lidar, "
-        f"sources {report['height_source_counts']}, lidar {report['lidar']}"
+        f"sources {report['height_source_counts']}, lidar {report['lidar']}, "
+        f"debug textures {textures}"
     )
+
+
+def _check_debug_textures(config: Any, pack: Path, manifest: dict[str, Any]) -> str:
+    """With the orthophoto downloaded, every tile has a texture of its size (else none)."""
+    from mapgen.build.orthophoto import texture_path, texture_size
+    from mapgen.geo import BBox
+    from mapgen.sources.registry import enabled_sources_providing
+
+    imagery = enabled_sources_providing(config, "imagery")
+    if not imagery or not list((RAW / "mml" / "orthophoto").glob("*.jp2")):
+        assert not (pack / "debug").exists()
+        return "none"
+    m_per_px = imagery[0].options.debug_texture_m_per_px
+    assert (pack / "debug" / ".gdignore").is_file()
+    assert "Orthophoto" in {c["dataset"] for c in manifest["credits"]}
+    total = 0
+    for tile in manifest["tiles"]:
+        path = pack / texture_path(tile["id"])
+        with rasterio.open(path) as src:
+            assert (src.width, src.height) == texture_size(BBox(*tile["bounds_local"]), m_per_px)
+        total += path.stat().st_size
+    return f"{len(manifest['tiles'])} files, {total / 1e6:.1f} MB at {m_per_px} m/px"

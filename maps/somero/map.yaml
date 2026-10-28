@@ -53,6 +53,7 @@ sources:
       file_format: JPEG2000
       sheet_scale: 10000    # MML process description: 1:10 000 sheets, e.g. L2332H
       map_sheet_input: list # MML: array of up to 100 sheets per job
+      debug_texture_m_per_px: 0.5  # build: debug/orthophoto/ tile textures, 0.5-1.0 m/px
 
   mml_lidar:
     adapter: mml_lidar      # laser scanning data 0,5 p only (ADR 0005); building heights

@@ -3,7 +3,8 @@
 Axes (glTF is Y-up): local east -> +X, up -> +Y, north -> -Z. Node names carry Godot's
 import suffixes: "terrain-col" (visual plus collision), "bld_<id>" (visual) and
 "bld_<id>-colonly" (collision only). After writing, the node names are read back from
-the file, because exporters may rename duplicates.
+the file, because exporters may rename duplicates. A node can carry TEXCOORD_0 (the
+terrain does; buildings don't).
 """
 
 import json
@@ -14,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 import trimesh
+from trimesh.visual import TextureVisuals
+from trimesh.visual.material import PBRMaterial
 
 AXES = {"x": "east", "y": "up", "z": "-north"}
 TERRAIN_NODE = "terrain-col"
@@ -34,6 +37,8 @@ class MeshNode:
     vertices: np.ndarray
     faces: np.ndarray
     normals: np.ndarray | None = None  # local unit normals; None: computed from the faces
+    # TEXCOORD_0 in glTF convention (origin top-left, v down); None: no UVs written.
+    uv: np.ndarray | None = None
 
 
 def to_gltf(vertices: np.ndarray) -> np.ndarray:
@@ -91,8 +96,22 @@ def export_glb(path: Path, nodes: Sequence[MeshNode]) -> Path:
         normals = (
             vertex_normals(vertices, node.faces) if node.normals is None else to_gltf(node.normals)
         )
+        visual = None
+        if node.uv is not None:
+            uv = np.asarray(node.uv, dtype=float)
+            if uv.shape != (len(vertices), 2) or not np.all(np.isfinite(uv)):
+                raise ExportError(f"{path.name}: node {node.name} has invalid UVs")
+            # trimesh stores UVs with the origin bottom-left and flips v on glTF export.
+            visual = TextureVisuals(
+                uv=np.column_stack([uv[:, 0], 1.0 - uv[:, 1]]),
+                material=PBRMaterial(name=node.name, baseColorFactor=[255, 255, 255, 255]),
+            )
         mesh = trimesh.Trimesh(
-            vertices=vertices, faces=node.faces, vertex_normals=normals, process=False
+            vertices=vertices,
+            faces=node.faces,
+            vertex_normals=normals,
+            visual=visual,
+            process=False,
         )
         scene.add_geometry(mesh, node_name=node.name, geom_name=node.name)
     path.parent.mkdir(parents=True, exist_ok=True)

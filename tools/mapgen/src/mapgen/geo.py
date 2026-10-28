@@ -49,6 +49,18 @@ class BBox:
             other.max_x, other.max_y
         )
 
+    def intersects(self, other: "BBox") -> bool:
+        """True when the two boxes share an area (touching edges don't count)."""
+        return (
+            self.min_x < other.max_x
+            and other.min_x < self.max_x
+            and self.min_y < other.max_y
+            and other.min_y < self.max_y
+        )
+
+    def offset(self, dx: float, dy: float) -> "BBox":
+        return BBox(self.min_x + dx, self.min_y + dy, self.max_x + dx, self.max_y + dy)
+
     def rounded_outward(self) -> "BBox":
         """Round to whole units, never shrinking the box."""
         return BBox(

@@ -204,6 +204,31 @@ public partial class MapLoader : Node3D
         return false;
     }
 
+    /// <summary>
+    /// The terrain mesh of a loaded tile (the <c>terrain</c> node under <paramref name="tile"/>, a child of
+    /// <see cref="Tiles"/>), or null when the tile has none.
+    /// </summary>
+    public static MeshInstance3D? FindTerrainMesh(Node tile)
+    {
+        var pending = new Stack<Node>();
+        pending.Push(tile);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            if (node is MeshInstance3D mesh && mesh.Name == TerrainNodeName)
+            {
+                return mesh;
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                pending.Push(child);
+            }
+        }
+
+        return null;
+    }
+
     private (float X, float Y)? FirstLoadedTileCentre()
     {
         if (Manifest is null)

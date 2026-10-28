@@ -20,7 +20,10 @@ public class MapManifestReaderTests
             {"id": "tile_x-1_y0", "file": "tiles/tile_x-1_y0.glb", "bounds_local": [-256, 0, 0, 256], "building_count": 3},
             {"id": "tile_x0_y0", "file": "tiles/tile_x0_y0.glb", "bounds_local": [0, 0, 200, 256], "building_count": 0}
           ],
-          "credits": [],
+          "credits": [
+            {"source": "mml_dem_2m", "dataset": "Elevation model 2 m", "licence": "CC BY 4.0", "attribution": "Contains data from the National Land Survey of Finland Elevation model 2 m, 10/2026", "retrieved_at": "2026-10-27T14:44:30Z"},
+            {"source": "osm", "dataset": "OpenStreetMap", "licence": "ODbL 1.0", "attribution": "© OpenStreetMap contributors", "retrieved_at": "2026-10-27T14:34:18Z"}
+          ],
           "generated_at": "2026-10-27T20:38:24Z",
           "tool": {"name": "mapgen", "version": "0.1.0"}
         }
@@ -39,6 +42,92 @@ public class MapManifestReaderTests
         Assert.Equal(256, manifest.TileSizeM);
         Assert.Equal(2, manifest.Tiles.Count);
         Assert.Equal(new MapTile("tile_x-1_y0", "tiles/tile_x-1_y0.glb", new TileBounds(-256, 0, 0, 256), 3), manifest.Tiles[0]);
+    }
+
+    [Fact]
+    public void Parse_Credits_ReadsEveryEntryInOrder()
+    {
+        var manifest = MapManifestReader.Parse(ValidManifest);
+
+        Assert.Equal(2, manifest.Credits.Count);
+        Assert.Equal(
+            new MapCredit(
+                "mml_dem_2m",
+                "Elevation model 2 m",
+                "CC BY 4.0",
+                "Contains data from the National Land Survey of Finland Elevation model 2 m, 10/2026",
+                "2026-10-27T14:44:30Z"),
+            manifest.Credits[0]);
+        Assert.Equal("osm", manifest.Credits[1].Source);
+        Assert.Equal("© OpenStreetMap contributors", manifest.Credits[1].Attribution);
+    }
+
+    [Fact]
+    public void Parse_EmptyCredits_IsAllowed()
+    {
+        var json = Modify(root => root["credits"] = new JsonArray());
+
+        Assert.Empty(MapManifestReader.Parse(json).Credits);
+    }
+
+    [Fact]
+    public void Parse_NullCredits_IsMissing()
+    {
+        var json = Modify(root => root["credits"] = null);
+
+        var ex = Assert.Throws<MapPackException>(() => MapManifestReader.Parse(json));
+        Assert.Contains("'credits' is missing", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("source")]
+    [InlineData("dataset")]
+    [InlineData("licence")]
+    [InlineData("attribution")]
+    [InlineData("retrieved_at")]
+    public void Parse_MissingCreditField_NamesCreditAndField(string field)
+    {
+        var json = Modify(root => root["credits"]![1]!.AsObject().Remove(field));
+
+        var ex = Assert.Throws<MapPackException>(() => MapManifestReader.Parse(json));
+        Assert.Contains($"'credits[1].{field}' is missing", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_CreditFieldNotAString_IsRejected()
+    {
+        var json = Modify(root => root["credits"]![0]!["licence"] = 4);
+
+        var ex = Assert.Throws<MapPackException>(() => MapManifestReader.Parse(json));
+        Assert.Contains("'credits[0].licence' must be a string", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_UnknownCreditField_IsRejected()
+    {
+        var json = Modify(root => root["credits"]![0]!["url"] = "https://example.invalid");
+
+        var ex = Assert.Throws<MapPackException>(() => MapManifestReader.Parse(json));
+        Assert.Contains("'credits[0].url' is not a known field", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("\"CC BY 4.0\"")]
+    [InlineData("{}")]
+    public void Parse_CreditsNotAnArrayOfObjects_IsRejected(string credits)
+    {
+        var json = Modify(root => root["credits"] = JsonNode.Parse(credits));
+
+        Assert.Throws<MapPackException>(() => MapManifestReader.Parse(json));
+    }
+
+    [Fact]
+    public void Parse_CreditNotAnObject_IsRejected()
+    {
+        var json = Modify(root => root["credits"] = new JsonArray("CC BY 4.0"));
+
+        var ex = Assert.Throws<MapPackException>(() => MapManifestReader.Parse(json));
+        Assert.Contains("'credits[0]' must be an object", ex.Message);
     }
 
     [Fact]
@@ -83,6 +172,7 @@ public class MapManifestReaderTests
     [InlineData("tile_size_m")]
     [InlineData("axes")]
     [InlineData("tiles")]
+    [InlineData("credits")]
     public void Parse_MissingField_NamesIt(string field)
     {
         var json = Modify(root => root.AsObject().Remove(field));

@@ -31,4 +31,18 @@ public class WorldSceneTest
         AssertThat(environment).IsNotNull();
         AssertThat(environment!.Environment.Sky.SkyMaterial).IsInstanceOf<ProceduralSkyMaterial>();
     }
+
+    [TestCase]
+    public void World_AddsOrthophotoViewInDebugBuilds()
+    {
+        AssertBool(OS.IsDebugBuild()).IsTrue();
+        using var runner = ISceneRunner.Load(WorldScenePath, true);
+        var world = (Roadman.Scenes.World)runner.Scene()!;
+
+        var view = world.GetNodeOrNull<OrthophotoDebugView>("OrthophotoDebugView");
+        AssertThat(view).IsNotNull();
+        AssertThat(world.Orthophoto).IsSame(view);
+        AssertThat(view!.Loader).IsSame(world.MapLoader);
+        AssertBool(view.Enabled).IsFalse();
+    }
 }

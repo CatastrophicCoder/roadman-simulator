@@ -18,7 +18,8 @@ This file describes the systems and how they connect. Source: `docs/project-outl
                        v
         game/maps/<map-id>/   map pack (generated, never hand-edited)
           manifest.json, tiles/*.glb, road graph, markers,
-          vegetation, boundary.json, minimap.png
+          vegetation, boundary.json, minimap.png,
+          debug/orthophoto/*.jpg (debug runs only)
                        |
                        v
         Godot: World scene -> MapLoader -> tile scenes, barriers, debug draw
@@ -87,11 +88,12 @@ Module layout (`tools/mapgen/src/mapgen/`):
 - `sources/`: the adapter interface (`base.py`), the registry, and the adapters `osm_overpass`, `mml_dem_2m`, `mml_lidar`, `mml_orthophoto`, `mml_buildings_3d` and `mml_topographic` (ADR 0005).
 - `download.py` and `manifest.py`: run the enabled sources and write `data/raw/<map-id>/download-manifest.json` with the checksum, licence and attribution of each file.
 
-Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, whose options model validates the source's `options`. `download(ctx)` gets the map config, the raw folder, the `--force` flag and an injected HTTP client, and returns one `DownloadedFile` record per file. Each adapter also declares what it can load in `provides` (`osm_vector`, `elevation`, `point_cloud`, `buildings_3d`), and `load(ctx)` reads its raw files for a build and returns a `SourceData` (footprints, an elevation raster, a point cloud, skipped features, and the files it read). The build picks enabled sources by capability, never by source name, and allows at most one source per capability.
+Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, whose options model validates the source's `options`. `download(ctx)` gets the map config, the raw folder, the `--force` flag and an injected HTTP client, and returns one `DownloadedFile` record per file. Each adapter also declares what it can load in `provides` (`osm_vector`, `elevation`, `point_cloud`, `buildings_3d`, `imagery`), and `load(ctx)` reads its raw files for a build and returns a `SourceData` (footprints, an elevation raster, a point cloud, imagery files, skipped features, and the files it read). The build picks enabled sources by capability, never by source name, and allows at most one source per capability.
 
 - `osm_overpass` loads building footprints from the `.osm` XML (standard library `iterparse`): closed ways and `type=multipolygon` relations, with rings joined from member ways and both outer and inner rings repaired with `make_valid`. Unclosed rings are dropped. Features that can't be built (no closed outer ring, geometry errors, duplicates of a relation's outer way) are skipped with a reason; relations built despite missing member ways or unclosed rings are listed as partial (ADR 0005).
 - `mml_dem_2m` loads its GeoTIFFs, mosaics them with `rasterio.merge`, and crops to the area plus a 10 m margin. A file is warped only when its CRS isn't equivalent to the map CRS (compared semantically, not as text); warped CRSs are listed in the load report. Nodata becomes NaN.
 - `mml_lidar` downloads MML's laser scanning data 0.5 p as LAZ on TM35 1:5 000 sheets (`sheet_scale`, `dataset` options; `Uusin` is the latest). Only the process `laserkeilausaineisto_05_karttalehti` is allowed; the 5 p data is refused (ADR 0005 amendment). `load` reads the files with laspy and lazrs in chunks, keeps the points inside the requested bounds and drops classes 2 (ground), 7 (low noise) and 18 (high noise). Its options also hold the height thresholds used by stage 3.
+- `mml_orthophoto` provides `imagery`: `load` lists the JPEG 2000 (or GeoTIFF) files that overlap the area, without reading pixels; the build reads them per tile for the debug textures. Missing files aren't an error: the build then logs it and writes no `debug/` folder. Its option `debug_texture_m_per_px` (default 0.5, 0.5–1.0) sets the texture resolution.
 - `mml_buildings_3d` has a stub `load` that returns no buildings: MML has no 3D building coverage for Somero, and its CityGML reader is out of scope (ADR 0005).
 
 Build stages (`build/`; ADR 0006):
@@ -106,6 +108,7 @@ Build stages (`build/`; ADR 0006):
 - `build/export_glb.py`: one `.glb` per tile with trimesh, checking the node names after export.
 - `build/pack_manifest.py` and `build/schemas/manifest-v1.schema.json`: the manifest model, the committed JSON Schema, and the credits.
 - `build/camera_presets.py` and `build/schemas/camera-presets-v1.schema.json`: the optional camera presets model and its committed JSON Schema. `run_build` validates `maps/<map-id>/camera_presets.json` before the load stage and copies it into the pack.
+- `build/orthophoto.py`: terrain UVs (`terrain_uv`) and the debug orthophoto textures. It opens the imagery files as one mosaic, fails the build if they don't cover every tile completely, and writes one JPEG per tile resampled (average) to exactly the tile's bounds, plus `debug/.gdignore`.
 - `build/pack_io.py`: replacing the pack folder safely. The pack is written to a temporary sibling folder, validated, then swapped in, so a failed build leaves the previous pack untouched. A non-empty target without a `manifest.json` is never replaced.
 
 Intermediate output goes to `tools/mapgen/build/<map-id>/<area>/` (git-ignored). The GeoJSON files are in map CRS world coordinates with a legacy `crs` member, so QGIS places them correctly:
@@ -133,8 +136,10 @@ Data only: meshes, scenes and JSON, with no code (ADR 0002). Planned contents: t
 Contents so far:
 
 - `manifest.json` (schema version 1).
-- `tiles/tile_x{i}_y{j}.glb`: one file per tile. Tile (i, j) covers local [i·T, (i+1)·T) × [j·T, (j+1)·T), clipped to the area, where T is `tile_size_m`. Each file holds the terrain and the buildings whose footprint centroid is in the tile. Buildings are never split.
+- `tiles/tile_x{i}_y{j}.glb`: one file per tile. Tile (i, j) covers local [i·T, (i+1)·T) × [j·T, (j+1)·T), clipped to the area, where T is `tile_size_m`. Each file holds the terrain and the buildings whose footprint centroid is in the tile. Buildings are never split. The terrain has TEXCOORD_0 mapping the tile's `bounds_local` onto [0, 1] × [0, 1], with v = 0 at the north edge (u = (east − min_x) / width, v = (max_y − north) / height), so the tile's debug texture covers it exactly. Buildings have no UVs.
 - `buildings.json`: `schema_version`, `map_id` and `buildings`, one provenance entry per building: `id` (e.g. `osm:way/123`), `tile`, `node`, `collision_nodes` (a list, one per footprint part), `height_m`, `height_source` (`mml_lidar`, `mml_3d`, `osm_height`, `osm_levels` or `default`), `base_z`, `base_source` (`dem`), `roof_shape` (`flat`) and `roof_shape_source` (`default`). Lidar buildings add `lidar_points`, `lidar_buffer_m`, `lidar_returns` (`all` or `single`), `roof_z_median` and `roof_z_p90` (absolute elevations; p90 is kept for pitched roofs later). A building whose lidar value was rejected adds `lidar_rejected` with the reason.
+- `debug/` (optional, ADR 0006 amendment): written only when an `imagery` source is enabled and its files are present. `debug/.gdignore` (empty) keeps Godot from importing or exporting the folder; the game loads the files from disk at runtime, in debug runs only. Not listed in the manifest.
+  - `debug/orthophoto/<tile_id>.jpg`: the orthophoto resampled to exactly the tile's bounds, round(width / r) × round(height / r) pixels at r = `debug_texture_m_per_px`, JPEG quality 85, top row north.
 - `camera_presets.json` (optional, ADR 0006 amendment): a byte-for-byte copy of `maps/<map-id>/camera_presets.json`, validated by the build and absent when the map has none. Not listed in the manifest. Fields: `schema_version` (`1`) and `presets`, a non-empty object from preset name (lowercase slug, e.g. `centre-street-level`) to:
 
   | Field | Meaning |
@@ -207,7 +212,7 @@ TODO: traffic AI, pedestrian AI, police, missions, player character. Each of the
 
 ## Testing
 
-- Pipeline: pytest, using a fixed small test area. `tools/mapgen/tests/fixtures/raw/somero-test-area/` holds the Somero test area's raw data (OSM without contributor metadata, DEM and lidar cuts, download manifest, attribution in `NOTICE.md`), laid out like `data/raw/<map-id>/`, so tests and CI can build the test-area pack offline. `tools/mapgen/scripts/cut_test_area.py` recreates it.
+- Pipeline: pytest, using a fixed small test area. `tools/mapgen/tests/fixtures/raw/somero-test-area/` holds the Somero test area's raw data (OSM without contributor metadata, DEM, lidar and orthophoto cuts, download manifest, attribution in `NOTICE.md`), laid out like `data/raw/<map-id>/`, so tests and CI can build the test-area pack offline. `tools/mapgen/scripts/cut_test_area.py` recreates it.
 - Core: xUnit on `Roadman.Core`.
 - Engine: gdUnit4Net, run headless.
 - Visual: screenshots from the camera presets in the map pack, taken with a short windowed run (ADR 0008).

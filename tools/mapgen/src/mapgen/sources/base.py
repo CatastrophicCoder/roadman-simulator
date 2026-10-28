@@ -25,6 +25,7 @@ OSM_VECTOR = "osm_vector"  # OpenStreetMap-style vector features (building footp
 ELEVATION = "elevation"  # a terrain elevation raster
 BUILDINGS_3D = "buildings_3d"  # building footprints with measured heights
 POINT_CLOUD = "point_cloud"  # classified lidar points (building heights)
+IMAGERY = "imagery"  # north-up RGB aerial imagery (debug orthophoto textures)
 
 
 def utc_now() -> datetime:
@@ -292,6 +293,18 @@ class PointCloud:
         )
 
 
+@dataclass(frozen=True)
+class Imagery:
+    """North-up RGB raster files, read per tile by the build (not loaded into memory).
+
+    `files` are the files that overlap the requested area. `resolution_m` is the requested
+    output resolution in metres per pixel.
+    """
+
+    files: tuple[Path, ...]
+    resolution_m: float
+
+
 @dataclass
 class SourceData:
     """What one source loaded, plus the raw files it read (used for the pack credits)."""
@@ -300,6 +313,7 @@ class SourceData:
     footprints: list[Footprint] = field(default_factory=list)
     elevation: ElevationRaster | None = None
     points: PointCloud | None = None
+    imagery: Imagery | None = None
     skipped: list[SkippedFeature] = field(default_factory=list)
     partial: list[SkippedFeature] = field(default_factory=list)  # built, but incomplete
 

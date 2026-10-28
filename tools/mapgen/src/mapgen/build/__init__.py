@@ -5,12 +5,14 @@ to `game/maps/<map-id>/` (or `--out`). Both areas write the same pack folder; th
 manifest's `area` says which one it holds. The pack is written to a temporary sibling
 folder and swapped in only when complete and valid (`pack_io`). An optional
 `maps/<map-id>/camera_presets.json` is validated first and copied unchanged into the pack.
+With an imagery source and its files, the pack also gets `debug/orthophoto/<tile>.jpg`
+per tile (plus `debug/.gdignore`); the terrain's UVs map each tile onto its texture.
 """
 
 import shutil
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +27,16 @@ from mapgen.build.camera_presets import (
     read_camera_presets,
 )
 from mapgen.build.export_glb import AXES, TERRAIN_NODE, MeshNode, export_glb
+from mapgen.build.orthophoto import (
+    ORTHOPHOTO_DIR,
+    OrthophotoError,
+    TileTexture,
+    check_coverage,
+    open_mosaic,
+    plan_textures,
+    terrain_uv,
+    write_debug_textures,
+)
 from mapgen.build.pack_io import PackFolderError, check_pack_target, staging_dir, swap_in
 from mapgen.build.pack_manifest import (
     BUILDINGS_NAME,
@@ -42,6 +54,7 @@ from mapgen.build.stage1_load import BuildError, run_load
 from mapgen.build.stage_io import write_geojson, write_json
 from mapgen.build.terrain import MeshTerrainBuilder, TerrainBuilder, TerrainChunk
 from mapgen.config import MapConfig
+from mapgen.geo import BBox
 from mapgen.manifest import load_entries
 from mapgen.sources.base import isoformat_utc, utc_now
 
@@ -61,6 +74,7 @@ class BuildReport:
     height_source_counts: dict[str, int] = field(default_factory=dict)
     skipped: list[dict[str, str]] = field(default_factory=list)
     timings_s: dict[str, float] = field(default_factory=dict)
+    debug_textures: int = 0  # debug orthophoto JPEGs written (0: no `debug/` folder)
 
 
 def _clear(folder: Path) -> None:
@@ -134,8 +148,7 @@ def run_build(
             chunks[tile.id] = chunk
             stats.append(_terrain_stats(tile.id, chunk))
             export_glb(
-                work_dir / "02-terrain" / f"{tile.id}.glb",
-                [MeshNode(TERRAIN_NODE, chunk.vertices, chunk.faces, chunk.normals)],
+                work_dir / "02-terrain" / f"{tile.id}.glb", [_terrain_node(chunk, tile.bounds)]
             )
         write_json(work_dir / "02-terrain" / "stats.json", {"tiles": stats})
 
@@ -154,7 +167,7 @@ def run_build(
     report.building_count = building_report["building_count"]
     report.height_source_counts = building_report["height_source_counts"]
 
-    with stage("export"):
+    with stage("export"), ExitStack() as resources:
         by_tile = buildings.by_tile()
         unknown = set(by_tile) - {t.id for t in tiles}
         if unknown:
@@ -193,11 +206,23 @@ def run_build(
         except ManifestError as exc:
             raise BuildError(str(exc)) from exc
 
+        mosaic = None
+        plans: list[TileTexture] = []
+        if loaded.imagery is None:
+            log(f"[build] no orthophoto; the pack gets no {ORTHOPHOTO_DIR}/ textures")
+        else:
+            try:
+                mosaic = resources.enter_context(open_mosaic(loaded.imagery, config.crs))
+                plans = plan_textures(tiles, origin, loaded.imagery.resolution_m)
+                check_coverage(mosaic, plans)
+            except OrthophotoError as exc:
+                raise BuildError(str(exc)) from exc
+
         staging = staging_dir(out_dir)
         try:
             for tile in tiles:
                 chunk = chunks[tile.id]
-                nodes = [MeshNode(TERRAIN_NODE, chunk.vertices, chunk.faces, chunk.normals)]
+                nodes = [_terrain_node(chunk, tile.bounds)]
                 for building in by_tile.get(tile.id, []):
                     nodes.append(MeshNode(building.node, *building.visual_mesh()))
                     for name, vertices, faces in building.collision_meshes():
@@ -211,17 +236,27 @@ def run_build(
                     "buildings": [b.provenance() for b in buildings.buildings],
                 },
             )
+            if mosaic is not None:
+                written = write_debug_textures(mosaic, plans, staging)
+                report.debug_textures = len(written)
+                log(f"[build] {len(written)} debug orthophoto textures in {ORTHOPHOTO_DIR}/")
             if presets_bytes is not None:
                 (staging / PRESETS_NAME).write_bytes(presets_bytes)  # unchanged
             validate_manifest_file(write_json(staging / MANIFEST_NAME, document))
             swap_in(staging, out_dir)
-        except (ManifestError, PackFolderError) as exc:
+        except (ManifestError, PackFolderError, OrthophotoError) as exc:
             raise BuildError(str(exc)) from exc
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
     write_json(work_dir / "timings.json", report.timings_s)
     return report
+
+
+def _terrain_node(chunk: TerrainChunk, bounds: BBox) -> MeshNode:
+    """The terrain mesh node, with UVs mapping the tile's bounds onto its debug texture."""
+    uv = terrain_uv(chunk.vertices, bounds)
+    return MeshNode(TERRAIN_NODE, chunk.vertices, chunk.faces, chunk.normals, uv)
 
 
 def _write_buildings_stage(

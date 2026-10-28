@@ -540,7 +540,7 @@ def test_ac12_fixture_pack_passes_checks_and_credits_lidar(
     check_pack(somero_fixture_build.pack, somero_fixture_build.work)
     validate_manifest_file(somero_fixture_build.pack / "manifest.json")
     datasets = {c["dataset"] for c in _credits(somero_fixture_build.pack)}
-    assert datasets == {"Elevation model 2 m", LIDAR_DATASET, "OpenStreetMap"}
+    assert datasets == {"Elevation model 2 m", LIDAR_DATASET, "OpenStreetMap", "Orthophoto"}
 
 
 def test_ac12_fixture_build_is_fast(somero_fixture_build: SomeroBuild) -> None:
@@ -552,6 +552,7 @@ def test_ac12_fixture_has_attribution_next_to_it() -> None:
     for text in (
         "National Land Survey of Finland",
         "Laser scanning data 0,5 p",
+        "Orthophoto",
         "CC BY 4.0",
         "OpenStreetMap",
         "ODbL",

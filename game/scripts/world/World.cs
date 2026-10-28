@@ -8,7 +8,8 @@ namespace Roadman.Scenes;
 /// <summary>
 /// Root of the game world. Builds the environment, sun, map loader and debug camera in code, loads the map, and
 /// places the camera above the terrain at the origin. With <c>-- --screenshot &lt;preset&gt; &lt;out.png&gt;</c> on
-/// the command line it adds a <see cref="ScreenshotTool"/> instead of placing the camera.
+/// the command line it adds a <see cref="ScreenshotTool"/> instead of placing the camera. Debug builds also get the
+/// <see cref="OrthophotoDebugView"/> (F2).
 /// </summary>
 public partial class World : Node3D
 {
@@ -40,6 +41,9 @@ public partial class World : Node3D
 
     public DebugCamera Camera { get; private set; } = null!;
 
+    /// <summary>The orthophoto debug view (F2); null outside debug builds.</summary>
+    public OrthophotoDebugView? Orthophoto { get; private set; }
+
     public override void _Ready()
     {
         AddChild(CreateEnvironment());
@@ -47,6 +51,12 @@ public partial class World : Node3D
 
         MapLoader = new MapLoader { Name = "MapLoader" };
         AddChild(MapLoader);
+
+        if (OS.IsDebugBuild())
+        {
+            Orthophoto = new OrthophotoDebugView { Name = "OrthophotoDebugView", Loader = MapLoader };
+            AddChild(Orthophoto);
+        }
 
         Camera = new DebugCamera { Name = "DebugCamera", Current = true };
         AddChild(Camera);
@@ -67,7 +77,7 @@ public partial class World : Node3D
         if (screenshot is not null)
         {
             // Added before Load() so it hears MapLoaded or MapLoadFailed.
-            AddChild(new ScreenshotTool { Name = "ScreenshotTool", Request = screenshot, Loader = MapLoader });
+            AddChild(new ScreenshotTool { Name = "ScreenshotTool", Request = screenshot, Loader = MapLoader, OrthophotoView = Orthophoto });
         }
 
         MapLoader.Load();

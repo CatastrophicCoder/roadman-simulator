@@ -1,10 +1,12 @@
 """Stage 1: load the enabled sources, reproject to the map CRS and subtract the origin.
 
 Sources are picked by capability (`osm_vector`, `elevation`, `buildings_3d`,
-`point_cloud`), never by name. Footprints are kept when their centroid is inside the build
-area. Lidar points are read only around those footprints (their combined bounds plus
-`POINT_MARGIN_M`), so the test area stays fast. Output in `01-load/`: `footprints.geojson`
-(world coordinates), `dem.tif` (cropped) and `report.json`.
+`point_cloud`, `imagery`), never by name. Footprints are kept when their centroid is
+inside the build area. Lidar points are read only around those footprints (their combined
+bounds plus `POINT_MARGIN_M`), so the test area stays fast. Imagery files are only listed
+here (those overlapping the area); the export reads them per tile for the debug textures.
+Output in `01-load/`: `footprints.geojson` (world coordinates), `dem.tif` (cropped) and
+`report.json`.
 """
 
 from collections import Counter
@@ -25,10 +27,12 @@ from mapgen.geo import BBox, offset_geometry, reproject_geometry
 from mapgen.sources.base import (
     BUILDINGS_3D,
     ELEVATION,
+    IMAGERY,
     OSM_VECTOR,
     POINT_CLOUD,
     ElevationRaster,
     Footprint,
+    Imagery,
     LoadContext,
     PointCloud,
     SkippedFeature,
@@ -68,6 +72,9 @@ class LoadResult:
     points: PointCloud | None = None
     lidar_source: str | None = None
     lidar_params: LidarParams | None = None
+    # Imagery files overlapping the area (debug orthophoto textures). None without a source
+    # or without files; the build then writes no `debug/` folder.
+    imagery: Imagery | None = None
 
 
 def _one(config: MapConfig, capability: str, required: bool) -> SelectedSource | None:
@@ -138,6 +145,7 @@ def run_load(
     vector_source = _one(config, OSM_VECTOR, required=False)
     buildings_3d_source = _one(config, BUILDINGS_3D, required=False)
     point_source = _one(config, POINT_CLOUD, required=False)
+    imagery_source = _one(config, IMAGERY, required=False)
 
     files: list[Path] = []
     skipped: list[SkippedFeature] = []
@@ -179,6 +187,9 @@ def run_load(
 
     points: PointCloud | None = None
     lidar_params: LidarParams | None = None
+    # Imagery files overlapping the area (debug orthophoto textures). None without a source
+    # or without files; the build then writes no `debug/` folder.
+    imagery: Imagery | None = None
     point_bounds: BBox | None = None
     if point_source is not None:
         lidar_params = LidarParams.from_options(point_source.options)
@@ -191,6 +202,16 @@ def run_load(
                 raise BuildError(f"source {point_source.name!r} returned no point cloud")
             points = data_points.points.offset(-config.origin.x, -config.origin.y)
         log(f"[{point_source.name}] {len(points)} lidar points around {len(in_area)} footprints")
+    imagery: Imagery | None = None
+    if imagery_source is not None:
+        data_imagery = load_bounded(imagery_source, world_area)
+        files += data_imagery.files
+        imagery = data_imagery.imagery
+        if imagery is not None:
+            log(f"[{imagery_source.name}] {len(imagery.files)} orthophoto file(s) for the area")
+    else:
+        log("no enabled source provides imagery; building without debug orthophoto textures")
+
     reasons = Counter(s.reason.split(":")[0] for s in skipped)
     report: dict[str, Any] = {
         "area": area.name,
@@ -200,6 +221,7 @@ def run_load(
             "osm_vector": vector_source.name if vector_source else None,
             "buildings_3d": buildings_3d_source.name if buildings_3d_source else None,
             "point_cloud": point_source.name if point_source else None,
+            "imagery": imagery_source.name if imagery_source else None,
         },
         "files_read": sorted(_rel(p, raw_dir) for p in files),
         "footprints": {
@@ -215,6 +237,11 @@ def run_load(
             "points": len(points) if points is not None else 0,
             "bounds_world": point_bounds.as_list() if point_bounds else None,
             "params": lidar_params.as_dict() if lidar_params else None,
+        },
+        "imagery": {
+            "source": imagery_source.name if imagery_source else None,
+            "files": sorted(_rel(p, raw_dir) for p in imagery.files) if imagery else [],
+            "m_per_px": imagery.resolution_m if imagery else None,
         },
         "skipped_reasons": dict(sorted(reasons.items())),
         "skipped": [{"id": s.id, "reason": s.reason} for s in skipped],
@@ -251,6 +278,7 @@ def run_load(
         points=points,
         lidar_source=point_source.name if point_source else None,
         lidar_params=lidar_params,
+        imagery=imagery,
     )
 
 

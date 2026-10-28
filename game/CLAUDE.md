@@ -49,14 +49,22 @@ Building with `-c ExportRelease` or `ExportDebug` re-restores the shared `obj/` 
 - Map materials: `MapLoader` sets `TerrainMaterial` on each tile's `terrain` mesh and `BuildingMaterial` on every `bld_` mesh. Both default to the placeholders in `materials/placeholder/` (`terrain.tres`; `building.tres` with `building.gdshader`, which colours up-facing faces as roof). Replace that folder, or set the two exports, when the art-direction palette exists. Lighting (sun energy and shadow distance, ambient energy, AgX tone mapping, exposure) is exported on `World`.
 - `[importer_defaults]` in `project.godot` sets every scene import to name suffixes on, mesh compression off, LODs off, shadow meshes on and static light baking. A hand-made `.glb` added later gets these too; correct its import settings and commit its `.import` file.
 
+## Orthophoto debug view
+
+- F2 (`debug_orthophoto`, physical key) switches every loaded tile's terrain between `MapLoader.TerrainMaterial` and an unshaded material with that tile's aerial image (`scripts/debug/OrthophotoDebugView.cs`). Unshaded, because the photo already contains the sun's shading. While it is on, the bottom-right corner shows the attribution and licence of every manifest credit with source `mml_orthophoto` (`MapManifest.Credits`); the text always comes from the manifest.
+- Debug builds only: `World` adds the view when `OS.IsDebugBuild()`.
+- The images are `res://maps/<id>/debug/orthophoto/<tile_id>.jpg`, about 512x512, written by the pipeline with a `.gdignore` in `debug/`, so Godot never imports or exports them. The view reads them from disk with `Image.LoadFromFile` on the first switch-on (with mipmaps, cached until the map reloads). A tile without an image keeps the placeholder; with no images at all it shows "No orthophoto in this pack; run /regen-map <id>" and stays off.
+- Don't add an export filter that includes `maps/*/debug/`: the files are debug-only, and the `.gdignore` is what keeps them out of the import cache and exports.
+
 ## Screenshots
 
-`godot --path game --resolution 1600x900 -- --screenshot <preset> <out.png> [--presets <file>] [--map <map-id>]`, run from the repo root (`/verify` runs it for every preset in the pack, with `--map "$MAP_ID"`).
+`godot --path game --resolution 1600x900 -- --screenshot <preset> <out.png> [--presets <file>] [--map <map-id>] [--orthophoto]`, run from the repo root (`/verify` runs it for every preset in the pack, with `--map "$MAP_ID"`).
 
 - `--map <map-id>` renders that pack instead of the one in the `roadman/map/id` project setting: the tool sets `MapLoader.MapId` before the map loads. The id must be a lowercase slug (the pipeline's `SLUG_PATTERN`).
+- `--orthophoto` renders with the orthophoto debug view on (see "Orthophoto debug view"). Its attribution overlay is moved into the capture `SubViewport`, so it is in the image (a `CanvasLayer` draws only in its own viewport). A pack without orthophoto images, or a build without the view (not a debug build), exits 1.
 - Presets come from the rendered pack's `camera_presets.json`, or from `--presets <file>` (handy for trying a preset before it is in the pipeline). The reader follows the pipeline's rules: unknown or repeated keys, an empty `presets`, duplicate or non-slug preset names and `null` for `fov` or `ground_relative` are errors. A relative output or presets path resolves against the shell's working directory (`$PWD`), not `res://`: Godot changes into the project folder for `--path`. Where `PWD` isn't set (Windows `cmd`, PowerShell), pass absolute paths.
 - The image comes from its own 1600x900 `SubViewport` (`ScreenshotTool.ImageSize`), so it doesn't depend on the window size, display scaling or window position. `--resolution` only sizes the window.
-- Exit codes: 0 saved, 1 error (bad arguments, unknown preset, missing pack or presets file, a map that failed to load or loaded fewer tiles than the manifest lists, `--headless`, flat-colour image), 2 the whole map loaded but the ground-relative preset has no terrain under it (prints `N/A: outside built area`, writes no PNG).
+- Exit codes: 0 saved, 1 error (bad arguments, unknown preset, missing pack or presets file, a map that failed to load or loaded fewer tiles than the manifest lists, `--headless`, flat-colour image, `--orthophoto` without orthophoto images), 2 the whole map loaded but the ground-relative preset has no terrain under it (prints `N/A: outside built area`, writes no PNG).
 - `--headless` disables rendering, so the tool refuses to run under it.
 - The flat-colour check catches an empty or cleared image, not a camera below the terrain: the terrain is one-sided, so from below it is invisible and the image shows the underside of the buildings.
 

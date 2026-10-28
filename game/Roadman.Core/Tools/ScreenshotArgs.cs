@@ -4,7 +4,7 @@ namespace Roadman.Core.Tools;
 
 /// <summary>
 /// The screenshot tool's user arguments (after <c>--</c> on the Godot command line):
-/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;]</c>.
+/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto]</c>.
 /// </summary>
 /// <param name="Preset">Camera preset name.</param>
 /// <param name="OutputPath">PNG to write, as given; resolve it with <see cref="OutputPath.Resolve"/>.</param>
@@ -13,11 +13,23 @@ namespace Roadman.Core.Tools;
 /// Optional map pack to render instead of the one in the project setting; its <c>camera_presets.json</c> is read
 /// too (unless <paramref name="PresetsPath"/> is given). A slug, like every map id.
 /// </param>
-public sealed record ScreenshotArgs(string Preset, string OutputPath, string? PresetsPath, string? MapId = null)
+/// <param name="Orthophoto">
+/// Render with the orthophoto debug view on, including its attribution overlay. The pack must have orthophoto images.
+/// </param>
+public sealed record ScreenshotArgs(
+    string Preset,
+    string OutputPath,
+    string? PresetsPath,
+    string? MapId = null,
+    bool Orthophoto = false)
 {
     public const string ScreenshotFlag = "--screenshot";
     public const string PresetsFlag = "--presets";
     public const string MapFlag = "--map";
+    public const string OrthophotoFlag = "--orthophoto";
+
+    private const string Usage =
+        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}]";
 
     /// <summary>
     /// Parses the user arguments.
@@ -45,6 +57,7 @@ public sealed record ScreenshotArgs(string Preset, string OutputPath, string? Pr
         string? mapId = null;
         var seenPresets = false;
         var seenMap = false;
+        var orthophoto = false;
 
         for (var i = 0; i < userArgs.Count; i++)
         {
@@ -84,9 +97,16 @@ public sealed record ScreenshotArgs(string Preset, string OutputPath, string? Pr
                     }
 
                     break;
+                case OrthophotoFlag:
+                    if (orthophoto)
+                    {
+                        throw new ArgumentException($"{OrthophotoFlag} is given more than once");
+                    }
+
+                    orthophoto = true;
+                    break;
                 default:
-                    throw new ArgumentException(
-                        $"unexpected argument '{userArgs[i]}'; usage: {ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>]");
+                    throw new ArgumentException($"unexpected argument '{userArgs[i]}'; usage: {Usage}");
             }
         }
 
@@ -95,7 +115,7 @@ public sealed record ScreenshotArgs(string Preset, string OutputPath, string? Pr
             throw new ArgumentException($"the output path '{output}' must end in .png");
         }
 
-        return new ScreenshotArgs(preset!, output, presetsPath, mapId);
+        return new ScreenshotArgs(preset!, output, presetsPath, mapId, orthophoto);
     }
 
     private static string Value(IReadOnlyList<string> args, int index, string error)
@@ -117,7 +137,7 @@ public static class ScreenshotExitCode
 
     /// <summary>
     /// Any failure: bad arguments, unknown preset, missing pack, a map that didn't load completely, headless
-    /// display, flat-colour image.
+    /// display, flat-colour image, or <c>--orthophoto</c> without orthophoto images in the pack.
     /// </summary>
     public const int Error = 1;
 

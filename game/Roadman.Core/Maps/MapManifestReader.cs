@@ -5,9 +5,10 @@ namespace Roadman.Core.Maps;
 /// <summary>
 /// Parses and checks a map pack's <c>manifest.json</c>. Any problem throws a <see cref="MapPackException"/>
 /// that names the field: a schema version other than <see cref="SupportedSchemaVersion"/>, a missing or
-/// mistyped field, axes other than east/up/−north, a duplicate or malformed tile id, or a tile path that is
-/// absolute or leaves the pack folder.
-/// Fields the game doesn't use (credits, CRS, build time) are not checked; the pipeline validates them.
+/// mistyped field, axes other than east/up/−north, a duplicate or malformed tile id, a tile path that is
+/// absolute or leaves the pack folder, or a credit that isn't exactly the five string fields of the pipeline's
+/// <c>PackCredit</c>. <c>credits</c> is required, as in the pipeline's schema; it may be empty.
+/// Fields the game doesn't use (CRS, build time) are not checked; the pipeline validates them.
 /// </summary>
 public static partial class MapManifestReader
 {
@@ -16,6 +17,8 @@ public static partial class MapManifestReader
     /// <summary>The axes every v1 pack uses: local east is +X, up is +Y and north is −Z (ADR 0006).</summary>
     public static readonly IReadOnlyDictionary<string, string> ExpectedAxes =
         new Dictionary<string, string> { ["x"] = "east", ["y"] = "up", ["z"] = "-north" };
+
+    private static readonly string[] CreditFields = ["source", "dataset", "licence", "attribution", "retrieved_at"];
 
     /// <param name="json">The file's contents.</param>
     /// <param name="source">Name used in error messages, usually the file path.</param>
@@ -78,7 +81,33 @@ public static partial class MapManifestReader
             index++;
         }
 
-        return new MapManifest(version, mapId, displayName, area, origin, tileSize, tiles);
+        var credits = new List<MapCredit>();
+        index = 0;
+        foreach (var element in PackJson.Array(root, "credits", source, "").EnumerateArray())
+        {
+            var path = $"credits[{index}]";
+            if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                throw PackJson.Error(source, path, "must be an object");
+            }
+
+            credits.Add(ParseCredit(element, source, path));
+            index++;
+        }
+
+        return new MapManifest(version, mapId, displayName, area, origin, tileSize, tiles, credits);
+    }
+
+    /// <summary>A credit follows the pipeline's <c>PackCredit</c>: five required strings, no other keys.</summary>
+    private static MapCredit ParseCredit(System.Text.Json.JsonElement element, string source, string path)
+    {
+        PackJson.RejectUnknown(element, source, path, CreditFields);
+        return new MapCredit(
+            PackJson.String(element, "source", source, path),
+            PackJson.String(element, "dataset", source, path),
+            PackJson.String(element, "licence", source, path),
+            PackJson.String(element, "attribution", source, path),
+            PackJson.String(element, "retrieved_at", source, path));
     }
 
     private static void CheckAxes(System.Text.Json.JsonElement axes, string source)

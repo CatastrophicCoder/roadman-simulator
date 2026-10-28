@@ -101,6 +101,53 @@
       "origin": "downloaded"
     },
     {
+      "path": "mml/orthophoto/L4212A.jp2",
+      "source": "mml_orthophoto",
+      "dataset": "Orthophoto",
+      "request": {
+        "service": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/",
+        "process_id": "ortoilmakuva_karttalehti",
+        "inputs": {
+          "mapSheetInput": [
+            "L4211B",
+            "L4212A"
+          ],
+          "fileFormatInput": "JPEG2000",
+          "dataSetInput": "ortokuva",
+          "yearInput": 9999
+        },
+        "job_id": "5bc6836f-023e-4544-b91b-16a90d7c3515",
+        "result": {
+          "url": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/dl/v1/5bc6836f-023e-4544-b91b-16a90d7c3515/2024/L4212A.jp2",
+          "format": "JPEG2000",
+          "crs": "etrs-tm35fin",
+          "yearOfPhotography": "2024",
+          "lastModified": "2024-11-05T06:20:26.279567Z",
+          "dataset": "orto",
+          "mimeType": "image/jp2",
+          "length": "107982435",
+          "mapSheetNumber": "L4212A"
+        },
+        "test_area_cut": {
+          "bounds": [
+            309507.0,
+            6726466.0,
+            309807.0,
+            6726766.0
+          ],
+          "jp2_quality": 15,
+          "source_size": 107982435,
+          "source_sha256": "afb7f55e852e9066662da4f82f55f21144e0a9891dd466832660527a802d394d"
+        }
+      },
+      "retrieved_at": "2026-10-27T14:36:09Z",
+      "size": 164465,
+      "sha256": "3ed954b41e72c5fbfd29646326b1e796af100694abaa6270e53b1b2b60560222",
+      "licence": "CC BY 4.0",
+      "attribution": "Contains data from the National Land Survey of Finland Orthophoto, 10/2026",
+      "origin": "downloaded"
+    },
+    {
       "path": "osm/somero.osm",
       "source": "osm",
       "dataset": "OpenStreetMap",

@@ -8,8 +8,9 @@ Without a key, each MML source prints the manual download steps for MML's
 Karttapaikka file service and registers any files already in its raw folder.
 
 For builds, the DEM adapter loads its GeoTIFFs (mosaicked and warped to the map CRS),
-the lidar adapter loads the non-ground points of its LAZ files, and the 3D buildings
-adapter is a stub until its file format is confirmed.
+the lidar adapter loads the non-ground points of its LAZ files, the orthophoto adapter
+lists the image files that overlap the area (the build reads them per tile for the debug
+textures), and the 3D buildings adapter is a stub until its file format is confirmed.
 """
 
 import re
@@ -33,6 +34,7 @@ from rasterio.io import DatasetReader
 from rasterio.merge import merge
 from rasterio.transform import Affine
 from rasterio.vrt import WarpedVRT
+from rasterio.warp import transform_bounds
 
 from mapgen import tm35
 from mapgen.geo import BBox, projected_bbox
@@ -40,11 +42,13 @@ from mapgen.http import HttpError, redact, with_query_param
 from mapgen.sources.base import (
     BUILDINGS_3D,
     ELEVATION,
+    IMAGERY,
     POINT_CLOUD,
     AdapterOptions,
     DownloadContext,
     DownloadedFile,
     ElevationRaster,
+    Imagery,
     LoadContext,
     PointCloud,
     SourceAdapter,
@@ -639,19 +643,74 @@ class MmlSheetAdapter(MmlProcessAdapter):
 LATEST_YEAR = 9999  # MML yearInput: 9999 returns the latest year, 0 every year
 
 
+# The debug orthophoto textures' resolution in metres per pixel: the source's 0.5 m down
+# to 1.0 m (a quarter of the pixels).
+DEBUG_TEXTURE_MIN_M_PER_PX = 0.5
+DEBUG_TEXTURE_MAX_M_PER_PX = 1.0
+IMAGE_SUFFIXES = frozenset({".jp2", ".tif", ".tiff"})
+
+
 class OrthophotoOptions(MmlSheetOptions):
     year: int = LATEST_YEAR
     file_format: str = "JPEG2000"
     dataset: str = "ortokuva"
+    # Build only: resolution of the per-tile debug textures (`debug/orthophoto/`).
+    debug_texture_m_per_px: float = Field(
+        default=DEBUG_TEXTURE_MIN_M_PER_PX,
+        ge=DEBUG_TEXTURE_MIN_M_PER_PX,
+        le=DEBUG_TEXTURE_MAX_M_PER_PX,
+    )
+
+
+def raster_bounds_in(path: Path, target_crs: str) -> BBox:
+    """A raster file's bounds in `target_crs` (transformed when its CRS differs)."""
+    with rasterio.open(path) as src:
+        if src.crs is None:
+            raise SourceLoadError(f"{path} has no CRS")
+        bounds = tuple(src.bounds)
+        if not same_raster_crs(src.crs, target_crs):
+            bounds = transform_bounds(src.crs, target_crs, *bounds, densify_pts=21)
+    return BBox(*bounds)
 
 
 class MmlOrthophotoAdapter(MmlSheetAdapter):
     name = "mml_orthophoto"
     Options = OrthophotoOptions
-    dataset_name = "NLS orthophotos"
+    dataset_name = "Orthophoto"
     product_name = "Ortokuva (Orthophoto)"
     layer = "orthophoto"
     default_process_id = "ortoilmakuva_karttalehti"
+    provides = frozenset({IMAGERY})
+
+    def load(self, ctx: LoadContext) -> SourceData:
+        """The image files that overlap `ctx.bounds`; the build reads them per tile.
+
+        Missing files are not an error: the orthophoto only feeds the debug textures, so
+        the build goes on without them (`imagery` is None).
+        """
+        options = ctx.options
+        assert isinstance(options, OrthophotoOptions)
+        folder = ctx.raw_dir / "mml" / self.layer
+        files = [p for p in list_files(folder) if p.suffix.lower() in IMAGE_SUFFIXES]
+        if not files:
+            ctx.log(
+                f"[{ctx.source_name}] no orthophoto files in {folder}; building without "
+                f"debug orthophoto textures (run `mapgen download {ctx.map_config.id} "
+                f"--only {ctx.source_name}` to add them)"
+            )
+            return SourceData()
+        overlapping: list[Path] = []
+        for path in files:
+            try:
+                bounds = raster_bounds_in(path, ctx.target_crs)
+            except (RasterioError, OSError) as exc:
+                raise SourceLoadError(f"[{ctx.source_name}] cannot read {path}: {exc}") from exc
+            if bounds.intersects(ctx.bounds):
+                overlapping.append(path)
+        return SourceData(
+            files=overlapping,
+            imagery=Imagery(tuple(overlapping), options.debug_texture_m_per_px),
+        )
 
     def extra_inputs(self, options: MmlSheetOptions) -> dict[str, Any]:
         assert isinstance(options, OrthophotoOptions)

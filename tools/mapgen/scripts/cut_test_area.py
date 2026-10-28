@@ -13,6 +13,8 @@ copied in as the raw folder):
 - GeoTIFF: the test area plus stage 1's DEM margin, rounded outward to the cell grid,
   deflate-compressed.
 - LAS/LAZ: every point (all classes) inside the bounds stage 1 requests for the points.
+- JPEG 2000 (orthophoto): the test area, rounded outward to the pixel grid, re-encoded
+  lossy at `JP2_QUALITY` percent of the uncompressed size to keep the fixture small.
 
 It also writes `download-manifest.json` (the real entries, with the size and checksum of
 the cut files) and `NOTICE.md` with the attributions. Each entry's MML `result` record keeps
@@ -32,7 +34,9 @@ from typing import Any
 import laspy
 import numpy as np
 import rasterio
+from rasterio.io import DatasetReader
 from rasterio.windows import Window, from_bounds
+from rasterio.windows import bounds as window_bounds
 
 from mapgen import paths
 from mapgen.build.area import build_area, to_world
@@ -61,6 +65,7 @@ RESULT_FIELDS = (
     "pointDensity",
     "elevationSystem",
     "elevationPrecision",
+    "yearOfPhotography",
 )
 LICENCE_LINKS = {
     "ODbL 1.0": "https://opendatacommons.org/licenses/odbl/1-0/",
@@ -69,6 +74,8 @@ LICENCE_LINKS = {
 OSM_COPYRIGHT = "https://www.openstreetmap.org/copyright"
 TIFF_SUFFIXES = {".tif", ".tiff"}
 LAZ_SUFFIXES = {".laz", ".las"}
+JP2_SUFFIXES = {".jp2"}
+JP2_QUALITY = 15  # GDAL JP2OpenJPEG QUALITY: compressed size as % of uncompressed
 
 
 def cut_osm(source: Path, dest: Path, footprint_ids: set[str]) -> None:
@@ -103,16 +110,21 @@ def cut_osm(source: Path, dest: Path, footprint_ids: set[str]) -> None:
         handle.write("\n")
 
 
+def snapped_window(src: DatasetReader, bounds: BBox) -> Window:
+    """The whole cells covering `bounds` (rounded outward to the grid), inside the raster."""
+    window = from_bounds(*bounds.as_list(), transform=src.transform)
+    col0, row0 = int(np.floor(window.col_off)), int(np.floor(window.row_off))
+    col1 = int(np.ceil(window.col_off + window.width))
+    row1 = int(np.ceil(window.row_off + window.height))
+    col0, row0 = max(col0, 0), max(row0, 0)
+    col1, row1 = min(col1, src.width), min(row1, src.height)
+    return Window(col0, row0, col1 - col0, row1 - row0)
+
+
 def cut_geotiff(source: Path, dest: Path, bounds: BBox) -> None:
     """The cells covering `bounds` (rounded outward to the grid), deflate-compressed."""
     with rasterio.open(source) as src:
-        window = from_bounds(*bounds.as_list(), transform=src.transform)
-        col0, row0 = int(np.floor(window.col_off)), int(np.floor(window.row_off))
-        col1 = int(np.ceil(window.col_off + window.width))
-        row1 = int(np.ceil(window.row_off + window.height))
-        col0, row0 = max(col0, 0), max(row0, 0)
-        col1, row1 = min(col1, src.width), min(row1, src.height)
-        snapped = Window(col0, row0, col1 - col0, row1 - row0)
+        snapped = snapped_window(src, bounds)
         data = src.read(1, window=snapped)
         profile = {
             "driver": "GTiff",
@@ -130,6 +142,34 @@ def cut_geotiff(source: Path, dest: Path, bounds: BBox) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(dest, "w", **profile) as out:
         out.write(data, 1)
+
+
+def cut_jp2(source: Path, dest: Path, bounds: BBox) -> list[float]:
+    """The pixels covering `bounds` (all bands), re-encoded as lossy JPEG 2000.
+
+    Returns the cut's bounds. Fails when the cut is empty.
+    """
+    with rasterio.open(source) as src:
+        snapped = snapped_window(src, bounds)
+        if snapped.width <= 0 or snapped.height <= 0:
+            raise SystemExit(f"{source} doesn't overlap {bounds.as_list()}")
+        data = src.read(window=snapped)
+        transform = src.window_transform(snapped)
+        profile = {
+            "driver": "JP2OpenJPEG",
+            "dtype": src.dtypes[0],
+            "width": snapped.width,
+            "height": snapped.height,
+            "count": src.count,
+            "crs": src.crs,
+            "transform": transform,
+            "QUALITY": str(JP2_QUALITY),
+        }
+        cut_bounds = list(window_bounds(snapped, src.transform))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(dest, "w", **profile) as out:
+        out.write(data)
+    return [float(v) for v in cut_bounds]
 
 
 def cut_laz(source: Path, dest: Path, bounds: BBox) -> int:
@@ -202,7 +242,8 @@ def _notice(map_id: str, entries: list[dict[str, Any]]) -> str:
         "downloaded files listed in `download-manifest.json` to what a test-area build reads: "
         "OSM building footprints whose centroid is in the test area with their ways and nodes "
         "(contributor metadata removed), the elevation model around the test area, and the "
-        "laser scanning points around those footprints. Each manifest entry records the "
+        "laser scanning points around those footprints, and the orthophoto over the test "
+        "area (re-encoded lossy to keep it small). Each manifest entry records the "
         "cut bounds and the checksum of the original file.",
         "",
     ]
@@ -248,6 +289,8 @@ def cut_test_area(config: MapConfig, raw_dir: Path, out_dir: Path) -> dict[str, 
                 dest.unlink()
                 continue
             cut = {"bounds": point_bounds.as_list(), "points": points}
+        elif suffix in JP2_SUFFIXES:
+            cut = {"bounds": cut_jp2(source, dest, world), "jp2_quality": JP2_QUALITY}
         else:
             raise SystemExit(f"don't know how to cut {rel}")
         written.append(_entry(entries[rel], dest, rel, cut))
