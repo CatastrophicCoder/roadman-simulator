@@ -398,7 +398,7 @@ Settle the trademark and attribution items before the first public build. This i
 
 - [ ] Title "Roadman Simulator: Somero-City" checked in EUIPO eSearch and TMview (classes 9 and 41) and on Steam and itch.io; logo and UI designed independently, not imitating any existing game's style.
 - [ ] Credits screen and `CREDITS.md`: "© OpenStreetMap contributors" (ODbL), plus MML attribution with source, dataset and date as MML's CC BY 4.0 terms specify.
-- [ ] Godot's MIT licence text and its third-party licences included in the game (Godot can output them at runtime).
+- [x] Godot's MIT licence text and its third-party licences included in the game (Godot can output them at runtime). Each release zip has them in `licenses/`, with the .NET runtime's and every shipped NuGet package's licence (ADR 0010).
 - [ ] Licence of every add-on and asset recorded in `CREDITS.md`.
 - [ ] Real business names and logos from OSM replaced with fictional ones.
 

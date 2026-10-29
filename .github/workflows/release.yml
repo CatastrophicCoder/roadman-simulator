@@ -147,6 +147,7 @@ jobs:
           rm "$out/RoadmanSimulator-macos.zip"
           for d in windows macos; do
             cp CREDITS.md "$RUNNER_TEMP/maps/dist/NOTICE.txt" "$out/$d/"
+            python3 -I .claude/scripts/collect-licenses.py "$out/$d"
           done
 
       - name: Check exported builds

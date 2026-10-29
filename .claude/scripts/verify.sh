@@ -132,6 +132,7 @@ else
     run_with_timeout "${GODOT_EXPORT_TIMEOUT:-900}" "$LOGS/export-windows.log" \
       "$GODOT_BIN" --headless --path "$ROOT/game" --export-release "Windows Desktop" "$out/RoadmanSimulator.exe" &&
       cp "$ROOT/CREDITS.md" "$out/" &&
+      python3 -I "$ROOT/.claude/scripts/collect-licenses.py" "$out" &&
       (cd "$ROOT" && uv run --project "$MAPGEN" mapgen notice "${maps[@]}" --out "$out/NOTICE.txt") &&
       "$ROOT/.claude/scripts/check-export.sh" "$out"
   } >"$log" 2>&1; then

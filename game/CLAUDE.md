@@ -74,7 +74,7 @@ Building with `-c ExportRelease` or `ExportDebug` re-restores the shared `obj/` 
 
 ## Export
 
-`game/export_presets.cfg` has two presets with no credentials: "Windows Desktop" (x86_64, PCK embedded) and "macOS" (universal, ad-hoc signed). Both exclude `addons/gdUnit4/*`, `tests/*` and `gdunit4_testadapter_v*/*` (ADR 0010). Export needs the .NET export templates; `.claude/scripts/check-export.sh <build-dir>` checks a build folder that also holds `NOTICE.txt` (`mapgen notice`) and `CREDITS.md`.
+`game/export_presets.cfg` has two presets with no credentials: "Windows Desktop" (x86_64, PCK embedded) and "macOS" (universal, ad-hoc signed). Both exclude `addons/gdUnit4/*`, `tests/*` and `gdunit4_testadapter_v*/*` (ADR 0010). Export needs the .NET export templates; `.claude/scripts/check-export.sh <build-dir>` checks a build folder that also holds `NOTICE.txt` (`mapgen notice`), `CREDITS.md` and `licenses/` (`python3 -I .claude/scripts/collect-licenses.py <build-dir>`).
 
 ```sh
 godot --headless --path game --export-release "Windows Desktop" "$PWD/build/export/windows/RoadmanSimulator.exe"

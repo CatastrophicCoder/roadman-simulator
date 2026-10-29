@@ -49,7 +49,11 @@ This game uses the Godot Engine, available under the MIT licence.
 Copyright (c) 2014-present Godot Engine contributors. Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.
 https://godotengine.org/license
 
-TODO: include the full MIT text and Godot's third-party licences in the game (Godot can output them at runtime).
+Each release zip has a `licenses/` folder with the third-party licence texts of the exact versions in that build (`.claude/scripts/collect-licenses.py`, ADR 0010):
+
+- `godot-<version>/`: Godot's `LICENSE.txt`, `COPYRIGHT.txt` (the engine's third-party components with their licence texts) and `AUTHORS.md`, from the Godot repository at the release commit.
+- `<package>-<version>/` for every NuGet package the export ships: the .NET runtime packs (`Microsoft.NETCore.App.Runtime.<rid>`, MIT, with `THIRD-PARTY-NOTICES.TXT`) and `GodotSharp` (MIT; the package has no licence file, so it gets Godot's `LICENSE.txt` from the same commit).
+- `README.txt`: what each folder is and where it came from.
 
 ## Add-ons
 

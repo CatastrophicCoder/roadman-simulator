@@ -7,6 +7,9 @@
 # plus NOTICE.txt and CREDITS.md. Fails if:
 # - NOTICE.txt or CREDITS.md is missing, or NOTICE.txt lacks a credit line of a
 #   pack in game/maps/ (checked by `mapgen notice --check`);
+# - licenses/ lacks Godot's LICENSE.txt, COPYRIGHT.txt or AUTHORS.md, the licence of
+#   a NuGet package in the build's *.deps.json, or a runtime pack's third-party notices
+#   (written by collect-licenses.py);
 # - an exported game assembly contains test code (check-release-assembly.cs), or
 #   test framework files were exported;
 # - the PCK lists a file from game/tests/ or game/addons/gdUnit4/;
@@ -40,6 +43,52 @@ elif [ -s "$DIR/NOTICE.txt" ]; then
   else
     fail "NOTICE.txt credits: $(echo "$out" | tail -3 | tr '\n' ' ')"
   fi
+fi
+
+# Third-party licences (collect-licenses.py): Godot's texts for the csproj's Godot
+# version, and a licence for every NuGet package the build's *.deps.json files list,
+# with the third-party notices for each .NET runtime pack.
+godot_version="$(sed -n 's|.*Sdk="Godot\.NET\.Sdk/\([0-9.]*\)".*|\1|p' "$ROOT/game/RoadmanSimulator.csproj")"
+if out="$(python3 -I - "$DIR" "$godot_version" <<'EOF'
+import json, sys
+from pathlib import Path
+build, version = Path(sys.argv[1]), sys.argv[2]
+lic = build / "licenses"
+problems = []
+def nonempty(path):
+    return path.is_file() and path.stat().st_size > 0
+if not nonempty(lic / "README.txt"):
+    problems.append("licenses/README.txt")
+godot = lic / f"godot-{version}"
+for name, marker in [("LICENSE.txt", "Godot Engine contributors"), ("COPYRIGHT.txt", "Files: thirdparty/"), ("AUTHORS.md", "")]:
+    path = godot / name
+    if not nonempty(path) or marker not in path.read_text(errors="replace"):
+        problems.append(f"licenses/godot-{version}/{name}")
+count = 0
+for deps in sorted(build.rglob("*.deps.json")):
+    for key, library in json.loads(deps.read_text())["libraries"].items():
+        if library["type"] == "project":
+            continue
+        name, ver = key.split("/", 1)
+        name = name.removeprefix("runtimepack.")
+        folder = lic / f"{name}-{ver}"
+        names = [p.name.lower() for p in folder.iterdir() if nonempty(p)] if folder.is_dir() else []
+        if not any("licen" in n for n in names):
+            problems.append(f"licence of {name} {ver}")
+        if library["type"] == "runtimepack" and "third-party-notices.txt" not in names:
+            problems.append(f"third-party notices of {name} {ver}")
+        count += 1
+if count == 0:
+    problems.append("no NuGet packages found in *.deps.json")
+if problems:
+    print("missing: " + ", ".join(sorted(set(problems))))
+    sys.exit(1)
+print(f"Godot {version} and {count} package(s)")
+EOF
+)"; then
+  pass "licenses/ has $out"
+else
+  fail "licenses/ $out"
 fi
 
 # Platform layout
