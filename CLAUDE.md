@@ -43,7 +43,7 @@ CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull requ
 - External data is fetched once. Builds, `/verify`, `/regen-map` and `mapgen snapshot create` use only the local data in `tools/mapgen/data/raw/<map-id>/` and never contact Overpass or MML. Never run `mapgen download` or any other external data fetch unless the user explicitly asks. `mapgen snapshot fetch` is for fresh clones and CI and never replaces local data without `--force`. Never run `mapgen snapshot publish` without asking first (ADR 0011).
 - Ask before adding any dependency (NuGet, Python package, Godot add-on, GitHub Action).
 - No other games' names or trademarks in code, assets or text.
-- Real business names and logos from OSM are replaced with fictional ones.
+- Map packs store real names from OSM (streets, buildings, points of interest). How real business names are shown in the game (real, fictional replacements or generic labels) is an open decision. Logos are never used.
 - Record new decisions as ADRs in `docs/decisions/`.
 - Record the licence of every new asset or add-on in `CREDITS.md`.
 - Commit messages and pull request descriptions describe only the change itself. No `Co-Authored-By` trailers, "Generated with" lines or any other mention of Claude or AI tools.
