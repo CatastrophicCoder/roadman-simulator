@@ -21,17 +21,13 @@ from mapgen.build.pack_manifest import (
     PackManifest,
     validate_manifest_file,
 )
+from mapgen.licences import LICENCE_URLS as LICENCE_URLS  # the one table
 
 HEADING = "THIRD-PARTY MAP DATA NOTICES"
 MODIFIED = (
     "The data listed below was modified: it was reprojected, cut to the map area and "
     "processed into 3D map tiles."
 )
-# Licence names as adapters record them in the download manifest -> licence text URL.
-LICENCE_URLS: dict[str, str] = {
-    "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
-    "ODbL 1.0": "https://opendatacommons.org/licenses/odbl/1-0/",
-}
 
 
 class NoticeError(Exception):

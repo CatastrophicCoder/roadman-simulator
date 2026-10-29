@@ -320,7 +320,7 @@ def somero_release(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_somero_release_build_has_no_orthophoto(somero_release: Path) -> None:
     pack = somero_release / "game" / "maps" / "somero"
     assert not (pack / "debug").exists()
-    assert _credit_sources(pack) == {"osm", "mml_dem_2m", "mml_lidar"}
+    assert _credit_sources(pack) == {"osm", "mml_dem_2m", "mml_lidar", "mml_topographic"}
     assert (pack / "camera_presets.json").is_file()
 
 

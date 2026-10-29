@@ -236,6 +236,8 @@ class Building:
     tags: Mapping[str, str] = field(default_factory=dict)
     problems: tuple[str, ...] = ()
     lidar: LidarResult | None = None  # None when the build has no point cloud source
+    # Place fields (category, names, address, POI links, MML match), from `build.places`.
+    place: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.height_m) and self.height_m > 0):
@@ -291,6 +293,7 @@ class Building:
             "roof_shape": "flat",
             "roof_shape_source": "default",
             **self.lidar_provenance(),
+            **self.place,
         }
 
 

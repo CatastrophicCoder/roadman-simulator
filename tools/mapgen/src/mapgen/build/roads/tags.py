@@ -6,11 +6,13 @@ mapping (`service=driveway` -> `driveway`) is OSM's.
 """
 
 import re
-import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+# The shared name format (`mapgen.build.names`), re-exported for the road code.
+from mapgen.build.names import name_fields as name_fields
+from mapgen.build.names import name_value as name_value
 from mapgen.config import RoadClassConfig, RoadsConfig
 
 Source = Literal["osm", "default"]
@@ -104,23 +106,6 @@ def parse_oneway(tags: Mapping[str, str]) -> int:
     if tags.get("junction") == "roundabout" and value != "no":
         return 1
     return 0
-
-
-def name_value(value: str | None) -> str | None:
-    """A name tag trimmed and NFC-normalised; None when missing or empty."""
-    if value is None:
-        return None
-    text = unicodedata.normalize("NFC", value.strip())
-    return text or None
-
-
-def name_fields(tags: Mapping[str, str]) -> dict[str, str | None]:
-    """The shared name format: `name`, `name_sv` and `ref`, always present."""
-    return {
-        "name": name_value(tags.get("name")),
-        "name_sv": name_value(tags.get("name:sv")),
-        "ref": name_value(tags.get("ref")),
-    }
 
 
 def access_flags(

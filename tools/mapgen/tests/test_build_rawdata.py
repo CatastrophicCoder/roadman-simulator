@@ -237,3 +237,49 @@ def test_ac19_fixture_has_every_highway_way_touching_the_test_area(tmp_path: Pat
         module.cut_test_area(config, RAW, out)
     recut = (out / "osm" / f"{MAP_ID}.osm").read_bytes()
     assert recut == (fixture / "osm" / f"{MAP_ID}.osm").read_bytes()
+
+
+# docs/specs/place-information.md
+
+# The full build's counts as the implementation reported them (place-information spec,
+# criterion 5; compared there with the "Expected categories" preview).
+FULL_MATCHED = 1795
+FULL_CATEGORY_COUNTS = {
+    "residential": 1416,
+    "garage_or_shed": 243,
+    "industrial": 76,
+    "unknown": 43,
+    "commercial": 26,
+    "retail": 22,
+    "agricultural": 5,
+    "public": 4,
+    "religious": 3,
+    "education": 3,
+    "other": 0,
+}
+FULL_SOURCE_COUNTS = {
+    "mml_use_class": 1155,
+    "osm_landuse": 587,
+    "osm_building": 41,
+    "osm_poi": 15,
+    "osm_poi_area": 0,
+    "override": 0,
+    "none": 43,
+}
+
+
+def test_ac5_full_build_reports_its_mml_matches_and_category_counts(
+    request: pytest.FixtureRequest,
+) -> None:
+    """Place information, criterion 5 on the whole map (local raw data only)."""
+    if not list((RAW / "mml" / "topographic").glob("*.gpkg")):
+        pytest.skip(f"Topographic Database for {MAP_ID} not downloaded")
+    full_build: FullBuild = request.getfixturevalue("full_build")
+    report = json.loads((full_build.work / "03-buildings" / "report.json").read_text("utf-8"))
+    assert report["building_use"]["source"] == "mml_topographic"
+    assert report["building_use"]["matched_buildings"] == FULL_MATCHED
+    assert report["category_counts"] == FULL_CATEGORY_COUNTS
+    assert report["category_source_counts"] == FULL_SOURCE_COUNTS
+    buildings = json.loads((full_build.pack / "buildings.json").read_text("utf-8"))["buildings"]
+    assert sum(1 for b in buildings if b["mml_building"] is not None) == FULL_MATCHED
+    assert sum(FULL_CATEGORY_COUNTS.values()) == len(buildings)

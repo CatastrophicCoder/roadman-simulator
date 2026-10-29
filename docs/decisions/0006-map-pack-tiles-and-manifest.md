@@ -37,6 +37,15 @@ Spec: `docs/specs/building-heights.md`.
 - Lidar buildings also record `lidar_points`, `lidar_buffer_m`, `lidar_returns`, `roof_z_median` and `roof_z_p90`. A building whose lidar value was rejected records `lidar_rejected` with the reason. These are additions to `buildings.json`, not to the manifest, so the manifest schema stays at version 1.
 - The last consequence above no longer holds for Somero: about 98% of its buildings get a measured lidar height.
 
+## Amendment (2026-10-29): buildings.json schema version 2
+
+Spec: `docs/specs/place-information.md`, ADR 0013.
+
+- `buildings.json` moves to `schema_version` 2. Each entry gains the place information fields: `category`, `category_source`, `category_raw`, `name`, `name_sv`, `ref`, `name_source`, `address`, `address_source`, `poi_ids`, `area_poi_ids`, `mml_building`, `mml_overlap` and `overrides`, all always present. The version changes because readers reject unknown keys.
+- The file is now defined by a pydantic model with a committed JSON Schema (`tools/mapgen/src/mapgen/build/schemas/buildings-v2.schema.json`), validated on every write, with a test that the committed and generated schemas match. Unknown keys are errors.
+- A new `pois.json` (schema version 1, its own committed schema) sits beside it. Like `buildings.json`, neither is listed in the manifest, so the manifest stays at version 1.
+- Building overrides with a third-party licence add manifest credits (source `overrides`); the manifest schema doesn't change.
+
 ## Amendment (2026-10-28): camera presets
 
 Spec: `docs/specs/map-loading.md`.

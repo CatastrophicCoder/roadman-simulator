@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pois-v1.schema.json",
+  "$defs": {
+    "Address": {
+      "additionalProperties": false,
+      "properties": {
+        "street": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Street"
+        },
+        "housenumber": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Housenumber"
+        }
+      },
+      "required": [
+        "street",
+        "housenumber"
+      ],
+      "title": "Address",
+      "type": "object"
+    },
+    "PoiEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^osm:(node|way|relation)/[0-9]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        },
+        "name_sv": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name Sv"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ref"
+        },
+        "type": {
+          "description": "the first of shop, amenity, office, tourism, leisure",
+          "enum": [
+            "shop",
+            "amenity",
+            "office",
+            "tourism",
+            "leisure"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "subtype": {
+          "description": "that tag's value",
+          "title": "Subtype",
+          "type": "string"
+        },
+        "other_tags": {
+          "description": "further POI tags as sorted key=value strings",
+          "items": {
+            "type": "string"
+          },
+          "title": "Other Tags",
+          "type": "array"
+        },
+        "geometry": {
+          "enum": [
+            "point",
+            "area"
+          ],
+          "title": "Geometry",
+          "type": "string"
+        },
+        "position": {
+          "description": "[x, y, z] Godot local metres, y = terrain height",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Position",
+          "type": "array"
+        },
+        "outline": {
+          "anyOf": [
+            {
+              "items": {
+                "items": {
+                  "items": {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  "minItems": 4,
+                  "type": "array"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "areas: polygons of closed rings of [x, z] (exterior first); null for points",
+          "title": "Outline"
+        },
+        "address": {
+          "$ref": "#/$defs/Address"
+        },
+        "address_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "osm",
+                "building"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Address Source"
+        },
+        "building_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*/[0-9]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Building Id"
+        },
+        "contains_building_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*/[0-9]+$",
+            "type": "string"
+          },
+          "title": "Contains Building Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "name_sv",
+        "ref",
+        "type",
+        "subtype",
+        "other_tags",
+        "geometry",
+        "position",
+        "outline",
+        "address",
+        "address_source",
+        "building_id",
+        "contains_building_ids"
+      ],
+      "title": "PoiEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "map_id": {
+      "title": "Map Id",
+      "type": "string"
+    },
+    "area": {
+      "enum": [
+        "full",
+        "test"
+      ],
+      "title": "Area",
+      "type": "string"
+    },
+    "pois": {
+      "items": {
+        "$ref": "#/$defs/PoiEntry"
+      },
+      "title": "Pois",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "map_id",
+    "area",
+    "pois"
+  ],
+  "title": "PoisDocument",
+  "type": "object"
+}

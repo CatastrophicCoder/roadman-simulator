@@ -150,6 +150,12 @@ public readonly record struct RoadEdgeStep(RoadEdge Edge, bool Forward)
     public string EndNode => Forward ? Edge.To : Edge.From;
 }
 
+/// <summary>The result of <see cref="RoadGraph.NearestEdge"/>.</summary>
+/// <param name="Edge">The nearest edge.</param>
+/// <param name="Distance">3D distance in metres from the query position to <paramref name="Point"/>.</param>
+/// <param name="Point">The nearest point on the edge's polyline.</param>
+public readonly record struct RoadEdgeHit(RoadEdge Edge, double Distance, LocalPoint Point);
+
 /// <summary>
 /// The pack's <c>road_graph.json</c>: every road and path of the map as nodes and edges. Read it with
 /// <see cref="RoadGraphReader"/>, which guarantees that ids are unique and every edge's ends exist.
@@ -331,6 +337,69 @@ public sealed class RoadGraph
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// The edge (drivable or walkable, any class) whose polyline is nearest to <paramref name="position"/> in 3D, so
+    /// under a bridge the way below wins over the deck. Only edges at most <paramref name="maxDistance"/> metres away
+    /// count; on a tie the lower edge id (ordinal) wins, so a point exactly between two edges always gives the same
+    /// one. Null when no edge is that close.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxDistance"/> is negative or NaN.</exception>
+    public RoadEdgeHit? NearestEdge(LocalPoint position, double maxDistance)
+    {
+        if (double.IsNaN(maxDistance) || maxDistance < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxDistance), maxDistance, "must be 0 or more");
+        }
+
+        RoadEdge? best = null;
+        var bestPoint = default(LocalPoint);
+        var bestDistance = maxDistance * maxDistance;
+        foreach (var edge in Edges)
+        {
+            var (point, distance) = NearestOnPolyline(edge.Points, position);
+            if (distance < bestDistance
+                || (distance == bestDistance && (best is null || string.CompareOrdinal(edge.Id, best.Id) < 0)))
+            {
+                best = edge;
+                bestPoint = point;
+                bestDistance = distance;
+            }
+        }
+
+        return best is null ? null : new RoadEdgeHit(best, Math.Sqrt(bestDistance), bestPoint);
+    }
+
+    /// <summary>The point of <paramref name="points"/> nearest to <paramref name="position"/>, and its squared distance.</summary>
+    private static (LocalPoint Point, double SquaredDistance) NearestOnPolyline(IReadOnlyList<LocalPoint> points, LocalPoint position)
+    {
+        var bestPoint = points[0];
+        var bestDistance = double.PositiveInfinity;
+        for (var i = 0; i + 1 < points.Count; i++)
+        {
+            var a = points[i];
+            var b = points[i + 1];
+            var abx = b.X - a.X;
+            var aby = b.Y - a.Y;
+            var abz = b.Z - a.Z;
+            var lengthSquared = (abx * abx) + (aby * aby) + (abz * abz);
+            var t = lengthSquared > 0
+                ? Math.Clamp((((position.X - a.X) * abx) + ((position.Y - a.Y) * aby) + ((position.Z - a.Z) * abz)) / lengthSquared, 0, 1)
+                : 0;
+            var point = new LocalPoint(a.X + (t * abx), a.Y + (t * aby), a.Z + (t * abz));
+            var dx = point.X - position.X;
+            var dy = point.Y - position.Y;
+            var dz = point.Z - position.Z;
+            var distance = (dx * dx) + (dy * dy) + (dz * dz);
+            if (distance < bestDistance)
+            {
+                bestPoint = point;
+                bestDistance = distance;
+            }
+        }
+
+        return (bestPoint, bestDistance);
     }
 
     private List<RoadEdge> EdgeList(string nodeId) =>

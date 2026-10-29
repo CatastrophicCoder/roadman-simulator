@@ -114,15 +114,28 @@ def validate_manifest_file(path: Path) -> None:
 
 
 def credits_for(
-    files: Iterable[Path], raw_dir: Path, entries: Mapping[str, Mapping[str, Any]]
+    files: Iterable[Path],
+    raw_dir: Path,
+    entries: Mapping[str, Mapping[str, Any]],
+    extra: Iterable[PackCredit] = (),
 ) -> list[PackCredit]:
-    """Credits from the download manifest entries of the raw files the build read.
+    """Credits from the download manifest entries of the raw files the build read, plus
+    `extra` credits (e.g. third-party building overrides).
 
     Every read file must have an entry, so no data reaches a pack without its licence.
-    Files with the same source, dataset, licence and attribution (e.g. several DEM sheets)
-    fold into one credit with the latest `retrieved_at`.
+    Credits with the same source, dataset, licence and attribution (e.g. several DEM
+    sheets) fold into one credit with the latest `retrieved_at`.
     """
     folded: dict[tuple[str, str, str, str], PackCredit] = {}
+
+    def add(credit: PackCredit) -> None:
+        key = (credit.source, credit.dataset, credit.licence, credit.attribution)
+        previous = folded.get(key)
+        if previous is None or _instant(credit.retrieved_at) > _instant(previous.retrieved_at):
+            folded[key] = credit
+
+    for credit in extra:
+        add(credit)
     for path in files:
         try:
             rel = path.resolve().relative_to(raw_dir.resolve()).as_posix()
@@ -144,10 +157,7 @@ def credits_for(
             )
         except KeyError as exc:
             raise ManifestError(f"download manifest entry {rel} has no {exc}") from None
-        key = (credit.source, credit.dataset, credit.licence, credit.attribution)
-        previous = folded.get(key)
-        if previous is None or _instant(credit.retrieved_at) > _instant(previous.retrieved_at):
-            folded[key] = credit
+        add(credit)
     return sorted(folded.values(), key=lambda c: (c.source, c.dataset, c.attribution))
 
 

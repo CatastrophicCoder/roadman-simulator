@@ -24,6 +24,11 @@ stage output in the work folder, so they test what the game will load.
 - Ramps: no vertical step over 2 cm between a deck end edge and the ramp surface beyond it,
   at the corners and every 0.1 m along the edge.
 - Criterion 13b: terrain vertices inside deck footprints are the DEM-only terrain.
+- Places (docs/specs/place-information.md, `check_places`): `buildings.json` (schema
+  version 2) and `pois.json` match their committed schemas; categories and sources are
+  valid values; each `category_source` has its raw value; POI and building links exist and
+  point back; POI positions and outline points are finite and inside the area; outline
+  rings are closed with at least 4 points.
 
 Heights are sampled on the actual triangles (the tiles' terrain meshes), not a grid.
 """
@@ -43,6 +48,8 @@ from shapely.geometry.base import BaseGeometry
 
 from mapgen.build.export_glb import TERRAIN_NODE, from_gltf
 from mapgen.build.pack_manifest import committed_schema
+from mapgen.build.places.categories import CATEGORIES, CATEGORY_SOURCES, NAME_SOURCES
+from mapgen.build.places.model import BUILDINGS_SCHEMA, POIS_NAME, POIS_SCHEMA, PlacesError
 from mapgen.config import RoadsConfig
 
 TOLERANCE = 1e-6
@@ -190,6 +197,7 @@ class PackSummary:
     tile_count: int
     building_count: int
     roads: "RoadSummary | None" = None
+    poi_count: int = 0
 
 
 def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None) -> PackSummary:
@@ -269,6 +277,13 @@ def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None)
         load_report["footprints"]["in_area"] == glb_buildings == len(buildings),
         "building counts differ between the load report, the tiles and buildings.json",
     )
+    bounds = (
+        min(t["bounds_local"][0] for t in manifest["tiles"]),
+        min(t["bounds_local"][1] for t in manifest["tiles"]),
+        max(t["bounds_local"][2] for t in manifest["tiles"]),
+        max(t["bounds_local"][3] for t in manifest["tiles"]),
+    )
+    poi_count = check_places(pack_dir, bounds)
     road_summary = None
     if roads is not None:
         road_summary = check_roads(pack_dir, work_dir, roads, tiles=tiles, samplers=samplers)
@@ -278,7 +293,137 @@ def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None)
         for tid, (_, meshes) in tiles.items():
             extra = [n for n in meshes.nodes if n in ROAD_SURFACES or BRIDGE_NODE.match(n)]
             _require(not extra, f"no roads block, but {tid} has {extra}")
-    return PackSummary(len(manifest["tiles"]), glb_buildings, road_summary)
+    return PackSummary(len(manifest["tiles"]), glb_buildings, road_summary, poi_count)
+
+
+# Places.
+
+# The raw value each category source needs (`category_raw` key, and whether a list).
+_SOURCE_RAW = {
+    "override": "override",
+    "osm_building": "osm_building",
+    "osm_poi": "osm_poi",
+    "osm_poi_area": "osm_poi_area",
+    "mml_use_class": "mml_feature_class",
+    "osm_landuse": "osm_landuse",
+}
+
+
+def _finite_in(point: Any, bounds: tuple[float, float, float, float]) -> bool:
+    """A Godot `[x, z]` or `[x, y, z]` point: finite, and its x / -z inside the area."""
+    values = [float(v) for v in point]
+    if not all(np.isfinite(values)):
+        return False
+    x, z = values[0], values[-1]
+    min_x, min_y, max_x, max_y = bounds
+    return (
+        min_x - TOLERANCE <= x <= max_x + TOLERANCE and min_y - TOLERANCE <= -z <= max_y + TOLERANCE
+    )
+
+
+def check_places(pack_dir: Path, bounds: tuple[float, float, float, float]) -> int:
+    """The place checks on `buildings.json` and `pois.json`; returns the POI count.
+
+    `bounds` is the area in local metres (min_x, min_y, max_x, max_y).
+    """
+    try:
+        BUILDINGS_SCHEMA.validate_file(pack_dir / "buildings.json")
+        POIS_SCHEMA.validate_file(pack_dir / POIS_NAME)
+    except FileNotFoundError as exc:
+        raise PackCheckError(f"missing {Path(str(exc.filename)).name}") from exc
+    except PlacesError as exc:
+        raise PackCheckError(str(exc)) from exc
+    buildings = _json(pack_dir / "buildings.json")["buildings"]
+    pois = _json(pack_dir / POIS_NAME)["pois"]
+    by_id = {b["id"]: b for b in buildings}
+    poi_by_id = {p["id"]: p for p in pois}
+    _require(len(by_id) == len(buildings), "buildings.json has duplicate ids")
+    _require(len(poi_by_id) == len(pois), "pois.json has duplicate ids")
+    _require([p["id"] for p in pois] == sorted(poi_by_id), "pois.json isn't sorted by id")
+
+    for building in buildings:
+        bid = building["id"]
+        _require(building["category"] in CATEGORIES, f"{bid}: invalid category")
+        source = building["category_source"]
+        _require(source is None or source in CATEGORY_SOURCES, f"{bid}: invalid category source")
+        _require(
+            building["name_source"] is None or building["name_source"] in NAME_SOURCES,
+            f"{bid}: invalid name source",
+        )
+        _require(building["address_source"] in (None, "osm"), f"{bid}: invalid address source")
+        raw = building["category_raw"]
+        if source is None:
+            _require(building["category"] == "unknown", f"{bid}: no category source")
+        else:
+            value = raw[_SOURCE_RAW[source]]
+            _require(
+                value is not None and value != [],
+                f"{bid}: category_source {source} without its raw value",
+            )
+        if source == "override":
+            _require(raw["override"] == building["category"], f"{bid}: override category")
+        _require(
+            (building["mml_building"] is None) == (building["mml_overlap"] is None),
+            f"{bid}: mml_building and mml_overlap not null together",
+        )
+        set_fields = {f for o in building["overrides"] for f in o["fields"]}
+        _require(
+            (source == "override") == ("category" in set_fields),
+            f"{bid}: category_source override without an override setting category, or back",
+        )
+        _require(
+            (building["name_source"] == "override") == ("name" in set_fields),
+            f"{bid}: name_source override without an override setting the name, or back",
+        )
+        override_ids = [o["id"] for o in building["overrides"]]
+        _require(override_ids == sorted(set(override_ids)), f"{bid}: overrides not sorted")
+        for key in ("poi_ids", "area_poi_ids"):
+            ids = building[key]
+            _require(ids == sorted(set(ids)), f"{bid}: {key} not sorted or not unique")
+        for pid in building["poi_ids"]:
+            poi = poi_by_id.get(pid)
+            _require(poi is not None, f"{bid}: poi_ids names {pid}, which isn't in pois.json")
+            _require(poi["building_id"] == bid, f"{bid}: {pid} doesn't link back")
+        for pid in building["area_poi_ids"]:
+            poi = poi_by_id.get(pid)
+            _require(poi is not None, f"{bid}: area_poi_ids names {pid}, not in pois.json")
+            _require(bid in poi["contains_building_ids"], f"{bid}: {pid} doesn't link back")
+
+    for poi in pois:
+        pid = poi["id"]
+        target = poi["building_id"]
+        if target is not None:
+            building = by_id.get(target)
+            _require(building is not None, f"{pid}: building_id {target} isn't a building")
+            _require(pid in building["poi_ids"], f"{pid}: {target} doesn't link back")
+        contained = poi["contains_building_ids"]
+        _require(contained == sorted(set(contained)), f"{pid}: contains_building_ids order")
+        for bid in contained:
+            building = by_id.get(bid)
+            _require(building is not None, f"{pid}: contains {bid}, which isn't a building")
+            _require(pid in building["area_poi_ids"], f"{pid}: {bid} doesn't link back")
+        _require(_finite_in(poi["position"], bounds), f"{pid}: position outside the area")
+        if poi["address_source"] == "building":
+            _require(
+                target is not None and poi["address"] == by_id[target]["address"],
+                f"{pid}: address_source building, but not its building's address",
+            )
+        outline = poi["outline"]
+        if poi["geometry"] == "point":
+            _require(outline is None, f"{pid}: a point with an outline")
+            _require(not contained, f"{pid}: a point containing buildings")
+        else:
+            _require(outline, f"{pid}: an area without an outline")
+            for polygon in outline:
+                _require(polygon, f"{pid}: an outline polygon without rings")
+                for ring in polygon:
+                    _require(
+                        len(ring) >= 4 and ring[0] == ring[-1],
+                        f"{pid}: outline ring open or under 4 points",
+                    )
+                    for point in ring:
+                        _require(_finite_in(point, bounds), f"{pid}: outline point outside")
+    return len(pois)
 
 
 # Roads.

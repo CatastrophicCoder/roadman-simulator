@@ -15,6 +15,8 @@ textures), and the 3D buildings adapter is a stub until its file format is confi
 
 import re
 import shutil
+import sqlite3
+import struct
 import urllib.parse
 from abc import abstractmethod
 from collections.abc import Callable, Mapping
@@ -25,6 +27,7 @@ from typing import Any, ClassVar, Literal
 import laspy
 import numpy as np
 import rasterio
+import shapely
 from pydantic import Field, field_validator, model_validator
 from pyproj import CRS as ProjCRS
 from rasterio.crs import CRS as RasterioCRS
@@ -40,21 +43,26 @@ from mapgen import tm35
 from mapgen.geo import BBox, projected_bbox
 from mapgen.http import HttpError, redact, with_query_param
 from mapgen.sources.base import (
+    BUILDING_USE,
     BUILDINGS_3D,
     ELEVATION,
     IMAGERY,
     POINT_CLOUD,
     AdapterOptions,
+    BuildingUseRecord,
     DownloadContext,
     DownloadedFile,
     ElevationRaster,
     Imagery,
     LoadContext,
     PointCloud,
+    SkippedFeature,
     SourceAdapter,
     SourceData,
     SourceError,
     SourceLoadError,
+    UseClassRule,
+    valid_area,
 )
 
 DEFAULT_BASE_URL = "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/"
@@ -577,6 +585,146 @@ class TopographicOptions(MmlBBoxOptions):
     theme: str = "maastotietokanta_kaikki"
 
 
+# Topographic Database buildings (table `rakennus` of the GeoPackage).
+
+GPKG_SUFFIXES = frozenset({".gpkg"})
+RAKENNUS_TABLE = "rakennus"
+RAKENNUS_ID_PREFIX = "mml:rakennus/"
+# Feature classes (`kohdeluokka`) by their first four digits, from MML's
+# "Maanmittauslaitoksen maastotietokohteet" (docs/specs/place-information.md, step 5).
+# The fifth digit is the floor class (0 undefined, 1 1-2 floors, 2 3-n floors).
+SMALL_BUILDING_M2 = 40.0  # 4226x "Muu rakennus" under this: a garage or shed
+RAKENNUS_RULES: dict[int, UseClassRule] = {
+    4221: UseClassRule(category="residential"),  # Asuinrakennus
+    4222: UseClassRule(fallback_category="commercial"),  # Liike- tai julkinen rakennus
+    4223: UseClassRule(category="residential"),  # Lomarakennus
+    4224: UseClassRule(category="industrial"),  # Teollinen rakennus
+    4225: UseClassRule(category="religious"),  # Kirkollinen rakennus
+    4226: UseClassRule(  # Muu rakennus: saunas, outbuildings, garages, farm buildings...
+        small_category="garage_or_shed", small_area_m2=SMALL_BUILDING_M2
+    ),
+}
+CHURCH_CLASS = 42270  # Kirkko
+UNMAPPED = UseClassRule(mapped=False)
+
+
+def rakennus_rule(feature_class: int | None) -> UseClassRule:
+    """The category rule of an MML building feature class (`kohdeluokka`)."""
+    if feature_class is None:
+        return UNMAPPED
+    if feature_class == CHURCH_CLASS:
+        return UseClassRule(category="religious")
+    if 42210 <= feature_class <= 42269:
+        return RAKENNUS_RULES.get(feature_class // 10, UNMAPPED)
+    return UNMAPPED
+
+
+# GeoPackage binary geometry header (GeoPackage 1.3, 2.1.3): "GP", version, flags, srs_id,
+# then an envelope whose size depends on bits 1-3 of the flags.
+_ENVELOPE_BYTES = {0: 0, 1: 32, 2: 48, 3: 48, 4: 64}
+
+
+class GpkgError(Exception):
+    """A GeoPackage or one of its geometries can't be read."""
+
+
+def gpkg_wkb(blob: bytes) -> bytes | None:
+    """The WKB of a GeoPackage geometry blob; None for an empty geometry."""
+    if len(blob) < 8 or blob[:2] != b"GP":
+        raise GpkgError("not a GeoPackage geometry (no GP magic)")
+    flags = blob[3]
+    envelope = (flags >> 1) & 0b111
+    if envelope not in _ENVELOPE_BYTES:
+        raise GpkgError(f"invalid envelope indicator {envelope}")
+    if flags & 0b10000:  # empty geometry
+        return None
+    if flags & 0b100000:
+        raise GpkgError("extended GeoPackage geometries aren't supported")
+    return blob[8 + _ENVELOPE_BYTES[envelope] :]
+
+
+def gpkg_srs_id(blob: bytes) -> int:
+    """The srs_id stored in a GeoPackage geometry blob's header."""
+    order = "<" if blob[3] & 1 else ">"
+    return int(struct.unpack_from(f"{order}i", blob, 4)[0])
+
+
+def _table_crs(con: sqlite3.Connection, table: str) -> str:
+    row = con.execute(
+        "SELECT s.organization, s.organization_coordsys_id FROM gpkg_geometry_columns g "
+        "JOIN gpkg_spatial_ref_sys s ON s.srs_id = g.srs_id WHERE g.table_name = ?",
+        (table,),
+    ).fetchone()
+    if row is None:
+        raise GpkgError(f"table {table!r} has no entry in gpkg_geometry_columns")
+    organization, code = row
+    if str(organization).upper() != "EPSG":
+        raise GpkgError(f"table {table!r} uses an unsupported CRS ({organization}:{code})")
+    return f"EPSG:{int(code)}"
+
+
+def read_rakennus(path: Path) -> tuple[list[BuildingUseRecord], list[SkippedFeature]]:
+    """The buildings of table `rakennus` in a Topographic Database GeoPackage.
+
+    Read with `sqlite3` and shapely's WKB reader (the GeoPackage header is skipped).
+    Each record: "mml:rakennus/<mtk_id>", the polygon in 2D, `kohdeluokka` and
+    `kayttotarkoitus`, and its category rule. Invalid polygons are repaired with
+    `make_valid`; those with no area left, or that can't be read, are skipped with a
+    reason. Raises `GpkgError` when the file has no `rakennus` table.
+    """
+    con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        exists = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (RAKENNUS_TABLE,)
+        ).fetchone()
+        if exists is None:
+            raise GpkgError(f"{path} has no table {RAKENNUS_TABLE!r}")
+        crs = _table_crs(con, RAKENNUS_TABLE)
+        column = con.execute(
+            "SELECT column_name FROM gpkg_geometry_columns WHERE table_name = ?",
+            (RAKENNUS_TABLE,),
+        ).fetchone()[0]
+        rows = con.execute(
+            f'SELECT "{column}", mtk_id, kohdeluokka, kayttotarkoitus FROM {RAKENNUS_TABLE} '
+            "ORDER BY mtk_id"
+        ).fetchall()
+    except sqlite3.DatabaseError as exc:
+        raise GpkgError(f"cannot read {path}: {exc}") from exc
+    finally:
+        con.close()
+    records: list[BuildingUseRecord] = []
+    skipped: list[SkippedFeature] = []
+    for blob, mtk_id, feature_class, use_class in rows:
+        fid = f"{RAKENNUS_ID_PREFIX}{mtk_id}"
+        if blob is None:
+            skipped.append(SkippedFeature(fid, "no geometry"))
+            continue
+        try:
+            wkb = gpkg_wkb(bytes(blob))
+            if wkb is None:
+                skipped.append(SkippedFeature(fid, "empty geometry"))
+                continue
+            geometry = valid_area(shapely.force_2d(shapely.from_wkb(wkb)))
+        except (GpkgError, shapely.errors.GEOSException, ValueError) as exc:
+            skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+            continue
+        if geometry is None:
+            skipped.append(SkippedFeature(fid, "polygon has no area after repair"))
+            continue
+        kohdeluokka = int(feature_class) if feature_class is not None else None
+        records.append(
+            BuildingUseRecord(
+                id=fid,
+                geometry=geometry,
+                crs=crs,
+                feature_class=kohdeluokka,
+                use_class=int(use_class) if use_class is not None else None,
+                rule=rakennus_rule(kohdeluokka),
+            )
+        )
+    return records, skipped
+
+
 class MmlTopographicAdapter(MmlBBoxAdapter):
     name = "mml_topographic"
     Options = TopographicOptions
@@ -584,6 +732,37 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
     product_name = "Maastotietokanta (Topographic Database)"
     layer = "topographic"
     default_process_id = "maastotietokanta_bbox"
+    provides = frozenset({BUILDING_USE})
+
+    def load(self, ctx: LoadContext) -> SourceData:
+        """The buildings (`rakennus`) of every GeoPackage in `mml/topographic/`.
+
+        Fails without a GeoPackage (with the download hint) or when one has no
+        `rakennus` table. A building in several files is kept once (the first file, by
+        name). The build reprojects the records and drops those outside the area.
+        """
+        folder = ctx.raw_dir / "mml" / self.layer
+        files = [p for p in list_files(folder) if p.suffix.lower() in GPKG_SUFFIXES]
+        if not files:
+            raise SourceLoadError(
+                f"[{ctx.source_name}] no GeoPackage files in {folder}; run `mapgen download "
+                f"{ctx.map_config.id} --only {ctx.source_name}`"
+            )
+        records: dict[str, BuildingUseRecord] = {}
+        skipped: list[SkippedFeature] = []
+        for path in files:
+            try:
+                found, bad = read_rakennus(path)
+            except GpkgError as exc:
+                raise SourceLoadError(f"[{ctx.source_name}] {exc}") from exc
+            for record in found:
+                records.setdefault(record.id, record)
+            skipped += bad
+        return SourceData(
+            files=files,
+            building_use=sorted(records.values(), key=_record_order),
+            building_use_skipped=skipped,
+        )
 
     def extra_inputs(self, options: MmlBBoxOptions) -> dict[str, Any]:
         assert isinstance(options, TopographicOptions)
@@ -593,6 +772,11 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
         options = ctx.options
         assert isinstance(options, TopographicOptions)
         return [f"Theme: {options.theme}", *super().manual_area(ctx)]
+
+
+def _record_order(record: BuildingUseRecord) -> tuple[int, str]:
+    number = record.id.rsplit("/", 1)[-1]
+    return (int(number) if number.isdigit() else -1, record.id)
 
 
 # Processes that take TM35 map sheet names.

@@ -8,10 +8,15 @@ copy of every raw file it read, cut to what that test-area load needs, into
 copied in as the raw folder):
 
 - `.osm`: the footprints whose centroid is in the test area, with their member ways and
-  nodes, and every `highway` way and water feature (water area or waterway line) whose
-  line or area meets the test area, with all of its nodes (the build cuts roads at the
-  test-area edge, not this script). Contributor metadata (`user`, `uid`, `timestamp`,
-  `changeset`, `version`) is removed; the ODbL `<note>` stays.
+  nodes, and every `highway` way, water feature (water area or waterway line), land use
+  area and point of interest (node, way or relation) whose point, line or area meets the
+  test area, with all of its nodes (the build cuts roads at the test-area edge, not this
+  script). Contributor metadata (`user`, `uid`, `timestamp`, `changeset`, `version`) is
+  removed; the ODbL `<note>` stays.
+- GeoPackage (Topographic Database): the `rakennus` records whose polygon meets the test
+  area, all columns, in a new GeoPackage written with `sqlite3` only (its
+  `gpkg_spatial_ref_sys`, `gpkg_contents` and `gpkg_geometry_columns` rows copied; no
+  spatial index, whose triggers need SpatiaLite functions).
 - GeoTIFF: the test area plus stage 1's DEM margin, rounded outward to the cell grid,
   deflate-compressed.
 - LAS/LAZ: every point (all classes) inside the bounds stage 1 requests for the points.
@@ -27,6 +32,7 @@ Nothing here is map-specific.
 import argparse
 import json
 import shutil
+import sqlite3
 import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
@@ -50,6 +56,7 @@ from mapgen.config import MapConfig, load_map_config
 from mapgen.geo import BBox
 from mapgen.manifest import MANIFEST_NAME, SCHEMA_VERSION, load_entries
 from mapgen.sources.base import parse_isoformat, sha256_of
+from mapgen.sources.mml import GPKG_SUFFIXES, RAKENNUS_ID_PREFIX, RAKENNUS_TABLE, gpkg_wkb
 from mapgen.sources.osm import METADATA_ATTRIBUTES
 
 FIXTURES_DIR = paths.MAPGEN_DIR / "tests" / "fixtures" / "raw"
@@ -85,13 +92,18 @@ JP2_QUALITY = 15  # GDAL JP2OpenJPEG QUALITY: compressed size as % of uncompress
 
 
 OSM_CONTENTS = (
-    "building footprints whose centroid is in the test area, and highway ways and water "
-    "features whose line or area meets it, with their member ways and all their nodes"
+    "building footprints whose centroid is in the test area, and highway ways, water "
+    "features, land use areas and points of interest whose point, line or area meets it, "
+    "with their member ways and all their nodes"
 )
+GPKG_CONTENTS = "Topographic Database buildings (rakennus) whose polygon meets the test area"
+# GeoPackage tables copied as they are (their rows for the cut table only, where keyed).
+GPKG_META_TABLES = ("gpkg_spatial_ref_sys", "gpkg_contents", "gpkg_geometry_columns")
 
 
 def cut_osm(source: Path, dest: Path, feature_ids: set[str]) -> None:
-    """Keep the given ways and relations ("osm:way/1"), their member ways and all nodes."""
+    """Keep the given nodes, ways and relations ("osm:way/1"), their member ways and all
+    their nodes."""
     tree = ET.parse(source)
     root = tree.getroot()
     ways = {int(i.split("/")[1]) for i in feature_ids if i.startswith("osm:way/")}
@@ -101,7 +113,7 @@ def cut_osm(source: Path, dest: Path, feature_ids: set[str]) -> None:
             ways |= {
                 int(m.attrib["ref"]) for m in element.iter("member") if m.attrib["type"] == "way"
             }
-    nodes: set[int] = set()
+    nodes: set[int] = {int(i.split("/")[1]) for i in feature_ids if i.startswith("osm:node/")}
     for element in root.iter("way"):
         if int(element.attrib["id"]) in ways:
             nodes |= {int(nd.attrib["ref"]) for nd in element.iter("nd")}
@@ -120,6 +132,87 @@ def cut_osm(source: Path, dest: Path, feature_ids: set[str]) -> None:
     tree.write(dest, encoding="UTF-8", xml_declaration=True)
     with dest.open("a", encoding="utf-8") as handle:
         handle.write("\n")
+
+
+def cut_gpkg(source: Path, dest: Path, table: str, ids: set[int]) -> int:
+    """A new GeoPackage with the rows of `table` whose `mtk_id` is in `ids` (all columns).
+
+    Written with `sqlite3` only: the GeoPackage application id and user version, the
+    tables `GPKG_META_TABLES` (all spatial reference systems, and the `gpkg_contents` and
+    `gpkg_geometry_columns` rows of `table`, with its extent recomputed) and `table` itself,
+    created from the source's own SQL. The spatial index and its triggers are left out
+    (they need SpatiaLite functions); they are optional in a GeoPackage. Returns the
+    number of rows.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.unlink(missing_ok=True)
+    src = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)
+    out = sqlite3.connect(dest)
+    try:
+        application_id = src.execute("PRAGMA application_id").fetchone()[0]
+        user_version = src.execute("PRAGMA user_version").fetchone()[0]
+        out.execute(f"PRAGMA application_id = {int(application_id)}")
+        out.execute(f"PRAGMA user_version = {int(user_version)}")
+        for name in (*GPKG_META_TABLES, table):
+            sql = src.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+            ).fetchone()
+            if sql is None:
+                raise SystemExit(f"{source} has no table {name!r}")
+            out.execute(sql[0])
+        columns = [row[1] for row in src.execute(f'PRAGMA table_info("{table}")')]
+        names = ", ".join(f'"{c}"' for c in columns)
+        marks = ", ".join("?" for _ in columns)
+        rows = [
+            row
+            for row in src.execute(f'SELECT {names} FROM "{table}" ORDER BY fid')
+            if row[columns.index("mtk_id")] in ids
+        ]
+        out.executemany(f'INSERT INTO "{table}" ({names}) VALUES ({marks})', rows)
+        for name, key in (
+            ("gpkg_spatial_ref_sys", None),
+            ("gpkg_contents", "table_name"),
+            ("gpkg_geometry_columns", "table_name"),
+        ):
+            meta_columns = [row[1] for row in src.execute(f"PRAGMA table_info({name})")]
+            query = f"SELECT * FROM {name}" + (f" WHERE {key} = ?" if key else "")
+            meta_rows = src.execute(query, (table,) if key else ()).fetchall()
+            out.executemany(
+                f"INSERT INTO {name} VALUES ({', '.join('?' for _ in meta_columns)})", meta_rows
+            )
+        geometry_column = src.execute(
+            "SELECT column_name FROM gpkg_geometry_columns WHERE table_name = ?", (table,)
+        ).fetchone()[0]
+        extent = _gpkg_extent([row[columns.index(geometry_column)] for row in rows])
+        if extent is not None:
+            out.execute(
+                "UPDATE gpkg_contents SET min_x = ?, min_y = ?, max_x = ?, max_y = ? "
+                "WHERE table_name = ?",
+                (*extent, table),
+            )
+        out.commit()
+        out.execute("VACUUM")
+    finally:
+        src.close()
+        out.close()
+    return len(rows)
+
+
+def _gpkg_extent(blobs: list[Any]) -> tuple[float, float, float, float] | None:
+    bounds = [
+        shapely.from_wkb(wkb).bounds
+        for blob in blobs
+        if blob is not None and (wkb := gpkg_wkb(bytes(blob))) is not None
+    ]
+    if not bounds:
+        return None
+    array = np.asarray(bounds, dtype=float)
+    return (
+        float(array[:, 0].min()),
+        float(array[:, 1].min()),
+        float(array[:, 2].max()),
+        float(array[:, 3].max()),
+    )
 
 
 def _intersects(geometry: BaseGeometry, area: BuildArea) -> bool:
@@ -276,12 +369,13 @@ def _notice(map_id: str, entries: list[dict[str, Any]]) -> str:
         f"`uv run python scripts/cut_test_area.py {map_id}` (in `tools/mapgen/`) cut the "
         "downloaded files listed in `download-manifest.json` to what a test-area build reads: "
         "OSM building footprints whose centroid is in the test area with their ways and nodes, "
-        "and the OSM road ways (`highway`) and water features whose line or area meets the "
-        "test area with all their nodes (contributor metadata removed), the elevation model "
-        "around the test area, the laser scanning points around those footprints, and the "
-        "orthophoto over the test area (re-encoded lossy to keep it small). Each manifest "
-        "entry records the "
-        "cut bounds and the checksum of the original file.",
+        "and the OSM road ways (`highway`), water features, land use areas and points of "
+        "interest whose point, line or area meets the test area with all their nodes "
+        "(contributor metadata removed), the elevation model around the test area, the laser "
+        "scanning points around those footprints, the Topographic Database buildings "
+        "(`rakennus`, all columns) that meet the test area, and the orthophoto over the test "
+        "area (re-encoded lossy to keep it small). Each manifest entry records the cut bounds "
+        "or contents and the checksum of the original file.",
         "",
     ]
     return "\n".join(lines)
@@ -302,6 +396,13 @@ def cut_test_area(config: MapConfig, raw_dir: Path, out_dir: Path) -> dict[str, 
     water_ids = {
         w.id for w in loaded.water_areas + loaded.water_lines if _intersects(w.geometry, area)
     }
+    poi_ids = {p.id for p in loaded.pois if _intersects(p.geometry, area)}
+    landuse_ids = {a.id for a in loaded.landuse if _intersects(a.geometry, area)}
+    rakennus_ids = {
+        int(r.id.removeprefix(RAKENNUS_ID_PREFIX))
+        for r in loaded.building_use or []
+        if r.id.startswith(RAKENNUS_ID_PREFIX) and _intersects(r.geometry, area)
+    }
 
     if out_dir.exists() and any(out_dir.iterdir()):
         if not (out_dir / MANIFEST_NAME).is_file():
@@ -317,13 +418,18 @@ def cut_test_area(config: MapConfig, raw_dir: Path, out_dir: Path) -> dict[str, 
         dest = out_dir / rel
         suffix = source.suffix.lower()
         if suffix == ".osm":
-            cut_osm(source, dest, footprint_ids | road_ids | water_ids)
+            cut_osm(source, dest, footprint_ids | road_ids | water_ids | poi_ids | landuse_ids)
             cut: dict[str, Any] = {
                 "contents": OSM_CONTENTS,
                 "footprints": len(footprint_ids),
                 "highway_ways": len(road_ids),
                 "water_features": len(water_ids),
+                "landuse_areas": len(landuse_ids),
+                "points_of_interest": len(poi_ids),
             }
+        elif suffix in GPKG_SUFFIXES:
+            records = cut_gpkg(source, dest, RAKENNUS_TABLE, rakennus_ids)
+            cut = {"contents": GPKG_CONTENTS, "table": RAKENNUS_TABLE, "records": records}
         elif suffix in TIFF_SUFFIXES:
             cut_geotiff(source, dest, dem_bounds)
             cut = {"bounds": dem_bounds.as_list()}

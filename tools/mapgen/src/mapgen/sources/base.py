@@ -12,7 +12,9 @@ from typing import Any, ClassVar, Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 from rasterio.transform import Affine
-from shapely.geometry import LineString, MultiPolygon, Polygon
+from shapely import make_valid
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from mapgen.config import MapConfig, SourceConfig
 from mapgen.geo import BBox
@@ -26,6 +28,7 @@ ELEVATION = "elevation"  # a terrain elevation raster
 BUILDINGS_3D = "buildings_3d"  # building footprints with measured heights
 POINT_CLOUD = "point_cloud"  # classified lidar points (building heights)
 IMAGERY = "imagery"  # north-up RGB aerial imagery (debug orthophoto textures)
+BUILDING_USE = "building_use"  # building polygons with a use class (building categories)
 
 
 def utc_now() -> datetime:
@@ -237,6 +240,69 @@ class WaterLine:
 
 
 @dataclass(frozen=True)
+class PoiFeature:
+    """A point of interest: a feature with a `shop`, `amenity`, `office`, `tourism` or
+    `leisure` tag, named or not. A node is a `Point`; a closed way or a multipolygon
+    relation an area. `id` is "osm:node/<n>", "osm:way/<n>" or "osm:relation/<n>".
+
+    A building way or relation with such a tag is also a POI, with the building's id.
+    """
+
+    id: str
+    geometry: Point | Polygon | MultiPolygon
+    crs: str
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LandUseArea:
+    """A land use area (a `landuse` tag): a closed way or a complete multipolygon."""
+
+    id: str
+    geometry: Polygon | MultiPolygon
+    crs: str
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class UseClassRule:
+    """How a building-use record's class maps to a building category.
+
+    The adapter that owns the codes sets it (ADR 0002: country-specific tables live in
+    adapters); the build applies it without knowing the codes:
+
+    - `category`: the category, whatever the footprint;
+    - `small_category` with `small_area_m2`: that category when the matched OSM footprint
+      (map CRS) is under `small_area_m2`, otherwise no value;
+    - `fallback_category`: no value in the use-class step, but this category when land use
+      gives nothing either;
+    - `mapped` False: a code the adapter's table doesn't know (counted in the report).
+    """
+
+    category: str | None = None
+    small_category: str | None = None
+    small_area_m2: float | None = None
+    fallback_category: str | None = None
+    mapped: bool = True
+
+
+@dataclass(frozen=True)
+class BuildingUseRecord:
+    """A building polygon with its use class, e.g. an MML Topographic Database building.
+
+    `id` is "<source>:<table>/<number>" (e.g. "mml:rakennus/123"). `feature_class` and
+    `use_class` are the source's raw codes, kept in the pack as raw values.
+    """
+
+    id: str
+    geometry: Polygon | MultiPolygon
+    crs: str
+    feature_class: int | None
+    use_class: int | None
+    rule: UseClassRule
+
+
+@dataclass(frozen=True)
 class SkippedFeature:
     """A feature that was not loaded, and why."""
 
@@ -362,6 +428,37 @@ class SourceData:
     water_lines: list[WaterLine] = field(default_factory=list)
     # Water relations left out (no closed rings, missing members; ADR 0005), with reasons.
     water_skipped: list[SkippedFeature] = field(default_factory=list)
+    # Points of interest, and the POI features that couldn't be built (with reasons).
+    pois: list[PoiFeature] = field(default_factory=list)
+    pois_skipped: list[SkippedFeature] = field(default_factory=list)
+    # Land use areas, and the ones left out (incomplete relations, geometry errors).
+    landuse: list[LandUseArea] = field(default_factory=list)
+    landuse_skipped: list[SkippedFeature] = field(default_factory=list)
+    # Building-use records (`building_use`), and the ones skipped (unrepairable polygons).
+    building_use: list[BuildingUseRecord] = field(default_factory=list)
+    building_use_skipped: list[SkippedFeature] = field(default_factory=list)
+
+
+def valid_area(geom: BaseGeometry) -> Polygon | MultiPolygon | None:
+    """`geom` repaired with `make_valid`, keeping only its polygonal parts with area.
+
+    None if nothing with area is left.
+    """
+    if not geom.is_valid:
+        geom = make_valid(geom)
+    if isinstance(geom, Polygon | MultiPolygon):
+        polygons = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
+    else:
+        polygons = []
+        for part in getattr(geom, "geoms", []):
+            if isinstance(part, Polygon):
+                polygons.append(part)
+            elif isinstance(part, MultiPolygon):
+                polygons.extend(part.geoms)
+    polygons = [p for p in polygons if not p.is_empty and p.area > 0]
+    if not polygons:
+        return None
+    return polygons[0] if len(polygons) == 1 else MultiPolygon(polygons)
 
 
 @dataclass

@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "building-overrides-v1.schema.json",
+  "$defs": {
+    "BuildingOverride": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "category"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        },
+        {
+          "required": [
+            "name_sv"
+          ]
+        },
+        {
+          "required": [
+            "ref"
+          ]
+        }
+      ],
+      "description": "A category and/or name override. Setting any name field sets all three (missing\nones become null). `source` and `licence` record where the fix came from.",
+      "else": {
+        "required": [
+          "attribution",
+          "retrieved_at"
+        ]
+      },
+      "if": {
+        "properties": {
+          "licence": {
+            "const": "own work"
+          }
+        }
+      },
+      "properties": {
+        "category": {
+          "enum": [
+            "residential",
+            "commercial",
+            "retail",
+            "industrial",
+            "public",
+            "religious",
+            "education",
+            "agricultural",
+            "garage_or_shed",
+            "other",
+            "unknown"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        },
+        "name_sv": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name Sv"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ref"
+        },
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "licence": {
+          "description": "'own work' for the project's own work, else a licence mapgen notice knows (third-party data, credited in the manifest)",
+          "enum": [
+            "own work",
+            "CC BY 4.0",
+            "ODbL 1.0",
+            "CC BY-SA 4.0"
+          ],
+          "title": "Licence",
+          "type": "string"
+        },
+        "attribution": {
+          "description": "third-party entries only",
+          "minLength": 1,
+          "title": "Attribution",
+          "type": "string"
+        },
+        "retrieved_at": {
+          "description": "YYYY-MM-DD; third-party entries only",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "title": "Retrieved At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "licence"
+      ],
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "attribution"
+              ]
+            },
+            {
+              "required": [
+                "retrieved_at"
+              ]
+            }
+          ]
+        }
+      },
+      "title": "BuildingOverride",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "buildings": {
+      "additionalProperties": false,
+      "description": "building id (osm:way/<id>, osm:relation/<id>) or MML id (mml:rakennus/<mtk_id>) -> override",
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*/[0-9]+$": {
+          "$ref": "#/$defs/BuildingOverride"
+        }
+      },
+      "title": "Buildings",
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "buildings"
+  ],
+  "title": "BuildingOverrides",
+  "type": "object"
+}

@@ -421,3 +421,108 @@ def build_somero_fixture(root: Path) -> SomeroArea:
 def somero_area(tmp_path_factory: pytest.TempPathFactory) -> SomeroArea:
     """The Somero test area built once from the committed fixture (treat as read-only)."""
     return build_somero_fixture(tmp_path_factory.mktemp("somero-area"))
+
+
+# A synthetic MML Topographic Database GeoPackage (table `rakennus`), written with sqlite3.
+
+GPKG_APPLICATION_ID = 0x47504B47  # "GPKG"
+
+
+def gpkg_blob(
+    geometry: Any,
+    srs_id: int = 3067,
+    envelope: bool = True,
+    little_endian: bool = True,
+    empty: bool = False,
+) -> bytes:
+    """A GeoPackage binary geometry (GeoPackage 1.3, 2.1.3): "GP", version 0, flags,
+    srs_id, an optional xy envelope (indicator 1), then the WKB."""
+    import struct
+
+    import shapely
+
+    order = "<" if little_endian else ">"
+    flags = (1 if little_endian else 0) | ((1 if envelope else 0) << 1) | (0b10000 if empty else 0)
+    header = b"GP" + bytes([0, flags]) + struct.pack(f"{order}i", srs_id)
+    if envelope:
+        min_x, min_y, max_x, max_y = geometry.bounds
+        header += struct.pack(f"{order}4d", min_x, max_x, min_y, max_y)
+    if empty:
+        return header
+    return header + shapely.to_wkb(geometry, byte_order=1 if little_endian else 0)
+
+
+RakennusRow = tuple[int, Any, int | None, int | None]  # mtk_id, geometry or blob, classes
+
+
+def write_rakennus_gpkg(
+    path: Path,
+    rows: list[RakennusRow],
+    *,
+    srs_id: int = 3067,
+    organization: str = "EPSG",
+    table: str = "rakennus",
+) -> Path:
+    """A GeoPackage with one feature table (default `rakennus`) of building polygons.
+
+    Each row: `mtk_id`, the polygon in the table's CRS (shapely geometry, a ready blob as
+    bytes, or None for no geometry), `kohdeluokka` and `kayttotarkoitus`. Also writes the
+    columns the real table has that the pipeline doesn't read (`kerrosluku`).
+    """
+    import sqlite3
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    try:
+        con.execute(f"PRAGMA application_id = {GPKG_APPLICATION_ID}")
+        con.execute(
+            "CREATE TABLE gpkg_spatial_ref_sys (srs_name TEXT NOT NULL, srs_id INTEGER "
+            "PRIMARY KEY, organization TEXT NOT NULL, organization_coordsys_id INTEGER NOT "
+            "NULL, definition TEXT NOT NULL, description TEXT)"
+        )
+        con.executemany(
+            "INSERT INTO gpkg_spatial_ref_sys VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("Undefined cartesian", -1, "NONE", -1, "undefined", None),
+                ("Undefined geographic", 0, "NONE", 0, "undefined", None),
+                (f"{organization}:{srs_id}", srs_id, organization, srs_id, "test", None),
+            ],
+        )
+        con.execute(
+            "CREATE TABLE gpkg_contents (table_name TEXT PRIMARY KEY, data_type TEXT NOT "
+            "NULL, identifier TEXT, description TEXT, last_change TEXT, min_x DOUBLE, "
+            "min_y DOUBLE, max_x DOUBLE, max_y DOUBLE, srs_id INTEGER)"
+        )
+        con.execute(
+            "CREATE TABLE gpkg_geometry_columns (table_name TEXT NOT NULL, column_name "
+            "TEXT NOT NULL, geometry_type_name TEXT NOT NULL, srs_id INTEGER NOT NULL, "
+            "z TINYINT NOT NULL, m TINYINT NOT NULL)"
+        )
+        con.execute(
+            "INSERT INTO gpkg_contents VALUES (?, 'features', ?, '', '2026-10-29T00:00:00Z', "
+            "NULL, NULL, NULL, NULL, ?)",
+            (table, table, srs_id),
+        )
+        con.execute(
+            "INSERT INTO gpkg_geometry_columns VALUES (?, 'geom', 'POLYGON', ?, 0, 0)",
+            (table, srs_id),
+        )
+        con.execute(
+            f"CREATE TABLE {table} (fid INTEGER PRIMARY KEY AUTOINCREMENT, geom POLYGON, "
+            "mtk_id INTEGER, kohdeluokka MEDIUMINT, kayttotarkoitus MEDIUMINT, "
+            "kerrosluku MEDIUMINT)"
+        )
+        for mtk_id, geometry, feature_class, use_class in rows:
+            if geometry is None or isinstance(geometry, bytes):
+                blob = geometry
+            else:
+                blob = gpkg_blob(geometry, srs_id)
+            con.execute(
+                f"INSERT INTO {table} (geom, mtk_id, kohdeluokka, kayttotarkoitus, "
+                "kerrosluku) VALUES (?, ?, ?, ?, 1)",
+                (blob, mtk_id, feature_class, use_class),
+            )
+        con.commit()
+    finally:
+        con.close()
+    return path

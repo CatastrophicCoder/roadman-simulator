@@ -205,6 +205,100 @@ internal static class PackJson
     public static bool Has(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null;
 
+    /// <summary>A required, non-empty string.</summary>
+    public static string NonEmptyString(JsonElement parent, string name, string source, string path)
+    {
+        var value = String(parent, name, source, path);
+        if (value.Length == 0)
+        {
+            throw Error(source, Join(path, name), "must not be empty");
+        }
+
+        return value;
+    }
+
+    /// <summary>A required string that must be one of the keys of <paramref name="values"/>.</summary>
+    public static T Choice<T>(JsonElement parent, string name, IReadOnlyDictionary<string, T> values, string source, string path)
+    {
+        var value = String(parent, name, source, path);
+        return values.TryGetValue(value, out var result)
+            ? result
+            : throw Error(source, Join(path, name), $"'{value}' is not a known value (known: {string.Join(", ", values.Keys)})");
+    }
+
+    /// <summary>A required key whose value is <c>null</c> or one of the keys of <paramref name="values"/>.</summary>
+    public static T? NullableChoice<T>(JsonElement parent, string name, IReadOnlyDictionary<string, T> values, string source, string path)
+        where T : struct
+    {
+        if (!RequiredNullable(parent, name, source, path, out _))
+        {
+            return null;
+        }
+
+        var value = NullableString(parent, name, source, path)!;
+        return values.TryGetValue(value, out var result)
+            ? result
+            : throw Error(
+                source,
+                Join(path, name),
+                $"'{value}' is not a known value (known: {string.Join(", ", values.Keys)}, or null)");
+    }
+
+    /// <summary>An array of non-empty strings, each at most once.</summary>
+    public static List<string> Strings(JsonElement parent, string name, string source, string path)
+    {
+        var array = Array(parent, name, source, path);
+        var fieldPath = Join(path, name);
+        var result = new List<string>(array.GetArrayLength());
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var i = 0;
+        foreach (var item in array.EnumerateArray())
+        {
+            var itemPath = $"{fieldPath}[{i}]";
+            if (item.ValueKind != JsonValueKind.String || item.GetString()!.Length == 0)
+            {
+                throw Error(source, itemPath, "must be a non-empty string");
+            }
+
+            var value = item.GetString()!;
+            if (!seen.Add(value))
+            {
+                throw Error(source, itemPath, $"'{value}' appears more than once");
+            }
+
+            result.Add(value);
+            i++;
+        }
+
+        return result;
+    }
+
+    /// <summary>The name fields <c>name</c>, <c>name_sv</c> and <c>ref</c> of <paramref name="element"/>, each required, string or null.</summary>
+    public static FeatureNames Names(JsonElement element, string source, string path) =>
+        new(
+            NullableString(element, "name", source, path),
+            NullableString(element, "name_sv", source, path),
+            NullableString(element, "ref", source, path));
+
+    /// <summary>The <c>address</c> object (<c>street</c>, <c>housenumber</c>, each required, string or null).</summary>
+    public static Address Address(JsonElement element, string source, string path)
+    {
+        var address = Object(element, "address", source, path);
+        var addressPath = Join(path, "address");
+        RejectUnknown(address, source, addressPath, "street", "housenumber");
+        return new Address(
+            NullableString(address, "street", source, addressPath),
+            NullableString(address, "housenumber", source, addressPath));
+    }
+
+    public static void RequireObject(JsonElement element, string source, string path)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            throw Error(source, path, "must be an object");
+        }
+    }
+
     public static JsonElement Root(JsonDocument document, string source)
     {
         if (document.RootElement.ValueKind != JsonValueKind.Object)

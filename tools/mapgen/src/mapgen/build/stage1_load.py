@@ -1,9 +1,11 @@
 """Stage 1: load the enabled sources, reproject to the map CRS and subtract the origin.
 
 Sources are picked by capability (`osm_vector`, `elevation`, `buildings_3d`,
-`point_cloud`, `imagery`), never by name. Footprints are kept when their centroid is
-inside the build area. Road ways and water are moved to local coordinates whole (the
-roads stage clips them); road ways keep their OSM node ids. Lidar points are read only
+`point_cloud`, `imagery`, `building_use`), never by name. Footprints are kept when their
+centroid is inside the build area. Points of interest, land use areas and building-use
+records (e.g. MML Topographic Database buildings) are kept when they intersect it. Road
+ways and water are moved to local coordinates whole (the roads stage clips them); road
+ways keep their OSM node ids. Lidar points are read only
 around those footprints (their combined bounds plus `POINT_MARGIN_M`), so the test area
 stays fast. Imagery files are only listed here (those overlapping the area); the export
 reads them per tile for the debug textures. Output in `01-load/`: `footprints.geojson`
@@ -17,7 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from shapely.geometry import LineString, MultiPolygon, Polygon
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from mapgen.build.area import BuildArea, to_world
 from mapgen.build.heightfield import Heightfield, heightfield_from_raster
@@ -26,6 +29,7 @@ from mapgen.build.stage_io import write_geojson, write_geotiff, write_json
 from mapgen.config import MapConfig
 from mapgen.geo import BBox, offset_geometry, reproject_geometry, reproject_xy
 from mapgen.sources.base import (
+    BUILDING_USE,
     BUILDINGS_3D,
     ELEVATION,
     IMAGERY,
@@ -34,12 +38,15 @@ from mapgen.sources.base import (
     ElevationRaster,
     Footprint,
     Imagery,
+    LandUseArea,
     LoadContext,
+    PoiFeature,
     PointCloud,
     RoadWay,
     SkippedFeature,
     SourceData,
     SourceLoadError,
+    UseClassRule,
     WaterArea,
     WaterLine,
 )
@@ -83,6 +90,35 @@ class LocalWater:
     tags: Mapping[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class LocalPoi:
+    """A point of interest in local coordinates (a point or an area)."""
+
+    id: str
+    geometry: Point | Polygon | MultiPolygon
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LocalLandUse:
+    """A land use area in local coordinates."""
+
+    id: str
+    geometry: Polygon | MultiPolygon
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LocalBuildingUse:
+    """A building-use record (e.g. "mml:rakennus/123") in local coordinates."""
+
+    id: str
+    geometry: Polygon | MultiPolygon
+    feature_class: int | None
+    use_class: int | None
+    rule: UseClassRule
+
+
 @dataclass
 class LoadResult:
     footprints: list[LocalFootprint]  # centroid inside the area
@@ -108,6 +144,30 @@ class LoadResult:
     water_areas: list[LocalWater] = field(default_factory=list)
     water_lines: list[LocalWater] = field(default_factory=list)
     water_skipped: list[SkippedFeature] = field(default_factory=list)
+    # Points of interest and land use intersecting the area, from the `osm_vector` source,
+    # and the features that couldn't be built (with reasons).
+    pois: list[LocalPoi] = field(default_factory=list)
+    pois_skipped: list[SkippedFeature] = field(default_factory=list)
+    landuse: list[LocalLandUse] = field(default_factory=list)
+    landuse_skipped: list[SkippedFeature] = field(default_factory=list)
+    # Building-use records intersecting the area; None without a `building_use` source.
+    building_use: list[LocalBuildingUse] | None = None
+    building_use_skipped: list[SkippedFeature] = field(default_factory=list)
+    building_use_source: str | None = None
+
+
+def _geometry_to_local(geometry: BaseGeometry, crs: str, config: MapConfig) -> Any:
+    world = reproject_geometry(geometry, crs, config.crs)
+    return offset_geometry(world, -config.origin.x, -config.origin.y)
+
+
+def poi_to_local(poi: PoiFeature, config: MapConfig) -> LocalPoi:
+    return LocalPoi(poi.id, _geometry_to_local(poi.geometry, poi.crs, config), dict(poi.tags))
+
+
+def landuse_to_local(area: LandUseArea, config: MapConfig) -> LocalLandUse:
+    geometry = _geometry_to_local(area.geometry, area.crs, config)
+    return LocalLandUse(area.id, geometry, dict(area.tags))
 
 
 def road_to_local(way: RoadWay, config: MapConfig) -> LocalRoadWay:
@@ -194,6 +254,7 @@ def run_load(
     buildings_3d_source = _one(config, BUILDINGS_3D, required=False)
     point_source = _one(config, POINT_CLOUD, required=False)
     imagery_source = _one(config, IMAGERY, required=False)
+    building_use_source = _one(config, BUILDING_USE, required=False)
 
     files: list[Path] = []
     skipped: list[SkippedFeature] = []
@@ -215,6 +276,11 @@ def run_load(
     water_areas: list[LocalWater] = []
     water_lines: list[LocalWater] = []
     water_skipped: list[SkippedFeature] = []
+    pois: list[LocalPoi] = []
+    pois_skipped: list[SkippedFeature] = []
+    landuse: list[LocalLandUse] = []
+    landuse_skipped: list[SkippedFeature] = []
+    area_box = _area_polygon(area)
     if vector_source is not None:
         vector = load(vector_source)
         files += vector.files
@@ -226,6 +292,18 @@ def run_load(
         water_areas = [water_to_local(w, config) for w in vector.water_areas]
         water_lines = [water_to_local(w, config) for w in vector.water_lines]
         water_skipped = list(vector.water_skipped)
+        pois = [
+            local
+            for local in (poi_to_local(p, config) for p in vector.pois)
+            if local.geometry.intersects(area_box)
+        ]
+        pois_skipped = list(vector.pois_skipped)
+        landuse = [
+            local
+            for local in (landuse_to_local(a, config) for a in vector.landuse)
+            if local.geometry.intersects(area_box)
+        ]
+        landuse_skipped = list(vector.landuse_skipped)
     else:
         log("no enabled source provides osm_vector; building no OSM footprints")
 
@@ -242,6 +320,31 @@ def run_load(
         ]
 
     in_area = [f for f in all_footprints if _centroid_in(f, area)]
+
+    building_use: list[LocalBuildingUse] | None = None
+    building_use_skipped: list[SkippedFeature] = []
+    if building_use_source is not None:
+        data_use = load(building_use_source)
+        files += data_use.files
+        building_use = []
+        for record in data_use.building_use:
+            geometry = _geometry_to_local(record.geometry, record.crs, config)
+            if geometry.intersects(area_box):
+                building_use.append(
+                    LocalBuildingUse(
+                        record.id, geometry, record.feature_class, record.use_class, record.rule
+                    )
+                )
+        building_use_skipped = list(data_use.building_use_skipped)
+        log(
+            f"[{building_use_source.name}] {len(building_use)} building-use records in the "
+            f"area ({len(building_use_skipped)} skipped)"
+        )
+    else:
+        log(
+            "no enabled source provides building_use; building categories get no use class "
+            "(mml_building and mml_overlap are null)"
+        )
 
     points: PointCloud | None = None
     lidar_params: LidarParams | None = None
@@ -294,6 +397,7 @@ def run_load(
             "buildings_3d": buildings_3d_source.name if buildings_3d_source else None,
             "point_cloud": point_source.name if point_source else None,
             "imagery": imagery_source.name if imagery_source else None,
+            "building_use": building_use_source.name if building_use_source else None,
         },
         "files_read": sorted(_rel(p, raw_dir) for p in files),
         "footprints": {
@@ -309,6 +413,14 @@ def run_load(
             "areas": len(water_areas),
             "lines": len(water_lines),
             "relations_left_out": len(water_skipped),
+        },
+        "pois": {"in_area": len(pois), "skipped": len(pois_skipped)},
+        "landuse": {"in_area": len(landuse), "left_out": len(landuse_skipped)},
+        "building_use": {
+            "source": building_use_source.name if building_use_source else None,
+            "in_area": len(building_use) if building_use is not None else 0,
+            "skipped": len(building_use_skipped),
+            "skipped_records": [{"id": s.id, "reason": s.reason} for s in building_use_skipped],
         },
         "point_cloud": {
             "source": point_source.name if point_source else None,
@@ -365,6 +477,13 @@ def run_load(
         water_areas=water_areas,
         water_lines=water_lines,
         water_skipped=water_skipped,
+        pois=pois,
+        pois_skipped=pois_skipped,
+        landuse=landuse,
+        landuse_skipped=landuse_skipped,
+        building_use=building_use,
+        building_use_skipped=building_use_skipped,
+        building_use_source=building_use_source.name if building_use_source else None,
     )
 
 

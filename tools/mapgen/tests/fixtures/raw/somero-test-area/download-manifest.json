@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "map_id": "somero",
-  "generated_at": "2026-10-27T20:33:28Z",
+  "generated_at": "2026-10-29T11:57:40Z",
   "tool": {
     "name": "mapgen",
     "version": "test-area-cut"
@@ -148,6 +148,46 @@
       "origin": "downloaded"
     },
     {
+      "path": "mml/topographic/maastotietokanta_kaikki.gpkg",
+      "source": "mml_topographic",
+      "dataset": "Topographic Database",
+      "request": {
+        "service": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/",
+        "process_id": "maastotietokanta_bbox",
+        "inputs": {
+          "boundingBoxInput": [
+            308504,
+            6725445,
+            310809,
+            6727787
+          ],
+          "themeInput": "maastotietokanta_kaikki",
+          "fileFormatInput": "GPKG"
+        },
+        "job_id": "ed718a4b-6f9c-444f-9185-692b5e07bebe",
+        "result": {
+          "url": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/dl/v1/ed718a4b-6f9c-444f-9185-692b5e07bebe/maastotietokanta_kaikki.gpkg",
+          "format": "GPKG",
+          "crs": "etrs-tm35fin",
+          "mimeType": "application/geopackage+vnd.sqlite3",
+          "length": "10170368"
+        },
+        "test_area_cut": {
+          "contents": "Topographic Database buildings (rakennus) whose polygon meets the test area",
+          "table": "rakennus",
+          "records": 64,
+          "source_size": 10170368,
+          "source_sha256": "46fa13b53e03cf2a65ba5300543249d465fc4e64d13eed9eca284226e470f15b"
+        }
+      },
+      "retrieved_at": "2026-10-29T11:57:40Z",
+      "size": 65536,
+      "sha256": "7acedb1cd987511f0a7be34f8af45c5da54de94635475299e153a9141f7c497c",
+      "licence": "CC BY 4.0",
+      "attribution": "Contains data from the National Land Survey of Finland Topographic Database, 10/2026",
+      "origin": "downloaded"
+    },
+    {
       "path": "osm/somero.osm",
       "source": "osm",
       "dataset": "OpenStreetMap",
@@ -155,17 +195,19 @@
         "url": "https://overpass-api.de/api/interpreter",
         "query": "[out:xml][timeout:180];(node(60.62,23.5,60.64,23.54);way(60.62,23.5,60.64,23.54););(._;>;);(._;rel(bn);rel(bw););out meta;",
         "test_area_cut": {
-          "contents": "building footprints whose centroid is in the test area, and highway ways and water features whose line or area meets it, with their member ways and all their nodes",
+          "contents": "building footprints whose centroid is in the test area, and highway ways, water features, land use areas and points of interest whose point, line or area meets it, with their member ways and all their nodes",
           "footprints": 60,
           "highway_ways": 32,
           "water_features": 0,
+          "landuse_areas": 3,
+          "points_of_interest": 2,
           "source_size": 3175738,
           "source_sha256": "d676b6a2996f2cc0ac1d5182945dcc98102eadd154641234b6ade75e3f1dae4c"
         }
       },
       "retrieved_at": "2026-10-27T14:34:18Z",
-      "size": 58730,
-      "sha256": "3e9688a1ff3168fc9c50c868a99a53abb8ca6d4780f77d022bc77e8e68e7dd07",
+      "size": 68627,
+      "sha256": "e022707e4254ffd1383d90a58546b0bc07836815441a7e46ed5a2dcfbd7aab3a",
       "licence": "ODbL 1.0",
       "attribution": "© OpenStreetMap contributors",
       "origin": "downloaded"

@@ -9,6 +9,7 @@ from conftest import OSM_FIXTURE, PLANE, TmpRepo, write_plane_dem
 from mapgen.config import MapConfig
 from mapgen.geo import BBox
 from mapgen.sources.base import (
+    BUILDING_USE,
     BUILDINGS_3D,
     ELEVATION,
     IMAGERY,
@@ -92,7 +93,7 @@ def test_adapters_declare_capabilities() -> None:
     assert ELEVATION in MmlDem2mAdapter.provides
     assert BUILDINGS_3D in MmlBuildings3dAdapter.provides
     assert ADAPTERS["mml_orthophoto"].provides == frozenset({IMAGERY})
-    assert ADAPTERS["mml_topographic"].provides == frozenset()
+    assert ADAPTERS["mml_topographic"].provides == frozenset({BUILDING_USE})
 
 
 def test_sources_are_selected_by_capability_not_name(tmp_repo: TmpRepo, fixture_data: dict) -> None:
@@ -182,8 +183,20 @@ def test_buildings_3d_stub_reads_nothing(fixture_config: MapConfig, tmp_path: Pa
 
 
 def test_adapters_without_capability_cannot_load(fixture_config: MapConfig, tmp_path: Path) -> None:
-    adapter = ADAPTERS["mml_topographic"]
+    class NoLoad(ADAPTERS["mml_dem_2m"]):  # type: ignore[misc,valid-type]
+        name = "no_load"
+        provides = frozenset()
+        load = SourceAdapter.load
+
     with pytest.raises(NotImplementedError):
+        NoLoad().load(_ctx(fixture_config, tmp_path, NoLoad))
+
+
+def test_topographic_load_without_gpkg_names_the_download(
+    fixture_config: MapConfig, tmp_path: Path
+) -> None:
+    adapter = ADAPTERS["mml_topographic"]
+    with pytest.raises(SourceLoadError, match="mapgen download testtown --only"):
         adapter().load(_ctx(fixture_config, tmp_path, adapter))
 
 

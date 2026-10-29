@@ -79,7 +79,7 @@ sources:
 
   mml_topographic:
     adapter: mml_topographic
-    enabled: false
+    enabled: true
     options:
       theme: maastotietokanta_kaikki
       file_format: GPKG

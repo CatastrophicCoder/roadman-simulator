@@ -1,0 +1,497 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "buildings-v2.schema.json",
+  "$defs": {
+    "Address": {
+      "additionalProperties": false,
+      "properties": {
+        "street": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Street"
+        },
+        "housenumber": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Housenumber"
+        }
+      },
+      "required": [
+        "street",
+        "housenumber"
+      ],
+      "title": "Address",
+      "type": "object"
+    },
+    "AppliedOverride": {
+      "additionalProperties": false,
+      "description": "An override file entry that set something on this building.",
+      "properties": {
+        "id": {
+          "description": "the override file key",
+          "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*/[0-9]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "licence": {
+          "minLength": 1,
+          "title": "Licence",
+          "type": "string"
+        },
+        "fields": {
+          "description": "what it set, sorted; name stands for all three name fields",
+          "items": {
+            "enum": [
+              "category",
+              "name"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Fields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "licence",
+        "fields"
+      ],
+      "title": "AppliedOverride",
+      "type": "object"
+    },
+    "BuildingEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "e.g. osm:way/123",
+          "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*/[0-9]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "tile": {
+          "pattern": "^tile_x-?\\d+_y-?\\d+$",
+          "title": "Tile",
+          "type": "string"
+        },
+        "node": {
+          "title": "Node",
+          "type": "string"
+        },
+        "collision_nodes": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Collision Nodes",
+          "type": "array"
+        },
+        "height_m": {
+          "exclusiveMinimum": 0,
+          "title": "Height M",
+          "type": "number"
+        },
+        "height_source": {
+          "enum": [
+            "mml_lidar",
+            "mml_3d",
+            "osm_height",
+            "osm_levels",
+            "default"
+          ],
+          "title": "Height Source",
+          "type": "string"
+        },
+        "base_z": {
+          "title": "Base Z",
+          "type": "number"
+        },
+        "base_source": {
+          "const": "dem",
+          "title": "Base Source",
+          "type": "string"
+        },
+        "roof_shape": {
+          "const": "flat",
+          "title": "Roof Shape",
+          "type": "string"
+        },
+        "roof_shape_source": {
+          "const": "default",
+          "title": "Roof Shape Source",
+          "type": "string"
+        },
+        "lidar_points": {
+          "minimum": 0,
+          "title": "Lidar Points",
+          "type": "integer"
+        },
+        "lidar_buffer_m": {
+          "minimum": 0,
+          "title": "Lidar Buffer M",
+          "type": "number"
+        },
+        "lidar_returns": {
+          "enum": [
+            "all",
+            "single"
+          ],
+          "title": "Lidar Returns",
+          "type": "string"
+        },
+        "roof_z_median": {
+          "title": "Roof Z Median",
+          "type": "number"
+        },
+        "roof_z_p90": {
+          "title": "Roof Z P90",
+          "type": "number"
+        },
+        "lidar_rejected": {
+          "enum": [
+            "few_points",
+            "tree_cover",
+            "too_low",
+            "too_high"
+          ],
+          "title": "Lidar Rejected",
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "residential",
+            "commercial",
+            "retail",
+            "industrial",
+            "public",
+            "religious",
+            "education",
+            "agricultural",
+            "garage_or_shed",
+            "other",
+            "unknown"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "category_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "override",
+                "osm_building",
+                "osm_poi",
+                "osm_poi_area",
+                "mml_use_class",
+                "osm_landuse"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Category Source"
+        },
+        "category_raw": {
+          "$ref": "#/$defs/CategoryRaw"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        },
+        "name_sv": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name Sv"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ref"
+        },
+        "name_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "override",
+                "osm",
+                "osm_poi"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name Source"
+        },
+        "address": {
+          "$ref": "#/$defs/Address"
+        },
+        "address_source": {
+          "anyOf": [
+            {
+              "const": "osm",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Address Source"
+        },
+        "poi_ids": {
+          "description": "POIs on or in the building (sorted)",
+          "items": {
+            "pattern": "^osm:(node|way|relation)/[0-9]+$",
+            "type": "string"
+          },
+          "title": "Poi Ids",
+          "type": "array"
+        },
+        "area_poi_ids": {
+          "description": "POI areas the building is inside (sorted)",
+          "items": {
+            "pattern": "^osm:(node|way|relation)/[0-9]+$",
+            "type": "string"
+          },
+          "title": "Area Poi Ids",
+          "type": "array"
+        },
+        "mml_building": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*/[0-9]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "matched MML building, e.g. mml:rakennus/1",
+          "title": "Mml Building"
+        },
+        "mml_overlap": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "share of the footprint the MML building covers, 3 decimals",
+          "title": "Mml Overlap"
+        },
+        "overrides": {
+          "description": "override entries that set something on this building, sorted by id",
+          "items": {
+            "$ref": "#/$defs/AppliedOverride"
+          },
+          "title": "Overrides",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "tile",
+        "node",
+        "collision_nodes",
+        "height_m",
+        "height_source",
+        "base_z",
+        "base_source",
+        "roof_shape",
+        "roof_shape_source",
+        "category",
+        "category_source",
+        "category_raw",
+        "name",
+        "name_sv",
+        "ref",
+        "name_source",
+        "address",
+        "address_source",
+        "poi_ids",
+        "area_poi_ids",
+        "mml_building",
+        "mml_overlap",
+        "overrides"
+      ],
+      "title": "BuildingEntry",
+      "type": "object"
+    },
+    "CategoryRaw": {
+      "additionalProperties": false,
+      "description": "Every source's raw value, whichever step won.",
+      "properties": {
+        "osm_building": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the `building` tag",
+          "title": "Osm Building"
+        },
+        "osm_poi": {
+          "description": "POI `key=value` tags on the building and on POIs on or in it (sorted)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Osm Poi",
+          "type": "array"
+        },
+        "osm_poi_area": {
+          "description": "POI `key=value` tags of the POI areas the building is inside (sorted)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Osm Poi Area",
+          "type": "array"
+        },
+        "mml_feature_class": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "matched MML building's kohdeluokka",
+          "title": "Mml Feature Class"
+        },
+        "mml_use_class": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "matched MML building's kayttotarkoitus",
+          "title": "Mml Use Class"
+        },
+        "osm_landuse": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the land use value used for step 6",
+          "title": "Osm Landuse"
+        },
+        "override": {
+          "anyOf": [
+            {
+              "enum": [
+                "residential",
+                "commercial",
+                "retail",
+                "industrial",
+                "public",
+                "religious",
+                "education",
+                "agricultural",
+                "garage_or_shed",
+                "other",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the category from the override file",
+          "title": "Override"
+        }
+      },
+      "required": [
+        "osm_building",
+        "osm_poi",
+        "osm_poi_area",
+        "mml_feature_class",
+        "mml_use_class",
+        "osm_landuse",
+        "override"
+      ],
+      "title": "CategoryRaw",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 2,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "map_id": {
+      "title": "Map Id",
+      "type": "string"
+    },
+    "buildings": {
+      "items": {
+        "$ref": "#/$defs/BuildingEntry"
+      },
+      "title": "Buildings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "map_id",
+    "buildings"
+  ],
+  "title": "BuildingsDocument",
+  "type": "object"
+}

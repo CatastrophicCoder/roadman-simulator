@@ -9,6 +9,9 @@ With an imagery source and its files, the pack also gets `debug/orthophoto/<tile
 per tile (plus `debug/.gdignore`); the terrain's UVs map each tile onto its texture.
 A release build (`release=True`) skips the sources marked `debug_only` in map.yaml, so
 the pack neither reads nor credits their files (no `debug/orthophoto/` for Somero).
+An optional `maps/<map-id>/overrides/buildings.json` (category and name overrides) is
+validated before the load stage. The places stage resolves each building's category,
+names, address and POI links (`buildings.json` schema version 2) and writes `pois.json`.
 With a `roads` block in map.yaml, the roads stage (stages 4 and 7) adds `road-col`,
 `path-col` and bridge deck nodes to the tiles and fills `road_graph.json`; without it,
 the map has no road meshes and an empty (valid) `road_graph.json`.
@@ -18,7 +21,7 @@ import shutil
 import time
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -48,13 +51,26 @@ from mapgen.build.pack_manifest import (
     BUILDINGS_NAME,
     HEIGHT_DATUM,
     MANIFEST_NAME,
-    SCHEMA_VERSION,
     TILES_DIR,
     ManifestError,
     PackManifest,
     credits_for,
     validate_manifest_document,
     validate_manifest_file,
+)
+from mapgen.build.pack_manifest import SCHEMA_VERSION as MANIFEST_SCHEMA_VERSION
+from mapgen.build.places import PlacesResult, build_places
+from mapgen.build.places.model import (
+    BUILDINGS_SCHEMA,
+    BUILDINGS_SCHEMA_VERSION,
+    POIS_NAME,
+    POIS_SCHEMA,
+    PlacesError,
+)
+from mapgen.build.places.overrides import (
+    BuildingOverridesError,
+    overrides_path,
+    read_building_overrides,
 )
 from mapgen.build.roads import RoadsResult, build_roads
 from mapgen.build.roads.model import ROAD_GRAPH_NAME, RoadGraphError, empty_graph_document
@@ -69,7 +85,7 @@ from mapgen.sources.base import isoformat_utc, utc_now
 
 __all__ = ["BuildError", "BuildReport", "run_build"]
 
-STAGE_DIRS = ("01-load", "02-terrain", "03-buildings", "04-roads", "07-road-graph")
+STAGE_DIRS = ("01-load", "02-terrain", "03-buildings", "04-roads", "07-road-graph", "08-places")
 
 
 @dataclass
@@ -90,6 +106,9 @@ class BuildReport:
     suspected_missing_bridges: int = 0
     clearance_warnings: int = 0
     drivable_share: float | None = None  # largest weakly connected drivable component
+    category_counts: dict[str, int] = field(default_factory=dict)
+    category_source_counts: dict[str, int] = field(default_factory=dict)
+    poi_count: int = 0
 
 
 def _clear(folder: Path) -> None:
@@ -126,8 +145,10 @@ def run_build(
 
     `map_dir` is the map's config folder (`maps/<map-id>/`). Its optional
     `camera_presets.json` is validated before the slow stages and copied unchanged into
-    the pack. Without `map_dir`, the pack has no camera presets. With `release`, the
-    `debug_only` sources are treated as disabled, even when their raw files exist.
+    the pack, and its optional `overrides/buildings.json` is validated before the slow
+    stages too. Without `map_dir`, the pack has no camera presets and no overrides. With
+    `release`, the `debug_only` sources are treated as disabled, even when their raw files
+    exist.
     """
     if release:
         for name in config.debug_only_sources():
@@ -141,6 +162,11 @@ def run_build(
     try:
         presets_bytes = read_camera_presets(map_dir / PRESETS_NAME) if map_dir else None
     except CameraPresetsError as exc:
+        raise BuildError(str(exc)) from exc
+    overrides_file = overrides_path(map_dir) if map_dir else None
+    try:
+        overrides = read_building_overrides(overrides_file) if overrides_file else None
+    except BuildingOverridesError as exc:
         raise BuildError(str(exc)) from exc
     area = build_area(config, area_name)
     tiles = area.tiles()
@@ -183,10 +209,28 @@ def run_build(
             points=loaded.points,
             lidar_params=loaded.lidar_params,
         )
-        _write_buildings_stage(work_dir / "03-buildings", buildings, config.crs, origin)
+
+    with stage("places"):
+        places = build_places(
+            config.id,
+            area,
+            loaded.footprints,
+            loaded,
+            loaded.heightfield,
+            overrides,
+            _display(overrides_file, map_dir) if overrides is not None else None,
+        )
+        buildings = BuildingsResult(
+            [replace(b, place=places.building_fields[b.id]) for b in buildings.buildings]
+        )
+        _write_buildings_stage(work_dir / "03-buildings", buildings, config.crs, origin, places)
+        _write_places_stage(work_dir / "08-places", places, config.crs, origin)
     building_report = buildings.report()
     report.building_count = building_report["building_count"]
     report.height_source_counts = building_report["height_source_counts"]
+    report.category_counts = places.building_report["category_counts"]
+    report.category_source_counts = places.building_report["category_source_counts"]
+    report.poi_count = len(places.pois_document["pois"])
 
     roads: RoadsResult | None = None
     road_graph = empty_graph_document(config.id, area_name)
@@ -232,10 +276,12 @@ def run_build(
         ]
         # Everything that can fail on bad input is checked before the pack folder is touched.
         try:
-            credits = credits_for(loaded.files, raw_dir, load_entries(raw_dir))
+            credits = credits_for(
+                loaded.files, raw_dir, load_entries(raw_dir), extra=places.credits
+            )
             manifest = PackManifest.model_validate(
                 {
-                    "schema_version": SCHEMA_VERSION,
+                    "schema_version": MANIFEST_SCHEMA_VERSION,
                     "map_id": config.id,
                     "display_name": config.display_name,
                     "area": area_name,
@@ -279,14 +325,17 @@ def run_build(
                 if roads is not None:
                     nodes += roads.tile_nodes.get(tile.id, [])
                 export_glb(staging / TILES_DIR / f"{tile.id}.glb", nodes)
-            write_json(
-                staging / BUILDINGS_NAME,
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "map_id": config.id,
-                    "buildings": [b.provenance() for b in buildings.buildings],
-                },
+            BUILDINGS_SCHEMA.validate_file(
+                write_json(
+                    staging / BUILDINGS_NAME,
+                    {
+                        "schema_version": BUILDINGS_SCHEMA_VERSION,
+                        "map_id": config.id,
+                        "buildings": [b.provenance() for b in buildings.buildings],
+                    },
+                )
             )
+            POIS_SCHEMA.validate_file(write_json(staging / POIS_NAME, places.pois_document))
             if mosaic is not None:
                 written = write_debug_textures(mosaic, plans, staging)
                 report.debug_textures = len(written)
@@ -303,7 +352,13 @@ def run_build(
             swap_in(staging, out_dir)
         except PackCheckError as exc:
             raise BuildError(f"pack check failed: {exc}") from exc
-        except (ManifestError, PackFolderError, OrthophotoError, RoadGraphError) as exc:
+        except (
+            ManifestError,
+            PackFolderError,
+            OrthophotoError,
+            RoadGraphError,
+            PlacesError,
+        ) as exc:
             raise BuildError(str(exc)) from exc
         finally:
             shutil.rmtree(staging, ignore_errors=True)
@@ -318,8 +373,31 @@ def _terrain_node(chunk: TerrainChunk, bounds: BBox) -> MeshNode:
     return MeshNode(TERRAIN_NODE, chunk.vertices, chunk.faces, chunk.normals, uv)
 
 
+def _display(path: Path | None, map_dir: Path | None) -> str | None:
+    """`path` relative to the repository (the parent of `maps/`) when possible."""
+    if path is None:
+        return None
+    if map_dir is not None:
+        try:
+            return path.relative_to(map_dir.parent.parent).as_posix()
+        except ValueError:
+            pass
+    return str(path)
+
+
+def _write_places_stage(
+    folder: Path, places: PlacesResult, crs: str, origin: tuple[float, float]
+) -> None:
+    write_geojson(folder / "pois.geojson", places.poi_features, crs, origin)
+    write_json(folder / "report.json", places.places_report)
+
+
 def _write_buildings_stage(
-    folder: Path, buildings: BuildingsResult, crs: str, origin: tuple[float, float]
+    folder: Path,
+    buildings: BuildingsResult,
+    crs: str,
+    origin: tuple[float, float],
+    places: PlacesResult,
 ) -> None:
     write_geojson(
         folder / "buildings.geojson",
@@ -338,4 +416,4 @@ def _write_buildings_stage(
         crs,
         origin,
     )
-    write_json(folder / "report.json", buildings.report())
+    write_json(folder / "report.json", {**buildings.report(), **places.building_report})

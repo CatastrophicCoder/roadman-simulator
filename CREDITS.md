@@ -26,7 +26,7 @@ Each dataset is listed with its source, name and download date, as MML's terms r
 | Laser scanning data 0,5 p | MML file service (`laserkeilausaineisto_05_karttalehti`, latest dataset) or Karttapaikka | 2026-10-27 |
 | Orthophoto | MML file service (`ortoilmakuva_karttalehti`) or Karttapaikka. Used only for the debug orthophoto view; the textures are never exported with the game (ADR 0009) | 2026-10-27 (latest year version) |
 | Buildings 3D (not available for Somero) | MML file service (`3d-rakennukset_karttalehti`) | Not used: no coverage for Somero |
-| Topographic Database (if used) | MML file service (`maastotietokanta_bbox`) | TODO: not downloaded yet |
+| Topographic Database | MML file service (`maastotietokanta_bbox`, theme `maastotietokanta_kaikki`, GPKG). Building use classes (table `rakennus`) for building categories | 2026-10-29 |
 
 Release builds use the MML files from the map's pinned data snapshot (ADR 0011): a GitHub release `data-<map-id>-<date>` named in `maps/<map-id>/map.yaml`. The files are as downloaded; the snapshot's `NOTICE.md` and `download-manifest.json` give the dataset names and dates. The orthophoto isn't in snapshots.
 

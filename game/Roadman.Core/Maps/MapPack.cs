@@ -13,6 +13,12 @@ public static partial class MapPack
     /// <summary>The road graph, next to the manifest; found by this name, not listed in the manifest.</summary>
     public const string RoadGraphFile = "road_graph.json";
 
+    /// <summary>Per-building provenance and place data, next to the manifest; found by this name.</summary>
+    public const string BuildingsFile = "buildings.json";
+
+    /// <summary>Points of interest, next to the manifest; found by this name, not listed in the manifest.</summary>
+    public const string PoisFile = "pois.json";
+
     /// <summary>The hint added to every pack error: the pack is generated, so the fix is to rebuild it.</summary>
     public static string RegenHint(string mapId) => $"run /regen-map {mapId} to (re)build the pack";
 

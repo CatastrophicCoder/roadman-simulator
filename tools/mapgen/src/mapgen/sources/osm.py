@@ -1,8 +1,10 @@
 """OpenStreetMap through the Overpass API: one request for the whole map bbox.
 
 `load` reads the saved `.osm` XML once with the standard library and returns, in WGS84
-(lon, lat): building footprints, `highway` ways with their node ids, and water (areas
-and waterway lines, used to find road crossings). Ids look like "osm:way/123" and
+(lon, lat): building footprints (with all their tags), `highway` ways with their node
+ids, water (areas and waterway lines, used to find road crossings), points of interest
+(nodes, closed ways and multipolygons with a `shop`, `amenity`, `office`, `tourism` or
+`leisure` tag) and land use areas. Ids look like "osm:node/7", "osm:way/123" and
 "osm:relation/45".
 """
 
@@ -15,10 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import Field
-from shapely import make_valid
 from shapely.errors import GEOSException
-from shapely.geometry import LineString, MultiPolygon, Polygon
-from shapely.geometry.base import BaseGeometry
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
 from mapgen.geo import WGS84
@@ -29,7 +29,9 @@ from mapgen.sources.base import (
     DownloadContext,
     DownloadedFile,
     Footprint,
+    LandUseArea,
     LoadContext,
+    PoiFeature,
     RoadWay,
     SkippedFeature,
     SourceAdapter,
@@ -38,6 +40,7 @@ from mapgen.sources.base import (
     SourceLoadError,
     WaterArea,
     WaterLine,
+    valid_area,
 )
 
 DEFAULT_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -213,18 +216,7 @@ def _coords(refs: list[int], nodes: dict[int, Coord]) -> list[Coord] | None:
         return None
 
 
-def _valid_area(geom: BaseGeometry) -> Polygon | MultiPolygon | None:
-    """`geom` repaired, keeping only its polygonal parts; None if nothing with area is left."""
-    if not geom.is_valid:
-        geom = make_valid(geom)
-    if isinstance(geom, Polygon | MultiPolygon):
-        polygons = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
-    else:
-        polygons = [g for g in getattr(geom, "geoms", []) if isinstance(g, Polygon)]
-    polygons = [p for p in polygons if not p.is_empty and p.area > 0]
-    if not polygons:
-        return None
-    return polygons[0] if len(polygons) == 1 else MultiPolygon(polygons)
+_valid_area = valid_area
 
 
 def join_rings(segments: list[list[int]]) -> tuple[list[list[int]], int]:
@@ -499,6 +491,141 @@ def osm_water(data: OsmData) -> OsmWater:
     return result
 
 
+# Points of interest and land use (docs/specs/place-information.md).
+
+# The keys that make a feature a point of interest, in the order that picks its `type`.
+POI_KEYS = ("shop", "amenity", "office", "tourism", "leisure")
+
+
+def is_poi(tags: dict[str, str]) -> bool:
+    return any(key in tags for key in POI_KEYS)
+
+
+@dataclass
+class OsmPois:
+    """Points of interest in WGS84, and the POI features that couldn't be built."""
+
+    pois: list[PoiFeature] = field(default_factory=list)
+    skipped: list[SkippedFeature] = field(default_factory=list)
+
+
+def osm_pois(data: OsmData) -> OsmPois:
+    """Nodes, closed ways and `type=multipolygon` relations with a POI key, named or not.
+
+    A building way or relation with a POI key is a POI too (same id as the building).
+    Areas are built and repaired as for buildings: a relation without a closed outer ring
+    is skipped with a reason, and one built despite missing members or open rings is kept
+    and listed in `skipped` with the reason prefixed "partial". Unclosed ways, ways with
+    missing nodes and other relation types are skipped with a reason.
+    """
+    nodes, ways = data.nodes, data.ways
+    result = OsmPois()
+    for node_id, tags in sorted(data.node_tags.items()):
+        if is_poi(tags):
+            point = Point(nodes[node_id])
+            result.pois.append(PoiFeature(f"osm:node/{node_id}", point, WGS84, dict(tags)))
+    for way_id, way in sorted(ways.items()):
+        if not is_poi(way.tags):
+            continue
+        fid = f"osm:way/{way_id}"
+        built = _closed_way_area(way, nodes)
+        if isinstance(built, str):
+            result.skipped.append(SkippedFeature(fid, built))
+        else:
+            result.pois.append(PoiFeature(fid, built, WGS84, dict(way.tags)))
+    for rel_id, relation in sorted(data.relations.items()):
+        if not is_poi(relation.tags):
+            continue
+        fid = f"osm:relation/{rel_id}"
+        if relation.tags.get("type") != "multipolygon":
+            kind = relation.tags.get("type", "")
+            result.skipped.append(SkippedFeature(fid, f"unsupported relation type {kind!r}"))
+            continue
+        try:
+            rel = _relation_geometry(relation, ways, nodes)
+        except (GEOSException, ValueError) as exc:
+            result.skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+            continue
+        if rel.geometry is None:
+            result.skipped.append(SkippedFeature(fid, rel.reason))
+            continue
+        if rel.partial:
+            reason = "partial multipolygon: " + ", ".join(rel.partial)
+            result.skipped.append(SkippedFeature(fid, reason))
+        result.pois.append(PoiFeature(fid, rel.geometry, WGS84, dict(relation.tags)))
+    result.pois.sort(key=lambda p: p.id)
+    return result
+
+
+def _closed_way_area(way: _Way, nodes: dict[int, Coord]) -> Polygon | MultiPolygon | str:
+    """A closed way's repaired area, or the reason it can't be built."""
+    if len(way.refs) < 4 or way.refs[0] != way.refs[-1]:
+        return "way is not closed"
+    coords = _coords(way.refs, nodes)
+    if coords is None:
+        return "way has nodes missing from the data"
+    try:
+        area = _valid_area(Polygon(coords))
+    except (GEOSException, ValueError) as exc:
+        return f"geometry error: {exc}"
+    if area is None:
+        return "area has no area after repair"
+    return area
+
+
+@dataclass
+class OsmLandUse:
+    """Land use areas in WGS84, and the ones left out with reasons."""
+
+    areas: list[LandUseArea] = field(default_factory=list)
+    skipped: list[SkippedFeature] = field(default_factory=list)
+
+
+def osm_landuse(data: OsmData) -> OsmLandUse:
+    """Closed ways and `type=multipolygon` relations with a `landuse` tag.
+
+    Rings are built and repaired as for buildings. A relation that can't be closed
+    completely (missing member ways or open rings, typically cut at the bbox edge;
+    ADR 0005) is left out and listed in `skipped`, as for water. Ways that can't be built
+    are listed too. A way that is a member of a built land use relation stays a separate
+    area only when it has its own `landuse` tag.
+    """
+    nodes, ways = data.nodes, data.ways
+    result = OsmLandUse()
+    for rel_id, relation in sorted(data.relations.items()):
+        if "landuse" not in relation.tags:
+            continue
+        fid = f"osm:relation/{rel_id}"
+        if relation.tags.get("type") != "multipolygon":
+            kind = relation.tags.get("type", "")
+            result.skipped.append(SkippedFeature(fid, f"unsupported relation type {kind!r}"))
+            continue
+        try:
+            rel = _relation_geometry(relation, ways, nodes)
+        except (GEOSException, ValueError) as exc:
+            result.skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+            continue
+        if rel.geometry is None:
+            result.skipped.append(SkippedFeature(fid, rel.reason))
+            continue
+        if rel.partial:
+            reason = "incomplete multipolygon: " + ", ".join(rel.partial)
+            result.skipped.append(SkippedFeature(fid, reason))
+            continue
+        result.areas.append(LandUseArea(fid, rel.geometry, WGS84, dict(relation.tags)))
+    for way_id, way in sorted(ways.items()):
+        if "landuse" not in way.tags:
+            continue
+        fid = f"osm:way/{way_id}"
+        built = _closed_way_area(way, nodes)
+        if isinstance(built, str):
+            result.skipped.append(SkippedFeature(fid, built))
+        else:
+            result.areas.append(LandUseArea(fid, built, WGS84, dict(way.tags)))
+    result.areas.sort(key=lambda a: a.id)
+    return result
+
+
 class OverpassAdapter(SourceAdapter):
     name = "osm_overpass"
     licence = "ODbL 1.0"
@@ -513,10 +640,12 @@ class OverpassAdapter(SourceAdapter):
                 f"{ctx.map_config.id} --only {ctx.source_name}`"
             )
         try:
-            data = parse_osm(path)  # parsed once for buildings, roads and water
+            data = parse_osm(path)  # parsed once for every feature type
             buildings = osm_buildings(data)
             roads = osm_roads(data)
             water = osm_water(data)
+            pois = osm_pois(data)
+            landuse = osm_landuse(data)
         except (ET.ParseError, KeyError, ValueError) as exc:
             raise SourceLoadError(f"[{ctx.source_name}] cannot read {path}: {exc}") from exc
         return SourceData(
@@ -529,6 +658,10 @@ class OverpassAdapter(SourceAdapter):
             water_areas=water.areas,
             water_lines=water.lines,
             water_skipped=water.skipped,
+            pois=pois.pois,
+            pois_skipped=pois.skipped,
+            landuse=landuse.areas,
+            landuse_skipped=landuse.skipped,
         )
 
     def attribution(self, retrieved_at: datetime) -> str:
