@@ -1,4 +1,7 @@
+import email.message
 import http.client
+import io
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -108,3 +111,23 @@ def test_redact_url_handles_spaces_in_key() -> None:
     redacted = redact_url(f"https://h/p?a=1&api-key={SECRET} more&b=2")
     assert SECRET not in redacted and "more" not in redacted
     assert redacted == "https://h/p?a=1&api-key=***&b=2"
+
+
+@pytest.mark.parametrize("retry_after", ["120", None])
+def test_http_error_keeps_retry_after(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, retry_after: str | None
+) -> None:
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> None:
+        raise urllib.error.HTTPError(
+            request.full_url, 429, "Too Many Requests", headers, io.BytesIO(b"busy")
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(HttpError) as info:
+        UrllibClient(env={}).download("https://example.invalid/x", tmp_path / "x", data=b"q")
+    assert info.value.status == 429
+    assert info.value.retry_after == retry_after

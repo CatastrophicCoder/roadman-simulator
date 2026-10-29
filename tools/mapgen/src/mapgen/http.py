@@ -58,11 +58,20 @@ def user_agent(env: Mapping[str, str] | None = None) -> str:
 
 
 class HttpError(Exception):
-    """An HTTP request failed. `url` is already redacted."""
+    """An HTTP request failed. `url` is already redacted. `retry_after` is the response's
+    Retry-After header, unparsed, or None."""
 
-    def __init__(self, url: str, status: int | None, reason: str, body: str = "") -> None:
+    def __init__(
+        self,
+        url: str,
+        status: int | None,
+        reason: str,
+        body: str = "",
+        retry_after: str | None = None,
+    ) -> None:
         self.url = redact_url(url)
         self.status = status
+        self.retry_after = retry_after
         self.reason = redact(reason)
         self.body = redact(body[:500])
         status_text = f"HTTP {status}" if status is not None else "request failed"
@@ -116,7 +125,8 @@ class UrllibClient:
                 body = exc.read().decode("utf-8", errors="replace")
             except OSError:
                 body = ""
-            raise HttpError(url, exc.code, str(exc.reason), body) from None
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            raise HttpError(url, exc.code, str(exc.reason), body, retry_after) from None
         except urllib.error.URLError as exc:
             raise HttpError(url, None, str(exc.reason)) from None
         except TimeoutError:

@@ -81,7 +81,7 @@ Collision comes from glTF node name suffixes (`-col`, `-colonly`, `-convcolonly`
 
 Module layout (`tools/mapgen/src/mapgen/`):
 
-- `cli.py`: `mapgen download <map-id> [--only a,b] [--force] [--release] [--strict]`, `mapgen origin <map-id>`, `mapgen build <map-id> [--area full|test] [--out DIR] [--release]` and `mapgen notice <map-id>... (--out FILE | --check FILE)`, with `--repo-root` (found automatically by default). `enhance` will be added as a further subcommand.
+- `cli.py`: `mapgen download <map-id> [--only a,b] [--force] [--release] [--strict] [--retries N]`, `mapgen origin <map-id>`, `mapgen build <map-id> [--area full|test] [--out DIR] [--release]` and `mapgen notice <map-id>... (--out FILE | --check FILE)`, with `--repo-root` (found automatically by default). `enhance` will be added as a further subcommand.
   - `download --release` skips `debug_only` sources (logs `[<name>] skipped (debug only)`); naming one in `--only` together with `--release` is a usage error (exit 2).
   - `download --strict` fails (exit 1) when a selected source returned no files, or when its adapter's required environment variables are unset (the MML adapters need `MML_API_KEY`; with `--strict` they neither print manual steps nor register files already on disk). Each failed source is reported with its reason; the key is never printed. Without `--strict` nothing changes.
   - `build --release` treats `debug_only` sources as disabled, even when their raw files exist.

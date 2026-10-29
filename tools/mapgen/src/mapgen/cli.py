@@ -20,6 +20,16 @@ def _split_csv(value: str) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
+def _non_negative_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {value!r}") from None
+    if number < 0:
+        raise argparse.ArgumentTypeError(f"must be 0 or more: {number}")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mapgen", description="Roadman Simulator map pipeline")
     parser.add_argument("--version", action="version", version=f"mapgen {__version__}")
@@ -46,6 +56,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict",
         action="store_true",
         help="fail when a selected source returns no files or lacks its API key",
+    )
+    download.add_argument(
+        "--retries",
+        type=_non_negative_int,
+        default=0,
+        help="retry a busy server (Overpass HTTP 429, 502, 503, 504) up to N times with "
+        "backoff (default 0: one attempt)",
     )
     download.set_defaults(handler=cmd_download)
 
@@ -107,6 +124,7 @@ def cmd_download(args: argparse.Namespace, repo_root: Path) -> int:
         force=args.force,
         release=args.release,
         strict=args.strict,
+        retries=args.retries,
     )
     if report.manifest_path:
         print(f"manifest: {report.manifest_path}")

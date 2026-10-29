@@ -33,7 +33,8 @@ jobs:
       - name: uv sync
         run: uv sync --project tools/mapgen --locked
 
-      # Fails on a missing key, a failed download or a source without files.
+      # Fails on a missing key, a failed download or a source without files. A busy
+      # Overpass server is retried 3 times (30, 60, 120 s, or its Retry-After).
       # Never echo the key or request URLs here; the pipeline redacts it from errors.
       - name: Download source data
         env:
@@ -45,7 +46,7 @@ jobs:
           fi
           for config in maps/*/map.yaml; do
             map="$(basename "$(dirname "$config")")"
-            uv run --project tools/mapgen mapgen download "$map" --release --strict --force
+            uv run --project tools/mapgen mapgen download "$map" --release --strict --force --retries 3
           done
 
       - name: Build map packs

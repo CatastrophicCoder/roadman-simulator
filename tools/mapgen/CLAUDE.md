@@ -33,6 +33,8 @@ uv run mapgen download <map-id> --only osm,mml_dem_2m --force   # some sources, 
 uv run mapgen download <map-id> --only mml_lidar   # lidar; a map with mml_lidar enabled doesn't build without it
 uv run mapgen download <map-id> --release --strict   # release: skip debug_only sources; fail if a source
                                           #   gets no files or MML_API_KEY is missing
+uv run mapgen download <map-id> --only osm --retries 3   # retry a busy Overpass (HTTP 429, 502, 503,
+                                          #   504) after 30, 60, 120 s or its Retry-After; default 0
 uv run mapgen origin <map-id>             # print the bbox centre to use as origin in map.yaml
 uv run mapgen build <map-id>              # build the map pack (--area test: the small test area)
 uv run mapgen build <map-id> --release    # skip debug_only sources: no debug/orthophoto/ in the pack

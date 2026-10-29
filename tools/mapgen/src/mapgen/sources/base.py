@@ -102,6 +102,7 @@ class DownloadContext:
     http: HttpClient
     env: Mapping[str, str]
     previous_entries: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    retries: int = 0  # how often an adapter may retry a busy server (`download --retries`)
     log: Callable[[str], None] = print
     now: Callable[[], datetime] = utc_now
     sleep: Callable[[float], None] = time.sleep

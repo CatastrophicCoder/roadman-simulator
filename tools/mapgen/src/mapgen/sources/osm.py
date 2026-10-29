@@ -4,11 +4,12 @@
 footprints in WGS84 (lon, lat). Ids look like "osm:way/123" and "osm:relation/45".
 """
 
+import email.utils
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import Field
@@ -37,7 +38,11 @@ from mapgen.sources.base import (
 DEFAULT_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 SERVER_TIMEOUT_S = 180
 CLIENT_TIMEOUT_S = 240.0
-BUSY_STATUSES = frozenset({429, 504})
+BUSY_STATUSES = frozenset({429, 502, 503, 504})
+# Waits before retries 1, 2, 3, ...: 30, 60, 120 s, doubling. A Retry-After header replaces
+# the wait, but one longer than MAX_RETRY_AFTER_S ends the retries instead.
+RETRY_BASE_S = 30.0
+MAX_RETRY_AFTER_S = 600.0
 
 
 class OverpassBusyError(SourceError):
@@ -52,6 +57,22 @@ class OverpassOptions(AdapterOptions):
 
 def _num(value: float) -> str:
     return repr(float(value))
+
+
+def retry_after_s(value: str | None, now: datetime) -> float | None:
+    """Seconds to wait from a Retry-After header (delay-seconds or HTTP-date), or None."""
+    if value is None:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - now).total_seconds())
 
 
 def build_query(south: float, west: float, north: float, east: float, timeout_s: int) -> str:
@@ -341,6 +362,32 @@ class OverpassAdapter(SourceAdapter):
     def attribution(self, retrieved_at: datetime) -> str:
         return "© OpenStreetMap contributors"
 
+    @staticmethod
+    def _retry_wait(
+        ctx: DownloadContext, exc: HttpError, attempt: int
+    ) -> tuple[float, bool] | None:
+        """(seconds to wait, whether Retry-After set it), or None to stop retrying."""
+        if attempt > ctx.retries:
+            return None
+        server_wait = retry_after_s(exc.retry_after, ctx.now())
+        if server_wait is not None:
+            return (server_wait, True) if server_wait <= MAX_RETRY_AFTER_S else None
+        return RETRY_BASE_S * 2 ** (attempt - 1), False
+
+    @staticmethod
+    def _busy_message(ctx: DownloadContext, exc: HttpError, attempt: int) -> str:
+        if ctx.retries == 0:
+            return (
+                f"Overpass busy (HTTP {exc.status}), try again later. Not retrying "
+                "(use --retries N)."
+            )
+        if attempt <= ctx.retries:
+            return (
+                f"Overpass busy (HTTP {exc.status}) and asks to wait {exc.retry_after!r} "
+                f"(Retry-After, over {MAX_RETRY_AFTER_S:.0f} s), try again later."
+            )
+        return f"Overpass busy (HTTP {exc.status}) after {attempt} attempts, try again later."
+
     def download(self, ctx: DownloadContext) -> list[DownloadedFile]:
         options = ctx.options
         assert isinstance(options, OverpassOptions)
@@ -362,20 +409,32 @@ class OverpassAdapter(SourceAdapter):
         # so a failed --force run keeps the previous file.
         tmp = dest.with_name(dest.name + ".download")
         try:
-            try:
-                ctx.http.download(
-                    options.url,
-                    tmp,
-                    data=body,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    timeout=options.client_timeout_s,
-                )
-            except HttpError as exc:
-                if exc.status in BUSY_STATUSES:
-                    raise OverpassBusyError(
-                        f"Overpass busy (HTTP {exc.status}), try again later. Not retrying."
-                    ) from None
-                raise SourceError(f"Overpass request failed: {exc}") from None
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    ctx.http.download(
+                        options.url,
+                        tmp,
+                        data=body,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        timeout=options.client_timeout_s,
+                    )
+                    break
+                except HttpError as exc:
+                    if exc.status not in BUSY_STATUSES:
+                        raise SourceError(f"Overpass request failed: {exc}") from None
+                    retry = self._retry_wait(ctx, exc, attempt)
+                    if retry is None:
+                        raise OverpassBusyError(self._busy_message(ctx, exc, attempt)) from None
+                    wait, from_header = retry
+                    # Status and wait only: never the request body (the query) or the response.
+                    ctx.log(
+                        f"[{ctx.source_name}] Overpass busy (HTTP {exc.status}), retry "
+                        f"{attempt} of {ctx.retries} in {wait:.0f} s"
+                        + (" (Retry-After)" if from_header else "")
+                    )
+                    ctx.sleep(wait)
             error = overpass_runtime_error(tmp)
             if error:
                 raise SourceError(f"Overpass returned an error instead of data: {error}")

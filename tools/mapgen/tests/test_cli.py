@@ -24,6 +24,14 @@ def test_download_arguments() -> None:
     assert args.map_id == "testtown"
     assert args.only == ["osm", "mml_dem_2m"]
     assert args.force is True
+    assert args.retries == 0
+    assert build_parser().parse_args(["download", "testtown", "--retries", "3"]).retries == 3
+
+
+@pytest.mark.parametrize("value", ["-1", "two"])
+def test_download_retries_must_be_a_non_negative_number(value: str) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["download", "testtown", "--retries", value])
 
 
 def test_origin_command_prints_rounded_centre(

@@ -78,6 +78,7 @@ def run_download(
     force: bool = False,
     release: bool = False,
     strict: bool = False,
+    retries: int = 0,
     http: HttpClient | None = None,
     env: Mapping[str, str] | None = None,
     log: Callable[[str], None] = print,
@@ -114,6 +115,7 @@ def run_download(
             http=http,
             env=env,
             previous_entries=previous,
+            retries=retries,
             log=log,
             now=now,
         )
