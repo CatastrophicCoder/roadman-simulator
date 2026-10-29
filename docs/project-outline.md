@@ -166,7 +166,7 @@ A Python pipeline in `tools/mapgen/` turns any map's raw data into a Godot-ready
 1. **Load and project:** read OSM and MML data, reproject to EPSG:3067, subtract the local origin.
 2. **Terrain:** produce either chunked terrain meshes or a 16-bit heightmap for the Terrain3D add-on. Decide with an ADR (see below).
 3. **Buildings:** extrude footprints to height, from MML 0.5 p lidar (median roof height minus ground), MML 3D data, OSM `height` or `building:levels` tags, or a default of 2 floors × 3 m. Set the base at terrain height under the footprint. Start with flat roofs; add simple pitched roofs later. Each building also carries its category, name and address (see Place information).
-4. **Roads:** buffer centre lines to widths by road class, triangulate, drape onto the terrain with a small offset. Handle bridges with OSM `bridge` and `layer` tags.
+4. **Roads:** buffer centre lines to widths by road class, triangulate, drape onto the terrain with a small offset. Handle bridges, both tagged and inferred (over water and over underpasses), with straight decks fitted to the lidar's deck points and spans that end where the road meets them, using OSM `bridge` and `layer` tags.
 5. **Water and land use:** water polygons as flat meshes, land-use polygons as material zones on the ground.
 6. **Vegetation:** scatter tree positions inside forest and park polygons; output positions only, not meshes.
 7. **Road graph:** nodes at intersections, edges with class, lane count, speed limit, one-way flag, street name (Finnish and Swedish) and road number. Godot uses it for traffic and the minimap.
