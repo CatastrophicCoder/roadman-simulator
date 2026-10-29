@@ -722,9 +722,13 @@ def _publish(repo: TmpRepo, gh: FakeGh, archive: snap.SnapshotArchive) -> snap.P
         ),
         # other dates and maps don't count
         (("data-testtown-2026-10-26", "data-othertown-2026-10-27"), TAG),
+        # a gap is never filled: the next number follows the highest one
+        ((TAG, f"{TAG}.3"), f"{TAG}.4"),
+        # nor is the plain tag reused once a number of that date exists
+        ((f"{TAG}.2",), f"{TAG}.3"),
     ],
 )
-def test_publish_picks_the_first_free_tag_and_names_the_asset_after_it(
+def test_publish_picks_the_next_tag_and_names_the_asset_after_it(
     repo: TmpRepo, archive: snap.SnapshotArchive, existing: tuple[str, ...], expected: str
 ) -> None:
     gh = FakeGh(releases=existing)
@@ -876,11 +880,17 @@ def test_a_map_yaml_write_error_after_create_names_the_kept_release(
     assert map_yaml.read_text(encoding="utf-8") == before
 
 
-def test_first_free_tag_and_asset_names() -> None:
-    assert snap.first_free_tag("x", DATE, []) == f"data-x-{DATE}"
-    assert snap.first_free_tag("x", DATE, [f"data-x-{DATE}", f"data-x-{DATE}.3"]) == (
-        f"data-x-{DATE}.2"
+def test_next_tag_and_asset_names() -> None:
+    assert snap.next_tag("x", DATE, []) == f"data-x-{DATE}"
+    assert snap.next_tag("x", DATE, [f"data-x-{DATE}", f"data-x-{DATE}.3"]) == f"data-x-{DATE}.4"
+    assert snap.next_tag("x", DATE, [f"data-x-{DATE}.10", f"data-x-{DATE}.9"]) == (
+        f"data-x-{DATE}.11"
     )
+    # `.1` and `.02` aren't valid tags but still count by their number
+    assert snap.next_tag("x", DATE, [f"data-x-{DATE}.1"]) == f"data-x-{DATE}.2"
+    assert snap.next_tag("x", DATE, [f"data-x-{DATE}", f"data-x-{DATE}.02"]) == f"data-x-{DATE}.3"
+    # a prefix match from the tag listing isn't a tag of this date
+    assert snap.next_tag("x", DATE, [f"data-x-{DATE}.2x"]) == f"data-x-{DATE}"
     assert snap.asset_for_tag("x", f"data-x-{DATE}.12") == f"mapdata-x-{DATE}.12.zip"
     for bad in (f"data-x-{DATE}.1", f"data-x-{DATE}.01", f"data-y-{DATE}"):
         with pytest.raises(SnapshotError):

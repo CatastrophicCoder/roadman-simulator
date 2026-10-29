@@ -5,7 +5,7 @@ enabled, non-`debug_only` source exactly as the download manifest lists them (th
 without contributor metadata), the filtered `download-manifest.json`, `SHA256SUMS` and a
 generated `NOTICE.md`. `create` reads only the local raw folder and never contacts the
 network. `publish` uploads an archive as the single asset of a new GitHub release with
-`gh`, under the first free tag of its date (an existing data release is never changed),
+`gh`, under the next tag of its date (an existing data release is never changed),
 and writes the `snapshot:` block into map.yaml; only the user runs it. `fetch`
 downloads the pinned archive with plain HTTP, treats it as untrusted, and never replaces
 local files of the snapshot's sources without `force`.
@@ -82,16 +82,19 @@ def asset_for_tag(map_id: str, tag: str) -> str:
     return f"mapdata-{tag.removeprefix('data-')}.zip"
 
 
-def first_free_tag(map_id: str, date_text: str, taken: Iterable[str]) -> str:
-    """The plain tag data-<id>-<date> if it isn't taken, else the first free `.2`, `.3`, ..."""
-    used = set(taken)
+def next_tag(map_id: str, date_text: str, taken: Iterable[str]) -> str:
+    """The plain tag data-<id>-<date> when no tag of that date exists, else the highest
+    existing number plus one (the plain tag counts as 1), so a gap is never filled. Only
+    existing tags are seen: deleting the highest-numbered one frees its number again."""
     base = f"data-{map_id}-{date_text}"
-    if base not in used:
+    numbers = [
+        int(match.group(1) or 1)
+        for tag in taken
+        if (match := re.fullmatch(rf"{re.escape(base)}(?:\.([0-9]+))?", tag))
+    ]
+    if not numbers:
         return base
-    n = 2
-    while f"{base}.{n}" in used:
-        n += 1
-    return f"{base}.{n}"
+    return f"{base}.{max(max(numbers) + 1, 2)}"
 
 
 def _utc_date(moment: datetime) -> str:
@@ -847,7 +850,7 @@ def publish_snapshot(
         raise SnapshotError(f"no valid repository ({repo!r}); pass --repo OWNER/NAME")
 
     taken = existing_tags(runner, repo, f"data-{config.id}-{date_text}")
-    tag = first_free_tag(config.id, date_text, taken)
+    tag = next_tag(config.id, date_text, taken)
     asset = asset_for_tag(config.id, tag)
     if taken:
         log(f"existing data tags of {date_text}: {', '.join(sorted(taken))}; using {tag}")

@@ -74,7 +74,7 @@ A snapshot is one zip archive (zip, so `.github/scripts/check-no-secret.sh` can 
 - The user runs it. Claude never runs it without asking first, and tests never call it.
 - The repository is `--repo`, else the existing `snapshot.repo`, else `gh repo view --json nameWithOwner`.
 - Runs the leak check again, then `gh release create data-<map-id>-<date> <archive> --repo <repo> --latest=false --title ... --notes ...` (the notes carry the NOTICE attributions), and checks with `gh release view` that the asset is there.
-- Fails before uploading if `gh` is missing or not logged in. An existing tag no longer fails; publish takes the first free numbered tag (see Amendments).
+- Fails before uploading if `gh` is missing or not logged in. An existing tag no longer fails; publish takes the next numbered tag (see Amendments).
 - On success, writes `repo`, `release_tag`, `asset` and `sha256` into `map.yaml`'s `snapshot:` block. Only that block's text changes, so the file's comments and order are kept. The user commits the change.
 
 `uv run mapgen snapshot fetch <map-id> [--force]`
@@ -152,7 +152,7 @@ No `Roadman.Core`, gdUnit4, screenshot or playtest coverage, because the game do
 
 - 2026-10-29, decided by the user, so a second snapshot can be published on the same day:
   - A tag may carry a numeric suffix: `data-<map-id>-<YYYY-MM-DD>.<n>`, n ≥ 2 without leading zeros. The asset follows the tag: `mapdata-<map-id>-<YYYY-MM-DD>[.<n>].zip`. `release_tag` in `map.yaml` accepts both forms, and `fetch` accepts them.
-  - `publish` lists the repository's releases (drafts included) and its matching git tags, and takes the first free tag: the plain date tag, else `.2`, `.3` and so on. It never replaces, edits, deletes or uploads to an existing data release or tag. If either listing fails, it stops before uploading and leaves `map.yaml` unchanged. A failure after the release is created names that release and leaves it as is.
+  - `publish` lists the repository's releases (drafts included) and its matching git tags, and takes the next tag: the plain date tag when no tag of that date exists, else the highest existing number plus one (the plain tag counts as 1), so a gap is never filled; deleting the highest-numbered tag makes its number available again. A tag pushed concurrently can't be excluded (ADR 0011). It never replaces, edits, deletes or uploads to an existing data release or tag. If either listing fails, it stops before uploading and leaves `map.yaml` unchanged. A failure after the release is created names that release and leaves it as is.
   - Criterion 16 now reads: no test starts the real `gh` or contacts GitHub; `publish` runs in tests only against a stub runner that fails on any unexpected command. The `map.yaml` block writer stays a pure function on text.
 
 ## Open questions
