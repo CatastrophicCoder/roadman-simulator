@@ -362,7 +362,7 @@ def test_ac11_building_refuses_invalid_heights(height: float) -> None:
             id="osm:way/1",
             tile="tile_x0_y0",
             node="bld_osm_way_1",
-            collision_nodes=("bld_osm_way_1-colonly",),
+            collision_nodes=("bld_osm_way_1_c0-colonly",),
             footprint=box(0, 0, 1, 1),
             height_m=height,
             height_source="default",

@@ -27,7 +27,7 @@ def test_names_survive_and_geometry_round_trips(tmp_path: Path) -> None:
     nodes = [
         MeshNode("terrain-col", QUAD, QUAD_FACES),
         MeshNode("bld_osm_way_1", QUAD + [0, 0, 1], QUAD_FACES),
-        MeshNode("bld_osm_way_1-colonly", QUAD + [0, 0, 2], QUAD_FACES),
+        MeshNode("bld_osm_way_1_c0-colonly", QUAD + [0, 0, 2], QUAD_FACES),
     ]
     export_glb(path, nodes)
     assert sorted(read_glb_node_names(path)) == sorted(n.name for n in nodes)

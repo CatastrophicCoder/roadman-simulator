@@ -11,7 +11,7 @@ The pipeline's first stages (load, terrain, buildings) need a pack layout that t
 - **Tile grid.** Tiles are aligned to the map origin. Tile (i, j) covers local [i·T, (i+1)·T) × [j·T, (j+1)·T), where T is `tile_size_m`, clipped to the build area. Its id and file name are `tile_x{i}_y{j}` (`tiles/tile_x{i}_y{j}.glb`); i and j can be negative. The build area's local bounds are rounded outward to whole metres, so tile edges are exact in the meshes' 32-bit floats.
 - **Axes.** glTF is Y-up: local east is +X, up is +Y and north is −Z, in metres from the origin. The manifest records this as `axes`.
 - **Buildings per tile.** Each building belongs to the tile that contains its footprint centroid, and is never split across tiles. A building may overhang its tile's edge.
-- **Node names.** `terrain-col` for terrain, `bld_<source>_<type>_<id>` for a building's visual mesh and `bld_<source>_<type>_<id>-colonly` for its collision box. The exporter reads the names back from the written file and fails if any changed.
+- **Node names.** `terrain-col` for terrain, `bld_<source>_<type>_<id>` for a building's visual mesh and `bld_<source>_<type>_<id>-colonly` for its collision box (now always `_c<k>`; see the 2026-10-29 amendment). The exporter reads the names back from the written file and fails if any changed.
 - **Collision boxes.** Each footprint part gets its own collision box, its minimum rotated rectangle, so separate parts of one building don't get a box spanning the gap between them. A multi-part building's boxes are named `bld_<...>_c0-colonly`, `bld_<...>_c1-colonly` and so on, and `buildings.json` lists them in `collision_nodes`. Courtyards (holes) and concave corners are filled: the box covers them, so the player can't walk into a courtyard. Finer collision is left for later.
 - **Terrain normals.** Terrain vertex normals come from the shared heightfield's gradient, not from each tile's faces, so normals match exactly across tile edges and no lighting seams appear.
 - **Provenance.** `buildings.json` records, per building, the id, tile, node names, height and its source (`mml_3d`, `osm_height`, `osm_levels`, `default`), base height and its source (`dem`), and roof shape and its source. The game and later enhancement layers can see where every value came from.
@@ -62,3 +62,10 @@ Spec: `docs/specs/map-loading.md`.
 - **Not in the manifest, never exported.** The manifest doesn't list the textures, so the schema stays at version 1; the game finds them by the path convention `debug/orthophoto/<tile_id>.jpg`. `debug/` holds an empty `.gdignore`, so Godot neither imports nor exports anything in it; the game loads the JPEGs from disk at runtime, in debug runs only.
 - **Credits.** The orthophoto files the build reads (those overlapping the area) are credited like every other read file.
 - **Missing source.** With the source disabled or its files missing, the build succeeds without a `debug/` folder and logs why. If the files exist but don't cover every tile completely, the build fails before the pack folder is touched.
+
+## Amendment (2026-10-29): collision nodes always numbered
+
+Godot strips the `-colonly` suffix from an imported collision body's name. A one-part building's `bld_<...>-colonly` therefore imported with the same name as its visual node `bld_<...>`, and Godot renamed the body.
+
+- Every building's collision boxes are named `bld_<...>_c<k>-colonly` with k = 0 .. n-1, also when the building has only one footprint part (`bld_<...>_c0-colonly`). `buildings.json` lists them in `collision_nodes` in that order; its format and schema don't change.
+- The pack checks require these names (k contiguous from 0) for every building, and require that no two glTF node names in a tile are equal once the collision suffixes `-col`, `-colonly` and `-convcolonly` are removed, so the import renames no node.

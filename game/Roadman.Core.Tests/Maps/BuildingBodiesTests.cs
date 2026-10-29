@@ -6,135 +6,98 @@ public class BuildingBodiesTests
 {
     private const string Tile = "tile_x0_y0";
 
-    private static TileChild Mesh(string name) => new(TileChildKind.Mesh, name);
+    private static readonly string[] Expected =
+        ["bld_osm_way_1_c0-colonly", "bld_osm_relation_3_c0-colonly", "bld_osm_relation_3_c1-colonly", "bld_osm_way_2_c0-colonly"];
 
-    private static TileChild Body(string name) => new(TileChildKind.Body, name);
-
-    private static TileChild Other(string name) => new(TileChildKind.Other, name);
-
-    private static readonly string[] SinglePart = ["bld_osm_way_1-colonly", "bld_osm_way_2-colonly"];
-
-    private static readonly string[] WithMultiPart =
-        ["bld_osm_way_1-colonly", "bld_osm_relation_3_c0-colonly", "bld_osm_relation_3_c1-colonly", "bld_osm_way_2-colonly"];
-
-    private static TileBodyCheck ResolveAndCheck(IReadOnlyList<TileChild> children, IReadOnlyList<string> expected)
+    private static TileBodyCheck ResolveAndCheck(IReadOnlyList<string> bodyNames, IReadOnlyList<string> expected)
     {
-        var bodies = BuildingBodies.Resolve(children, new HashSet<string>(expected));
+        var bodies = BuildingBodies.Resolve(bodyNames, new HashSet<string>(expected));
         return BuildingBodies.Check(Tile, bodies, expected);
     }
 
-    [Fact]
-    public void NormalOrder_EachRenamedBodyTakesItsMesh()
+    [Theory]
+    [InlineData("bld_osm_way_1_c0", "bld_osm_way_1_c0-colonly")]
+    [InlineData("bld_osm_relation_3_c1", "bld_osm_relation_3_c1-colonly")]
+    [InlineData("bld_osm_way_1_c0-colonly", null)]
+    [InlineData("@StaticBody3D@12", null)]
+    [InlineData("terrain", null)]
+    [InlineData("", null)]
+    public void CollisionNodeOf_ReappendsTheStrippedSuffixToBuildingNamesOnly(string bodyName, string? expected)
     {
-        TileChild[] children =
-        [
-            Mesh("terrain"), Mesh("road"),
-            Mesh("bld_osm_way_1"), Body("@StaticBody3D@12"),
-            Mesh("bld_osm_way_2"), Body("@StaticBody3D@13"),
-        ];
+        Assert.Equal(expected, BuildingBodies.CollisionNodeOf(bodyName));
+    }
 
-        var bodies = BuildingBodies.Resolve(children, new HashSet<string>(SinglePart));
-        Assert.Equal(["bld_osm_way_1-colonly", "bld_osm_way_2-colonly"], bodies.Select(body => body.CollisionNode));
-        Assert.Equal([3, 5], bodies.Select(body => body.ChildIndex));
-        Assert.All(bodies, body => Assert.True(body.FromOrder));
+    [Fact]
+    public void ImportedNames_AreABijection()
+    {
+        string[] names = ["bld_osm_way_1_c0", "bld_osm_relation_3_c0", "bld_osm_relation_3_c1", "bld_osm_way_2_c0"];
 
-        var check = BuildingBodies.Check(Tile, bodies, SinglePart);
+        var bodies = BuildingBodies.Resolve(names, new HashSet<string>(Expected));
+        Assert.Equal(Expected, bodies.Select(body => body.CollisionNode));
+        Assert.Equal([0, 1, 2, 3], bodies.Select(body => body.Index));
+        Assert.Equal(names, bodies.Select(body => body.OriginalName));
+
+        var check = BuildingBodies.Check(Tile, bodies, Expected);
         Assert.True(check.IsBijection, check.Describe());
         Assert.All(check.Accepted, Assert.True);
     }
 
     [Fact]
-    public void MultiPart_KeepsImporterNamesAndResetsThePreviousMesh()
+    public void BodyOrder_DoesNotMatter()
     {
-        TileChild[] children =
-        [
-            Mesh("bld_osm_way_1"), Body("@StaticBody3D@1"),
-            Mesh("bld_osm_relation_3"), Body("bld_osm_relation_3_c0"), Body("bld_osm_relation_3_c1"),
-            Mesh("bld_osm_way_2"), Body("@StaticBody3D@2"),
-        ];
+        string[] names = ["bld_osm_way_2_c0", "bld_osm_relation_3_c1", "bld_osm_way_1_c0", "bld_osm_relation_3_c0"];
 
-        var bodies = BuildingBodies.Resolve(children, new HashSet<string>(WithMultiPart));
-        Assert.Equal(
-            ["bld_osm_way_1-colonly", "bld_osm_relation_3_c0-colonly", "bld_osm_relation_3_c1-colonly", "bld_osm_way_2-colonly"],
-            bodies.Select(body => body.CollisionNode));
-        Assert.Equal([true, false, false, true], bodies.Select(body => body.FromOrder));
-        Assert.True(BuildingBodies.Check(Tile, bodies, WithMultiPart).IsBijection);
+        var check = ResolveAndCheck(names, Expected);
+        Assert.True(check.IsBijection, check.Describe());
     }
 
     [Fact]
-    public void RenamedBodyAfterMultiPartBodies_DoesNotInheritTheMultiPartMesh()
+    public void RenamedBody_IsUnresolvedAndItsNodeMissing()
     {
-        TileChild[] children =
-        [
-            Mesh("bld_osm_relation_3"), Body("bld_osm_relation_3_c0"), Body("bld_osm_relation_3_c1"),
-            Body("@StaticBody3D@9"),
-        ];
-        string[] expected = ["bld_osm_relation_3_c0-colonly", "bld_osm_relation_3_c1-colonly"];
+        // A body Godot renamed on import has lost its glTF name; it is never matched to a mesh or a node.
+        string[] names = ["bld_osm_way_1_c0", "bld_osm_relation_3_c0", "bld_osm_relation_3_c1", "@StaticBody3D@12"];
 
-        var bodies = BuildingBodies.Resolve(children, collisionNodes: null);
-        Assert.Null(bodies[2].CollisionNode);
-
-        var check = BuildingBodies.Check(Tile, bodies, expected);
+        var check = ResolveAndCheck(names, Expected);
         Assert.False(check.IsBijection);
-        Assert.Equal(["@StaticBody3D@9"], check.Unresolved);
-        Assert.Equal([true, true, false], check.Accepted);
-    }
-
-    [Fact]
-    public void NonBuildingNodeInBetween_ClearsThePreviousMesh()
-    {
-        TileChild[] children = [Mesh("bld_osm_way_1"), Other("Marker"), Body("@StaticBody3D@1")];
-        Assert.Null(BuildingBodies.Resolve(children, collisionNodes: null)[0].CollisionNode);
-
-        TileChild[] afterRoad = [Mesh("bld_osm_way_1"), Mesh("road"), Body("@StaticBody3D@1")];
-        Assert.Null(BuildingBodies.Resolve(afterRoad, collisionNodes: null)[0].CollisionNode);
-    }
-
-    [Fact]
-    public void ShiftedOrder_IsDetectedAndOrderNamedBodiesAreRejected()
-    {
-        // Bodies before their meshes: each renamed body would take the previous building's mesh.
-        TileChild[] children =
-        [
-            Body("@StaticBody3D@1"), Mesh("bld_osm_way_1"),
-            Body("@StaticBody3D@2"), Mesh("bld_osm_way_2"),
-        ];
-
-        var check = ResolveAndCheck(children, SinglePart);
-        Assert.False(check.IsBijection);
-        Assert.Equal(["@StaticBody3D@1"], check.Unresolved);
-        Assert.Equal(["bld_osm_way_2-colonly"], check.Missing);
-        Assert.All(check.Accepted, Assert.False);
+        Assert.Equal(["@StaticBody3D@12"], check.Unresolved);
+        Assert.Equal(["bld_osm_way_2_c0-colonly"], check.Missing);
+        Assert.Equal([true, true, true, false], check.Accepted);
         Assert.Contains(Tile, check.Describe());
-        Assert.Contains("bld_osm_way_2-colonly", check.Describe());
+        Assert.Contains("@StaticBody3D@12", check.Describe());
+        Assert.Contains("bld_osm_way_2_c0-colonly", check.Describe());
     }
 
     [Fact]
-    public void ShiftedOrder_TwoMeshesThenTwoBodies_IsDetected()
+    public void OldUnsuffixedPartName_IsUnresolved()
     {
-        TileChild[] children =
-        [
-            Mesh("bld_osm_way_1"), Mesh("bld_osm_way_2"),
-            Body("@StaticBody3D@1"), Body("@StaticBody3D@2"),
-        ];
+        // A pack from before every collision node had a _c<k> part: bld_osm_way_1-colonly isn't a collision node.
+        string[] names = ["bld_osm_way_1"];
+        string[] expected = ["bld_osm_way_1_c0-colonly"];
 
-        var check = ResolveAndCheck(children, SinglePart);
-        Assert.False(check.IsBijection);
-        Assert.Equal(["@StaticBody3D@2"], check.Unresolved);
-        Assert.Equal(["bld_osm_way_1-colonly"], check.Missing);
-        Assert.All(check.Accepted, Assert.False);
+        var check = ResolveAndCheck(names, expected);
+        Assert.Equal(["bld_osm_way_1"], check.Unresolved);
+        Assert.Equal(["bld_osm_way_1_c0-colonly"], check.Missing);
+        Assert.Equal([false], check.Accepted);
+    }
+
+    [Fact]
+    public void NameWithSuffixStillOn_IsUnresolved()
+    {
+        string[] names = ["bld_osm_way_1_c0-colonly"];
+        string[] expected = ["bld_osm_way_1_c0-colonly"];
+
+        var check = ResolveAndCheck(names, expected);
+        Assert.Equal(["bld_osm_way_1_c0-colonly"], check.Unresolved);
+        Assert.Equal(["bld_osm_way_1_c0-colonly"], check.Missing);
     }
 
     [Fact]
     public void Duplicate_IsDetectedAndBothBodiesAreRejected()
     {
-        TileChild[] children =
-        [
-            Mesh("bld_osm_relation_3"), Body("bld_osm_relation_3_c0"), Body("bld_osm_relation_3_c0"),
-        ];
+        string[] names = ["bld_osm_relation_3_c0", "bld_osm_relation_3_c0"];
         string[] expected = ["bld_osm_relation_3_c0-colonly"];
 
-        var check = ResolveAndCheck(children, expected);
+        var check = ResolveAndCheck(names, expected);
         Assert.False(check.IsBijection);
         Assert.Equal(["bld_osm_relation_3_c0-colonly"], check.Duplicates);
         Assert.Equal([false, false], check.Accepted);
@@ -143,71 +106,59 @@ public class BuildingBodiesTests
     [Fact]
     public void Missing_IsDetected()
     {
-        TileChild[] children = [Mesh("bld_osm_way_1"), Body("@StaticBody3D@1"), Mesh("bld_osm_way_2")];
+        string[] expected = ["bld_osm_way_1_c0-colonly", "bld_osm_way_2_c0-colonly"];
 
-        var check = ResolveAndCheck(children, SinglePart);
+        var check = ResolveAndCheck(["bld_osm_way_1_c0"], expected);
         Assert.False(check.IsBijection);
-        Assert.Equal(["bld_osm_way_2-colonly"], check.Missing);
+        Assert.Equal(["bld_osm_way_2_c0-colonly"], check.Missing);
         Assert.Empty(check.Unresolved);
-        Assert.Equal([false], check.Accepted);
+        Assert.Equal([true], check.Accepted);
     }
 
     [Fact]
-    public void Extra_FromAnotherTileIsDetected()
+    public void Extra_FromAnotherTileIsDetectedAndRejected()
     {
-        TileChild[] children =
-        [
-            Mesh("bld_osm_way_1"), Body("@StaticBody3D@1"),
-            Mesh("bld_osm_way_2"), Body("@StaticBody3D@2"),
-            Mesh("bld_osm_way_9"), Body("@StaticBody3D@3"),
-        ];
-        string[] allTiles = [.. SinglePart, "bld_osm_way_9-colonly"];
+        string[] tileNodes = ["bld_osm_way_1_c0-colonly", "bld_osm_way_2_c0-colonly"];
+        string[] allTiles = [.. tileNodes, "bld_osm_way_9_c0-colonly"];
+        string[] names = ["bld_osm_way_1_c0", "bld_osm_way_2_c0", "bld_osm_way_9_c0"];
 
-        var bodies = BuildingBodies.Resolve(children, new HashSet<string>(allTiles));
-        var check = BuildingBodies.Check(Tile, bodies, SinglePart);
+        var bodies = BuildingBodies.Resolve(names, new HashSet<string>(allTiles));
+        var check = BuildingBodies.Check(Tile, bodies, tileNodes);
         Assert.False(check.IsBijection);
-        Assert.Equal(["bld_osm_way_9-colonly"], check.Extra);
-        Assert.All(check.Accepted, Assert.False);
+        Assert.Equal(["bld_osm_way_9_c0-colonly"], check.Extra);
+        Assert.Equal([true, true, false], check.Accepted);
     }
 
     [Fact]
     public void BldNamedBodyNotInBuildings_IsUnresolved()
     {
-        TileChild[] children =
-        [
-            Mesh("bld_osm_relation_3"), Body("bld_osm_relation_3_c0"), Body("bld_osm_relation_3_c7"),
-        ];
+        string[] names = ["bld_osm_relation_3_c0", "bld_osm_relation_3_c7"];
         string[] expected = ["bld_osm_relation_3_c0-colonly"];
 
-        var check = ResolveAndCheck(children, expected);
+        var check = ResolveAndCheck(names, expected);
         Assert.False(check.IsBijection);
         Assert.Equal(["bld_osm_relation_3_c7"], check.Unresolved);
-        // The importer-named body with a valid, unique name stays usable.
+        // The body with a valid, unique name of this tile stays usable.
         Assert.Equal([true, false], check.Accepted);
     }
 
     [Fact]
-    public void RenamedBodyOfAMultiPartMesh_IsUnresolved()
+    public void Resolve_WithoutCollisionNodes_ResolvesEveryBuildingName()
     {
-        // bld_osm_relation_3-colonly isn't a collision node: the building has only _c<k> parts.
-        TileChild[] children = [Mesh("bld_osm_relation_3"), Body("@StaticBody3D@1")];
-        string[] expected = ["bld_osm_relation_3_c0-colonly"];
-
-        var check = ResolveAndCheck(children, expected);
-        Assert.Equal(["@StaticBody3D@1"], check.Unresolved);
-        Assert.Equal(["bld_osm_relation_3_c0-colonly"], check.Missing);
+        var bodies = BuildingBodies.Resolve(["bld_osm_way_1_c0", "@StaticBody3D@1"], collisionNodes: null);
+        Assert.Equal(["bld_osm_way_1_c0-colonly", null], bodies.Select(body => body.CollisionNode));
     }
 
     [Fact]
     public void Describe_ListsAtMostTheGivenNumberOfNames()
     {
-        var expected = Enumerable.Range(1, 8).Select(i => $"bld_osm_way_{i}-colonly").ToList();
+        var expected = Enumerable.Range(1, 8).Select(i => $"bld_osm_way_{i}_c0-colonly").ToList();
         var check = BuildingBodies.Check(Tile, [], expected);
 
         var text = check.Describe(maxNames: 3);
         Assert.Contains("8 collision nodes without a body", text);
-        Assert.Contains("bld_osm_way_1-colonly, bld_osm_way_2-colonly, bld_osm_way_3-colonly, … (5 more)", text);
-        Assert.DoesNotContain("bld_osm_way_4-colonly", text);
+        Assert.Contains("bld_osm_way_1_c0-colonly, bld_osm_way_2_c0-colonly, bld_osm_way_3_c0-colonly, … (5 more)", text);
+        Assert.DoesNotContain("bld_osm_way_4_c0-colonly", text);
     }
 
     [Fact]

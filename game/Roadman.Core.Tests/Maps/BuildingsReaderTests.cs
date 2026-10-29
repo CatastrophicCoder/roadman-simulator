@@ -15,7 +15,7 @@ public class BuildingsReaderTests
           "map_id": "somero",
           "buildings": [
             {
-              "id": "osm:way/100", "tile": "t_0_0", "node": "bld_osm_way_100", "collision_nodes": ["bld_osm_way_100-colonly"],
+              "id": "osm:way/100", "tile": "t_0_0", "node": "bld_osm_way_100", "collision_nodes": ["bld_osm_way_100_c0-colonly"],
               "height_m": 7.5, "height_source": "mml_lidar", "base_z": 101.25, "base_source": "dem",
               "roof_shape": "flat", "roof_shape_source": "default",
               "lidar_points": 412, "lidar_buffer_m": 0.5, "lidar_returns": "all", "roof_z_median": 108.5, "roof_z_p90": 109.1,
@@ -31,7 +31,7 @@ public class BuildingsReaderTests
               "overrides": []
             },
             {
-              "id": "osm:way/200", "tile": "t_0_0", "node": "bld_osm_way_200", "collision_nodes": ["bld_osm_way_200-colonly"],
+              "id": "osm:way/200", "tile": "t_0_0", "node": "bld_osm_way_200", "collision_nodes": ["bld_osm_way_200_c0-colonly"],
               "height_m": 6, "height_source": "default", "base_z": 100, "base_source": "dem",
               "roof_shape": "flat", "roof_shape_source": "default",
               "lidar_rejected": "tree_cover",
@@ -48,7 +48,7 @@ public class BuildingsReaderTests
             },
             {
               "id": "osm:relation/300", "tile": "t_1_0", "node": "bld_osm_relation_300",
-              "collision_nodes": ["bld_osm_relation_300-colonly", "bld_osm_relation_300_p1-colonly"],
+              "collision_nodes": ["bld_osm_relation_300_c0-colonly", "bld_osm_relation_300_c1-colonly"],
               "height_m": 6, "height_source": "default", "base_z": 99.5, "base_source": "dem",
               "roof_shape": "flat", "roof_shape_source": "default",
               "category": "unknown", "category_source": null,
@@ -75,7 +75,7 @@ public class BuildingsReaderTests
           "map_id": "somero",
           "buildings": [
             {
-              "id": "osm:way/100", "tile": "t_0_0", "node": "bld_osm_way_100", "collision_nodes": ["bld_osm_way_100-colonly"],
+              "id": "osm:way/100", "tile": "t_0_0", "node": "bld_osm_way_100", "collision_nodes": ["bld_osm_way_100_c0-colonly"],
               "height_m": 6, "height_source": "default", "base_z": 100, "base_source": "dem",
               "roof_shape": "flat", "roof_shape_source": "default"
             }
@@ -95,7 +95,7 @@ public class BuildingsReaderTests
         var shop = file.Items[0];
         Assert.Equal("t_0_0", shop.Tile);
         Assert.Equal("bld_osm_way_100", shop.Node);
-        Assert.Equal(["bld_osm_way_100-colonly"], shop.CollisionNodes);
+        Assert.Equal(["bld_osm_way_100_c0-colonly"], shop.CollisionNodes);
         Assert.Equal(7.5, shop.HeightM);
         Assert.Equal(BuildingHeightSource.MmlLidar, shop.HeightSource);
         Assert.Equal(101.25, shop.BaseZ);
@@ -311,10 +311,10 @@ public class BuildingsReaderTests
     [Fact]
     public void Parse_SharedNodeName_IsRejected()
     {
-        var json = ModifyBuilding(2, building => building["collision_nodes"]![1] = "bld_osm_way_200-colonly");
+        var json = ModifyBuilding(2, building => building["collision_nodes"]![1] = "bld_osm_way_200_c0-colonly");
 
         var ex = Assert.Throws<MapPackException>(() => BuildingsReader.Parse(json));
-        Assert.Contains("glTF node 'bld_osm_way_200-colonly' of building 'osm:relation/300' is already used by building 'osm:way/200'", ex.Message);
+        Assert.Contains("glTF node 'bld_osm_way_200_c0-colonly' of building 'osm:relation/300' is already used by building 'osm:way/200'", ex.Message);
     }
 
     [Theory]

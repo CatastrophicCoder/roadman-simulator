@@ -20,10 +20,11 @@ from conftest import (
 )
 from mapgen.build import BuildError, run_build
 from mapgen.build.export_glb import TERRAIN_NODE, read_glb_node_names
+from mapgen.build.pack_checks import check_import_names, import_name, read_glb_meshes
 from mapgen.build.pack_manifest import committed_schema, generated_schema
 from mapgen.cli import EXIT_FAILED, EXIT_OK, main
 from mapgen.config import load_map_config
-from pack_checks import check_pack
+from pack_checks import PackCheckError, check_pack
 
 
 def _json(path: Path) -> Any:
@@ -195,7 +196,7 @@ def test_multi_part_building_has_a_box_per_part(fixture_build: FixtureBuild) -> 
         "bld_osm_relation_205_c0-colonly",
         "bld_osm_relation_205_c1-colonly",
     ]
-    assert buildings["osm:way/101"]["collision_nodes"] == ["bld_osm_way_101-colonly"]
+    assert buildings["osm:way/101"]["collision_nodes"] == ["bld_osm_way_101_c0-colonly"]
 
 
 def test_written_terrain_normals_match_across_tile_edges(fixture_build: FixtureBuild) -> None:
@@ -214,3 +215,126 @@ def test_written_terrain_normals_match_across_tile_edges(fixture_build: FixtureB
     south, north = edge("tile_x0_y-1", 2), edge("tile_x0_y0", 2)
     assert np.array_equal(south[0], north[0]) and np.array_equal(south[1], north[1])
     assert np.all(west[1][:, 1] > 0.99)  # gentle fixture slope: normals point up
+
+
+# Collision node names (pack checks on corrupted packs)
+
+
+def _rename_glb_nodes(path: Path, renames: dict[str, str]) -> None:
+    """Rewrite node names in a GLB's JSON chunk (the binary chunk stays as is)."""
+    data = path.read_bytes()
+    json_len = int.from_bytes(data[12:16], "little")
+    gltf = json.loads(data[20 : 20 + json_len])
+    for node in gltf["nodes"]:
+        node["name"] = renames.get(node.get("name", ""), node.get("name", ""))
+    chunk = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    chunk += b" " * (-len(chunk) % 4)
+    rest = data[20 + json_len :]
+    body = len(chunk).to_bytes(4, "little") + b"JSON" + chunk + rest
+    path.write_bytes(data[:8] + (12 + len(body)).to_bytes(4, "little") + body)
+
+
+def _corrupt_collisions(
+    fixture_build: FixtureBuild, tmp_path: Path, building_id: str, new: list[str]
+) -> Path:
+    """A copy of the pack whose building has collision nodes `new` in its tile and json."""
+    pack = tmp_path / "pack"
+    shutil.copytree(fixture_build.pack_dir, pack)
+    document = _json(pack / "buildings.json")
+    building = next(b for b in document["buildings"] if b["id"] == building_id)
+    old = building["collision_nodes"]
+    assert len(old) == len(new)
+    _rename_glb_nodes(pack / "tiles" / f"{building['tile']}.glb", dict(zip(old, new, strict=True)))
+    building["collision_nodes"] = new
+    (pack / "buildings.json").write_text(json.dumps(document), encoding="utf-8")
+    return pack
+
+
+def _check(fixture_build: FixtureBuild, pack: Path) -> None:
+    config = load_map_config(fixture_build.repo / "maps" / "testtown" / "map.yaml")
+    check_pack(pack, fixture_build.work_dir, config.roads)
+
+
+def test_every_building_has_c_numbered_collision_nodes(fixture_build: FixtureBuild) -> None:
+    for building in _json(fixture_build.pack_dir / "buildings.json")["buildings"]:
+        node, collisions = building["node"], building["collision_nodes"]
+        assert collisions == [f"{node}_c{k}-colonly" for k in range(len(collisions))]
+
+
+def test_renamed_pack_copy_still_passes(fixture_build: FixtureBuild, tmp_path: Path) -> None:
+    """The GLB rewriter itself keeps a pack valid (same names in, same names out)."""
+    pack = _corrupt_collisions(
+        fixture_build, tmp_path, "osm:way/101", ["bld_osm_way_101_c0-colonly"]
+    )
+    _check(fixture_build, pack)
+
+
+@pytest.mark.parametrize(
+    ("building_id", "new", "message"),
+    [
+        # the old one-part name: its body would import as "bld_osm_way_101", like the visual
+        ("osm:way/101", ["bld_osm_way_101-colonly"], "both import as 'bld_osm_way_101'"),
+        ("osm:way/101", ["bld_osm_way_101_c1-colonly"], "aren't"),
+        (
+            "osm:relation/205",
+            ["bld_osm_relation_205_c0-colonly", "bld_osm_relation_205_c2-colonly"],
+            "aren't",
+        ),
+        (
+            "osm:relation/205",
+            ["bld_osm_relation_205_c1-colonly", "bld_osm_relation_205_c0-colonly"],
+            "aren't",
+        ),
+    ],
+)
+def test_pack_checks_reject_bad_collision_names(
+    fixture_build: FixtureBuild, tmp_path: Path, building_id: str, new: list[str], message: str
+) -> None:
+    pack = _corrupt_collisions(fixture_build, tmp_path, building_id, new)
+    with pytest.raises(PackCheckError, match=message):
+        _check(fixture_build, pack)
+
+
+def test_pack_checks_reject_names_that_clash_after_import(
+    fixture_build: FixtureBuild, tmp_path: Path
+) -> None:
+    pack = tmp_path / "pack"
+    shutil.copytree(fixture_build.pack_dir, pack)
+    tile = _json(pack / "buildings.json")["buildings"][0]["tile"]
+    glb = pack / "tiles" / f"{tile}.glb"
+    node = next(n for n in read_glb_node_names(glb) if n.startswith("bld_") and "-" not in n)
+    _rename_glb_nodes(glb, {TERRAIN_NODE: f"{node}-convcolonly"})
+    with pytest.raises(PackCheckError, match="both import as"):
+        check_import_names(tile, read_glb_meshes(glb).names)
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["a", "a"],
+        ["a", "a-col"],
+        ["a-col", "a-colonly"],
+        ["a", "a-convcolonly"],
+        ["bld_x", "bld_x-colonly"],
+        ["bld_x_c0", "bld_x_c0-colonly"],
+    ],
+)
+def test_import_name_clashes_are_found(names: list[str]) -> None:
+    with pytest.raises(PackCheckError, match="both import as"):
+        check_import_names("t", names)
+
+
+def test_distinct_import_names_pass() -> None:
+    check_import_names(
+        "t",
+        ["terrain-col", "road-col", "path-col", "bld_x", "bld_x_c0-colonly", "bld_x_c1-colonly"],
+    )
+    assert import_name("bld_x_c0-colonly") == "bld_x_c0"
+    assert import_name("bridge_osm_way_1_p0-col") == "bridge_osm_way_1_p0"
+    assert import_name("hull-convcolonly") == "hull"
+
+
+def test_empty_node_names_are_not_import_clashes() -> None:
+    check_import_names("t", ["", "", "terrain-col", ""])
+    with pytest.raises(PackCheckError, match="both import as"):
+        check_import_names("t", ["", "a", "a-col"])

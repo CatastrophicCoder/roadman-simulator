@@ -2,7 +2,7 @@
 
 Axes (glTF is Y-up): local east -> +X, up -> +Y, north -> -Z. Node names carry Godot's
 import suffixes: "terrain-col" (visual plus collision), "bld_<id>" (visual),
-"bld_<id>-colonly" (collision only), and "road-col", "path-col" and
+"bld_<id>_c<k>-colonly" (collision only, k = 0.. per footprint part), and "road-col", "path-col" and
 "bridge_osm_way_<id>-col" (road surfaces and bridge decks, visual plus collision). After
 writing, the node names are read back from the file, because exporters may rename
 duplicates. A node can carry TEXCOORD_0 (the terrain does; buildings don't) and a plain

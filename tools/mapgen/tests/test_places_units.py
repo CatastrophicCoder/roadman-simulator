@@ -190,6 +190,23 @@ def test_ac4_unmapped_poi_tag_is_other_in_step_3_and_no_value_in_step_4() -> Non
     assert feature_poi_category({"amenity": "parking"}, unmapped_as_other=True) == (None, [])
 
 
+def test_first_poi_key_in_order_decides_within_one_feature() -> None:
+    tags = {"amenity": "social_facility", "leisure": "sports_centre"}
+    # Step 3: the earlier unmapped key gives `other`, although the later key maps.
+    assert feature_poi_category(tags, unmapped_as_other=True) == (
+        "other",
+        ["amenity=social_facility"],
+    )
+    # Step 4: unmapped tags are ignored, so the later key decides.
+    assert feature_poi_category(tags, unmapped_as_other=False) == (
+        "public",
+        ["amenity=social_facility"],
+    )
+    # A "no value" tag is skipped, so the next key decides.
+    tags = {"amenity": "parking", "leisure": "sports_centre"}
+    assert feature_poi_category(tags, unmapped_as_other=True) == ("public", [])
+
+
 def test_ac4_every_landuse_value_in_the_spec_maps_as_listed() -> None:
     table = spec_landuse_values()
     assert LANDUSE_VALUES == table

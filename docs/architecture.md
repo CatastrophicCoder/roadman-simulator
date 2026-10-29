@@ -181,7 +181,7 @@ Contents so far:
 
 Axes: glTF is Y-up. Local east is +X, up is +Y, and north is −Z. Units are metres from the map origin.
 
-glTF node names: `terrain-col` (visual mesh plus collision), `bld_<source>_<type>_<id>` (building visual, e.g. `bld_osm_way_123`) and `bld_<source>_<type>_<id>-colonly` (collision box only). A building with several footprint parts gets one box per part: `bld_<...>_c0-colonly`, `bld_<...>_c1-colonly`, and so on. Roads: `road-col` (drivable surfaces) and `path-col` (the others), one each per tile, and `bridge_osm_way_<id>-col` per bridge deck with its railings (`bridge_osm_way_<id>_p<n>-col` when a deck is split across tiles), all with collision.
+glTF node names: `terrain-col` (visual mesh plus collision), `bld_<source>_<type>_<id>` (building visual, e.g. `bld_osm_way_123`) and `bld_<source>_<type>_<id>_c<k>-colonly` (collision boxes only, one per footprint part, k = 0, 1, ...; a one-part building has `bld_<...>_c0-colonly`). No two node names in a tile are equal once Godot strips the collision suffixes (`-col`, `-colonly`, `-convcolonly`), so the import never renames a node; the pack checks enforce both rules. Roads: `road-col` (drivable surfaces) and `path-col` (the others), one each per tile, and `bridge_osm_way_<id>-col` per bridge deck with its railings (`bridge_osm_way_<id>_p<n>-col` when a deck is split across tiles), all with collision.
 
 Manifest v1 fields, validated against the committed JSON Schema `tools/mapgen/src/mapgen/build/schemas/manifest-v1.schema.json` after every build:
 

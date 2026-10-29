@@ -1,29 +1,12 @@
 namespace Roadman.Core.Maps;
 
-/// <summary>What a direct child of an imported tile scene is, for <see cref="BuildingBodies.Resolve"/>.</summary>
-public enum TileChildKind
-{
-    /// <summary>A mesh node (building visual meshes are <c>bld_&lt;id&gt;</c>).</summary>
-    Mesh,
-
-    /// <summary>A collision body (from a <c>-colonly</c> glTF node).</summary>
-    Body,
-
-    /// <summary>Any other node.</summary>
-    Other,
-}
-
-/// <summary>A direct child of an imported tile scene, in node order.</summary>
-public readonly record struct TileChild(TileChildKind Kind, string Name);
-
 /// <summary>
-/// One collision body of a tile and the glTF collision node name it was resolved to.
+/// One building collision body of a tile and the glTF collision node name it was resolved to.
 /// </summary>
-/// <param name="ChildIndex">Index of the body among the tile's children.</param>
+/// <param name="Index">Index of the body in the list given to <see cref="BuildingBodies.Resolve"/>.</param>
 /// <param name="OriginalName">The body's name as imported.</param>
-/// <param name="CollisionNode">The resolved glTF node name (<c>bld_…-colonly</c>), or null when it couldn't be resolved.</param>
-/// <param name="FromOrder">True when the name was inherited from the preceding visual mesh (the body was renamed by Godot).</param>
-public readonly record struct ResolvedBody(int ChildIndex, string OriginalName, string? CollisionNode, bool FromOrder);
+/// <param name="CollisionNode">The resolved glTF node name (<c>bld_…_c&lt;k&gt;-colonly</c>), or null when it couldn't be resolved.</param>
+public readonly record struct ResolvedBody(int Index, string OriginalName, string? CollisionNode);
 
 /// <summary>
 /// Result of <see cref="BuildingBodies.Check"/> for one tile: whether the resolved bodies and the tile's collision
@@ -74,10 +57,10 @@ public sealed record TileBodyCheck(
 
 /// <summary>
 /// Names building collision bodies after their glTF nodes and checks the result against <c>buildings.json</c>.
-/// The importer turns <c>bld_&lt;id&gt;-colonly</c> into a body named <c>bld_&lt;id&gt;</c>, which clashes with the
-/// visual mesh of the same name, so Godot renames the body (<c>@StaticBody3D@…</c>). The pipeline writes each body
-/// right after its visual mesh, so such a body takes the name of the <c>bld_</c> mesh immediately before it. Multi-part
-/// bodies (<c>bld_&lt;id&gt;_c&lt;k&gt;-colonly</c>) don't clash and keep their name.
+/// The pipeline names every building collision node <c>bld_&lt;id&gt;_c&lt;k&gt;-colonly</c> (ADR 0006), which never
+/// equals a visual mesh name <c>bld_&lt;id&gt;</c> once the suffix is stripped, so Godot's import keeps each body's
+/// name and only strips the suffix: the body is <c>bld_&lt;id&gt;_c&lt;k&gt;</c>. A body is resolved from its own name
+/// alone, by re-appending <see cref="CollisionOnlySuffix"/>; node order is never used.
 /// </summary>
 public static class BuildingBodies
 {
@@ -88,47 +71,33 @@ public static class BuildingBodies
     public const string CollisionOnlySuffix = "-colonly";
 
     /// <summary>
-    /// Resolves every <see cref="TileChildKind.Body"/> child, in order. A body named <c>bld_…</c> resolves to its name
-    /// plus <see cref="CollisionOnlySuffix"/>. Any other body inherits the name of the <c>bld_</c> mesh immediately
-    /// before it; any body and any non-building node in between clear that, so a mesh gives its name to one body at
-    /// most, and never across a multi-part building's bodies. When <paramref name="collisionNodes"/> is given, a
-    /// resolved name must be one of them, else the body is unresolved.
+    /// The glTF collision node name of a body named <paramref name="bodyName"/> by the importer: the name plus
+    /// <see cref="CollisionOnlySuffix"/> when it starts with <see cref="NodePrefix"/> and doesn't already end with the
+    /// suffix (the importer strips it), else null. A body Godot renamed (<c>@StaticBody3D@…</c>) gives null.
     /// </summary>
-    public static IReadOnlyList<ResolvedBody> Resolve(
-        IReadOnlyList<TileChild> children, IReadOnlySet<string>? collisionNodes)
+    public static string? CollisionNodeOf(string bodyName) =>
+        bodyName.StartsWith(NodePrefix, StringComparison.Ordinal)
+        && !bodyName.EndsWith(CollisionOnlySuffix, StringComparison.Ordinal)
+            ? bodyName + CollisionOnlySuffix
+            : null;
+
+    /// <summary>
+    /// Resolves each body of <paramref name="bodyNames"/> (one tile's building collision bodies, as imported) with
+    /// <see cref="CollisionNodeOf"/>. When <paramref name="collisionNodes"/> is given, a resolved name must be one of
+    /// them, else the body is unresolved.
+    /// </summary>
+    public static IReadOnlyList<ResolvedBody> Resolve(IReadOnlyList<string> bodyNames, IReadOnlySet<string>? collisionNodes)
     {
-        var bodies = new List<ResolvedBody>();
-        string? previousMesh = null;
-        for (var i = 0; i < children.Count; i++)
+        var bodies = new List<ResolvedBody>(bodyNames.Count);
+        for (var i = 0; i < bodyNames.Count; i++)
         {
-            var child = children[i];
-            if (child.Kind != TileChildKind.Body)
-            {
-                previousMesh = child.Kind == TileChildKind.Mesh && IsBuildingName(child.Name) ? child.Name : null;
-                continue;
-            }
-
-            string? stem;
-            bool fromOrder;
-            if (IsBuildingName(child.Name))
-            {
-                stem = child.Name;
-                fromOrder = false;
-            }
-            else
-            {
-                stem = previousMesh;
-                fromOrder = true;
-            }
-
-            previousMesh = null;
-            var node = stem is null ? null : stem + CollisionOnlySuffix;
+            var node = CollisionNodeOf(bodyNames[i]);
             if (node is not null && collisionNodes is not null && !collisionNodes.Contains(node))
             {
                 node = null;
             }
 
-            bodies.Add(new ResolvedBody(i, child.Name, node, fromOrder));
+            bodies.Add(new ResolvedBody(i, bodyNames[i], node));
         }
 
         return bodies;
@@ -136,10 +105,9 @@ public static class BuildingBodies
 
     /// <summary>
     /// Checks that <paramref name="bodies"/> (one tile's, from <see cref="Resolve"/>) and <paramref name="expected"/>
-    /// (the collision nodes of the buildings whose <c>tile</c> is <paramref name="tile"/>) are a bijection. On a
-    /// match every body is accepted. Otherwise unresolved, extra and duplicate bodies are rejected, and so is every
-    /// body named from node order, since the order can't be trusted then; only importer-named bodies with a valid,
-    /// unique name of this tile are kept.
+    /// (the collision nodes of the buildings whose <c>tile</c> is <paramref name="tile"/>) are a bijection. A body is
+    /// accepted when its resolved name is one of <paramref name="expected"/> and no other body resolved to it, so on a
+    /// match every body is accepted, and on a mismatch the unresolved, extra and duplicate bodies are rejected.
     /// </summary>
     public static TileBodyCheck Check(string tile, IReadOnlyList<ResolvedBody> bodies, IEnumerable<string> expected)
     {
@@ -157,11 +125,9 @@ public static class BuildingBodies
         var extra = counts.Keys.Where(node => !expectedSet.Contains(node)).Order(StringComparer.Ordinal).ToList();
         var duplicates = counts.Where(pair => pair.Value > 1).Select(pair => pair.Key).Order(StringComparer.Ordinal).ToList();
         var missing = expectedSet.Where(node => !counts.ContainsKey(node)).Order(StringComparer.Ordinal).ToList();
-        var bijection = unresolved.Count == 0 && extra.Count == 0 && duplicates.Count == 0 && missing.Count == 0;
 
         var accepted = bodies
-            .Select(body => bijection || (body.CollisionNode is { } node && !body.FromOrder
-                                          && expectedSet.Contains(node) && counts[node] == 1))
+            .Select(body => body.CollisionNode is { } node && expectedSet.Contains(node) && counts[node] == 1)
             .ToList();
         return new TileBodyCheck(tile, accepted, unresolved, missing, extra, duplicates);
     }
@@ -183,6 +149,4 @@ public static class BuildingBodies
 
         return byTile.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<string>)pair.Value, StringComparer.Ordinal);
     }
-
-    private static bool IsBuildingName(string name) => name.StartsWith(NodePrefix, StringComparison.Ordinal);
 }

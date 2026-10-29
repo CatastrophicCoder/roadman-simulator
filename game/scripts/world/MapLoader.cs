@@ -501,13 +501,14 @@ public partial class MapLoader : Node3D
     }
 
     /// <summary>
-    /// Names each building collision body after its glTF node and puts it in <see cref="BuildingGroup"/>, using
-    /// <see cref="BuildingBodies.Resolve"/> (a body Godot renamed to <c>@StaticBody3D@…</c> takes the name of the
-    /// <c>bld_</c> mesh immediately before it). With <see cref="Places"/>, every loaded tile's bodies must be a
-    /// bijection with the collision nodes of its buildings in <c>buildings.json</c>; a mismatch pushes an error naming
-    /// the tile and the first offending names, and the bodies that can't be trusted stay out of the group, so
-    /// <see cref="BuildingOf"/> never returns a wrong building. Without <see cref="Places"/> the names are resolved
-    /// from node order alone.
+    /// Names each building collision body after its glTF node and puts it in <see cref="BuildingGroup"/>. The building
+    /// bodies are the <see cref="StaticBody3D"/> children of a tile; the importer names each one after its glTF node
+    /// without <see cref="CollisionOnlySuffix"/> (<c>bld_&lt;id&gt;_c&lt;k&gt;</c>), and
+    /// <see cref="BuildingBodies.Resolve"/> re-appends it. With <see cref="Places"/>, every loaded tile's bodies must be
+    /// a bijection with the collision nodes of its buildings in <c>buildings.json</c>; a mismatch (for example a body
+    /// Godot renamed to <c>@StaticBody3D@…</c>) pushes an error naming the tile and the first offending names, and the
+    /// unresolved, extra and duplicate bodies stay out of the group, so <see cref="BuildingOf"/> never returns a wrong
+    /// building. Without <see cref="Places"/> every <c>bld_</c> body is put in the group unchecked.
     /// </summary>
     private void PrepareBuildingBodies(string mapId)
     {
@@ -523,9 +524,8 @@ public partial class MapLoader : Node3D
         foreach (var tile in Tiles.GetChildren())
         {
             var tileId = tile.Name.ToString();
-            var nodes = tile.GetChildren();
-            var children = nodes.Select(node => new TileChild(KindOf(node), node.Name.ToString())).ToList();
-            var bodies = BuildingBodies.Resolve(children, knownNodes);
+            var bodyNodes = tile.GetChildren().OfType<StaticBody3D>().ToList();
+            var bodies = BuildingBodies.Resolve(bodyNodes.Select(body => body.Name.ToString()).ToList(), knownNodes);
 
             IReadOnlyList<bool> accepted;
             if (nodesByTile is null)
@@ -551,7 +551,7 @@ public partial class MapLoader : Node3D
                     continue;
                 }
 
-                var body = nodes[bodies[i].ChildIndex];
+                var body = bodyNodes[bodies[i].Index];
                 body.Name = collisionNode;
                 body.AddToGroup(BuildingGroup, persistent: false);
                 BuildingBodyCount++;
@@ -563,13 +563,6 @@ public partial class MapLoader : Node3D
             $"MapLoader: {BuildingBodyCount} building collision bodies resolved"
             + (expectedCount is null ? " (no place data to check them against)" : $" of {expectedCount}, {mismatchedTiles} tiles with mismatches"));
     }
-
-    private static TileChildKind KindOf(Node node) => node switch
-    {
-        StaticBody3D => TileChildKind.Body,
-        MeshInstance3D => TileChildKind.Mesh,
-        _ => TileChildKind.Other,
-    };
 
     /// <summary>True for the mesh names of road, path and bridge surfaces (the glTF names without <c>-col</c>).</summary>
     public static bool IsRoadSurfaceName(string name) =>

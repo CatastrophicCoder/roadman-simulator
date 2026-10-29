@@ -122,7 +122,7 @@ def test_multi_part_collision_names_and_meshes() -> None:
         "bld_osm_relation_5_c0-colonly",
         "bld_osm_relation_5_c1-colonly",
     )
-    assert by_id["osm:way/6"].collision_nodes == ("bld_osm_way_6-colonly",)
+    assert by_id["osm:way/6"].collision_nodes == ("bld_osm_way_6_c0-colonly",)
     meshes = by_id["osm:relation/5"].collision_meshes()
     assert [name for name, _, _ in meshes] == list(by_id["osm:relation/5"].collision_nodes)
     assert by_id["osm:relation/5"].provenance()["collision_nodes"] == [
@@ -167,7 +167,7 @@ def test_resolve_buildings_assigns_tile_by_centroid_and_base_below_ground() -> N
     (building,) = result.buildings
     assert building.tile == "tile_x0_y0"
     assert building.node == "bld_osm_way_9"
-    assert building.collision_nodes == ("bld_osm_way_9-colonly",)
+    assert building.collision_nodes == ("bld_osm_way_9_c0-colonly",)
     corners = np.asarray(straddling.geometry.exterior.coords)
     assert building.base_z <= hf.sample(corners[:, 0], corners[:, 1]).min()
     assert building.provenance()["height_source"] == "osm_levels"

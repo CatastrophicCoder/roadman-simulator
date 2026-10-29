@@ -192,7 +192,8 @@ First step with a value wins; `category_source` names it:
 
 1. `override`: the override file.
 2. `osm_building`: the building's `building` tag, unless it is `yes` or `roof`. Values not in the table give `other`.
-3. `osm_poi`: a POI tag (`shop`, `amenity`, `office`, `leisure`, `tourism`) on the building, or on a POI on or in it. Tags on the building itself come first. If the POIs on or in it map to different categories, this step has no value, and the building is listed in the report. Values not in the table give `other`; values the table maps to "no value" are ignored.
+3. `osm_poi`: a POI tag (`shop`, `amenity`, `office`, `tourism`, `leisure`) on the building, or on a POI on or in it. Tags on the building itself come first. If the POIs on or in it map to different categories, this step has no value, and the building is listed in the report. Values not in the table give `other`; values the table maps to "no value" are ignored.
+   Within one feature, the keys are tried in the order `shop`, `amenity`, `office`, `tourism`, `leisure`, skipping tags mapped to "no value", and the first remaining tag decides: an unmapped one gives `other` even when a later key maps to a category (`amenity=social_facility` with `leisure=sports_centre` gives `other`). In step 4, unmapped tags are ignored like "no value" ones.
 4. `osm_poi_area`: the POI areas the building is inside. If they map to one category, that one; if they differ, no value (reported). Values not in the table, or mapped to "no value", are ignored.
 5. `mml_use_class`: the matched MML building's `kohdeluokka`, by its first four digits:
 
@@ -392,6 +393,7 @@ After the implementation passes `/verify`, Claude runs `uv run mapgen snapshot c
 - 2026-10-29, during implementation: `buildings.json` v2 gains `overrides` (`{id, source, licence, fields}` per applied entry), so the debug inspector can show an override's source from the pack. Overrides marked `own work` add no credit; third-party overrides require `attribution` and `retrieved_at` and add a manifest credit, following the outline's rule that the pipeline writes every override's licence into the credits. `mapgen notice` learns `CC BY-SA 4.0`. Decided by the user.
 - 2026-10-29, game part: the `other_tags` example corrected to match the `type` key order (`["amenity=fuel"]` on a feature also tagged `shop=convenience`), and `08-places/report.json`'s `pois.outside_area` described exactly (POIs that touch the build area but whose position lies outside it). Decided by the user.
 - 2026-10-29, review: the buildings report separates `overrides.shadowed` from `overrides.applied`, and counts skipped MML records only inside the build area, de-duplicated by id across files, with records without a location under `skipped_without_location`.
+- 2026-10-29, after review: within one POI feature, the first key in the order decides (step 3: an unmapped tag gives `other` even when a later key maps). Building collision nodes are always named `<node>_c<k>-colonly`, also for one part, so the import never renames a body. Decided by the user.
 
 ## Open questions
 

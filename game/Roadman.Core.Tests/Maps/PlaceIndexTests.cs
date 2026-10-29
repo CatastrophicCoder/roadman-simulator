@@ -28,9 +28,9 @@ public class PlaceIndexTests
 
     [Theory]
     [InlineData("bld_osm_way_100", "osm:way/100")]
-    [InlineData("bld_osm_way_100-colonly", "osm:way/100")]
+    [InlineData("bld_osm_way_100_c0-colonly", "osm:way/100")]
     [InlineData("bld_osm_relation_300", "osm:relation/300")]
-    [InlineData("bld_osm_relation_300_p1-colonly", "osm:relation/300")]
+    [InlineData("bld_osm_relation_300_c1-colonly", "osm:relation/300")]
     public void TryGetBuildingByNode_FindsVisualAndCollisionNodes(string node, string buildingId)
     {
         Assert.True(Create().TryGetBuildingByNode(node, out var building));

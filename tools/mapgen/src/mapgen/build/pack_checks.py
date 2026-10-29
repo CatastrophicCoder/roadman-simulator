@@ -5,8 +5,10 @@ untouched. The checks read the staged files back (tiles, manifest, road graph) a
 stage output in the work folder, so they test what the game will load.
 
 - Tiles and buildings: tile files match the manifest; vertices are finite; terrain stays
-  in its tile; collision nodes match `buildings.json`; every building's centroid is in its
-  tile; no building base floats above the terrain mesh.
+  in its tile; collision nodes match `buildings.json` and are named `<node>_c<k>-colonly`
+  (k = 0..n-1); no two node names of a tile are equal once Godot strips its collision
+  suffixes (`-col`, `-colonly`, `-convcolonly`), so the import renames nothing; every
+  building's centroid is in its tile; no building base floats above the terrain mesh.
 - Roads (docs/specs/roads-and-road-graph.md, criterion numbers in messages): the graph
   matches its schema and its report; nodes and points are finite and in the area;
   `length_m` is the polyline length; every edge starts and ends exactly at its nodes.
@@ -36,7 +38,8 @@ Heights are sampled on the actual triangles (the tiles' terrain meshes), not a g
 import json
 import re
 import struct
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +70,8 @@ GRADE_SPACING_M = 0.25  # graded ramps: samples along the path
 GRADE_TOL = 0.001
 STEP_SPACING_M = 0.1  # ramps: samples along each deck end edge
 ROAD_SURFACES = ("road-col", "path-col")
+# Godot's glTF import suffixes for collision; the imported node's name drops them.
+COLLISION_SUFFIXES = ("-convcolonly", "-colonly", "-col")
 BRIDGE_NODE = re.compile(r"^bridge_osm_way_(\d+)(?:_p\d+)?-col$")
 SPAN_END_ID = re.compile(r"^span:way/(\d+):(\d+)$")
 
@@ -91,9 +96,50 @@ class TileMeshes:
     """A tile .glb read back: node name -> (local vertices, faces)."""
 
     nodes: dict[str, tuple[np.ndarray, np.ndarray]]
+    names: list[str] = field(default_factory=list)  # every glTF node name, duplicates kept
 
     def buildings(self) -> list[str]:
         return [n for n in self.nodes if n.startswith("bld_") and not n.endswith("-colonly")]
+
+
+def import_name(name: str) -> str:
+    """A glTF node's name after Godot's import strips a collision suffix.
+
+    Strips only the suffixes the pipeline writes, `-convcolonly`, `-colonly` and `-col`
+    (matched case-insensitively). Godot's importer also recognises other forms, such as
+    `_col`, `-convcol` and names with trailing digits; the pipeline doesn't use them, so
+    they aren't stripped here.
+    """
+    for suffix in COLLISION_SUFFIXES:
+        if name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def check_import_names(tile_id: str, names: Sequence[str]) -> None:
+    """No two node names of a tile are equal once Godot strips the collision suffixes;
+    otherwise the import renames one of them and the pack's names no longer find it.
+    Nodes with an empty name are skipped rather than reported as a clash."""
+    seen: dict[str, str] = {}
+    for name in names:
+        if not name:
+            continue
+        key = import_name(name)
+        _require(
+            key not in seen,
+            f"{tile_id}: nodes {seen.get(key)!r} and {name!r} both import as {key!r}",
+        )
+        seen[key] = name
+
+
+def check_collision_names(node: str, collisions: Sequence[str]) -> None:
+    """A building's collision nodes are "<node>_c0-colonly" ... "<node>_c<n-1>-colonly"."""
+    _require(collisions, f"{node} has no -colonly partner")
+    expected = [f"{node}_c{k}-colonly" for k in range(len(collisions))]
+    _require(
+        list(collisions) == expected,
+        f"{node}: collision nodes {list(collisions)} aren't {expected}",
+    )
 
 
 def read_glb_meshes(path: Path) -> TileMeshes:
@@ -119,6 +165,7 @@ def read_glb_meshes(path: Path) -> TileMeshes:
         return array.reshape(acc["count"], width) if width > 1 else array
 
     nodes: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    names = [str(node.get("name", "")) for node in gltf.get("nodes", [])]
     for node in gltf.get("nodes", []):
         if "mesh" not in node:
             continue
@@ -134,7 +181,7 @@ def read_glb_meshes(path: Path) -> TileMeshes:
             vertices = vertices + np.array(node["translation"], dtype=float)
         faces = accessor(primitive["indices"]).astype(np.int64).reshape(-1, 3)
         nodes[str(node.get("name", ""))] = (from_gltf(vertices), faces)
-    return TileMeshes(nodes)
+    return TileMeshes(nodes, names)
 
 
 class TriangleSampler:
@@ -235,6 +282,7 @@ def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None)
             and terrain_v[:, 1].max() <= max_y + TOLERANCE,
             f"{tid}: terrain outside the tile",
         )
+        check_import_names(tid, meshes.names)
         names = meshes.buildings()
         colonly = {n for n in meshes.nodes if n.endswith("-colonly")}
         expected = {c for n in names for c in by_node[n]["collision_nodes"]}
@@ -246,12 +294,8 @@ def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None)
         for k, name in enumerate(names):
             building = by_node[name]
             collisions = building["collision_nodes"]
-            _require(collisions, f"{name} has no -colonly partner")
+            check_collision_names(name, collisions)
             for collision in collisions:
-                _require(
-                    collision.startswith(name) and collision.endswith("-colonly"),
-                    f"{name}: collision node {collision}",
-                )
                 _require(collision in meshes.nodes, f"{collision} missing from {tid}")
             _require(building["tile"] == tid, f"{name}: tile {building['tile']} != {tid}")
             world = geometries[building["id"]]

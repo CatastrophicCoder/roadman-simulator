@@ -135,13 +135,13 @@ def node_name(building_id: str) -> str:
 def collision_names(node: str, parts: int) -> tuple[str, ...]:
     """Collision node names, one per footprint part.
 
-    Godot imports nodes ending in `-colonly` as collision shapes only. A one-part
-    building gets "<node>-colonly"; a multi-part one "<node>_c0-colonly", "<node>_c1-colonly"...
+    Godot imports nodes ending in `-colonly` as collision shapes only and strips the suffix
+    from the body's name. Every building, also a one-part one, gets "<node>_c0-colonly",
+    "<node>_c1-colonly"..., so no body is named like the visual node "<node>" (Godot would
+    rename one of them).
     """
     if parts < 1:
         raise ValueError("a building has at least one part")
-    if parts == 1:
-        return (f"{node}-colonly",)
     return tuple(f"{node}_c{k}-colonly" for k in range(parts))
 
 

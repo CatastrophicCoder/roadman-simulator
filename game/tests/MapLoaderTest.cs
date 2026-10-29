@@ -109,7 +109,7 @@ public class MapLoaderTest
 
     /// <summary>
     /// The importer turns each <c>bld_*-colonly</c> glTF node into a standalone <see cref="StaticBody3D"/> (directly
-    /// under the tile, with a generated name) holding a <see cref="CollisionShape3D"/>, and makes no mesh for it.
+    /// under the tile) holding a <see cref="CollisionShape3D"/>, and makes no mesh for it.
     /// </summary>
     [TestCase]
     public async Task Tiles_HaveCollisionOnlyBuildingBodiesWithoutMeshes()
@@ -150,6 +150,51 @@ public class MapLoaderTest
         }
 
         AssertInt(buildingBodies).OverrideFailureMessage("no tile has a collision-only building body").IsGreater(0);
+    }
+
+    /// <summary>
+    /// In the imported tile scenes (before <see cref="MapLoader"/> touches them), each building body keeps its glTF
+    /// node name without the <c>-colonly</c> suffix, <c>bld_&lt;id&gt;_c&lt;k&gt;</c>: no body is renamed by Godot, and
+    /// re-appending the suffix gives exactly the tile's <c>collision_nodes</c> in <c>buildings.json</c>.
+    /// </summary>
+    [TestCase]
+    public void ImportedTiles_NameEachBuildingBodyAfterItsCollisionNodeWithoutTheSuffix()
+    {
+        AssertPackPresent();
+        var manifestPath = $"res://maps/{MapId}/{MapPack.ManifestFile}";
+        var manifest = MapManifestReader.Parse(FileAccess.GetFileAsString(manifestPath), manifestPath);
+        var buildingsPath = $"res://maps/{MapId}/{MapPack.BuildingsFile}";
+        var buildings = BuildingsReader.Parse(FileAccess.GetFileAsString(buildingsPath), buildingsPath);
+        var nodesByTile = BuildingBodies.CollisionNodesByTile(buildings);
+
+        var failures = new List<string>();
+        var bodyCount = 0;
+        foreach (var tile in manifest.Tiles)
+        {
+            var scene = GD.Load<PackedScene>($"res://maps/{MapId}/{tile.File}").Instantiate();
+            try
+            {
+                var names = scene.GetChildren().OfType<StaticBody3D>().Select(body => body.Name.ToString()).ToList();
+                bodyCount += names.Count;
+                failures.AddRange(names
+                    .Where(name => !System.Text.RegularExpressions.Regex.IsMatch(name, "^bld_.+_c[0-9]+$"))
+                    .Select(name => $"{tile.Id}/{name}"));
+
+                var expected = nodesByTile.TryGetValue(tile.Id, out var nodes) ? nodes : [];
+                var resolved = names.Select(name => name + MapLoader.CollisionOnlySuffix).Order(System.StringComparer.Ordinal);
+                if (!resolved.SequenceEqual(expected.Order(System.StringComparer.Ordinal)))
+                {
+                    failures.Add($"{tile.Id}: body names + {MapLoader.CollisionOnlySuffix} aren't its collision_nodes");
+                }
+            }
+            finally
+            {
+                scene.Free();
+            }
+        }
+
+        AssertInt(bodyCount).IsGreater(0);
+        AssertThat(string.Join("; ", failures.Take(20))).IsEqual("");
     }
 
     /// <summary>
