@@ -94,7 +94,18 @@ roads:
     railing_height_m: 1.0
     railing_width_m: 0.2
     min_clearance_m: 1.0     # deck underside above terrain; below this: warning in the report
-    ramp_length_m: 5.0       # road side of each deck end: surface blends from deck end to terrain
+    ramp_length_m: 5.0       # road-side ramp at each deck end, from terrain + offset to the deck-end height
+    walk_rim_search_m: 60.0  # walk-only decks: search this far for the deck end, across junctions
+    max_ramp_grade: 0.08     # walk-only deck end meeting no path: a ramp at most this steep along it
+    rim_search_m: 30.0       # how far along the road deck ends (rims) and dips are searched
+    dip_report_m: 1.0        # a crossing road without a bridge that dips more than this: listed in the report
+    ground_above_deck_warning_m: 0.05  # ground this far above a deck's surface: build warning
+    lidar_fit:               # deck heights from the point cloud; the geometric rim line is the fallback
+      classes: [2]           # MML 0.5 p classifies deck surfaces as ground (class 2)
+      bin_m: 2.0             # top point per bin along the span
+      band_m: 0.3            # a bin agrees with the line within this
+      min_bins: 4
+      min_inlier_share: 0.6  # lowest measured on Somero's tagged bridges: 6 of 10 bins
     inferred_waterways: [river, stream, canal, ditch, drain, flowline]  # crossing these without a bridge tag: inferred bridge
   classes:
     primary:       {width_m: 8.0, lanes: 2, drivable: true,  walkable: false}

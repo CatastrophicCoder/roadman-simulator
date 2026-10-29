@@ -4,6 +4,8 @@ Nodes exist only at OSM nodes (every end of an included way piece, every OSM nod
 more than once by the included ways, and the ends of inferred bridge spans) and at the
 cuts where a way leaves the build area. Both cuts and OSM nodes on the area edge where a
 way goes on outside are of kind `area_edge`; the latter keep their `osm:node/<id>` id.
+Where a bridge deck meets the road away from an OSM node, a `span_end` node
+(`span:way/<id>:<n>`, no OSM node) is inserted into the way.
 A way crossing another without a shared OSM node is never connected to it. Ids are
 stable: nodes `osm:node/<id>` or `cut:way/<id>:<n>`, edges `osm:way/<id>#<n>` (the
 edge's index along the way).
@@ -20,7 +22,8 @@ from mapgen.build.roads.tags import WayAttributes
 from mapgen.build.stage1_load import LocalRoadWay
 from mapgen.geo import BBox
 
-NodeKind = Literal["junction", "joint", "dead_end", "area_edge"]
+NodeKind = Literal["junction", "joint", "dead_end", "area_edge", "span_end"]
+BridgeSource = Literal["osm", "inferred", "inferred_underpass"]
 COORD_DECIMALS = 6  # 1 µm in road_graph.json (well under float32 rounding at ~100 m)
 
 
@@ -30,6 +33,69 @@ def osm_node_key(node_id: int) -> str:
 
 def cut_key(way_id: int, n: int) -> str:
     return f"cut:way/{way_id}:{n}"
+
+
+def span_key(way_id: int, n: int) -> str:
+    return f"span:way/{way_id}:{n}"
+
+
+def arc_lengths(xy: np.ndarray) -> np.ndarray:
+    """Cumulative distance along a polyline, starting at 0."""
+    steps = np.linalg.norm(np.diff(np.asarray(xy, dtype=float), axis=0), axis=1)
+    return np.concatenate([[0.0], np.cumsum(steps)])
+
+
+SNAP_M = 1e-6  # a position this close to an existing vertex uses that vertex
+
+
+def insert_vertices(piece: "Piece", positions: list[float], keys: list[str]) -> list[int]:
+    """Insert vertices at distances `positions` along the piece (not at its existing
+    vertices) with the given node keys; returns the vertex index of each position.
+
+    A position within `SNAP_M` of an existing vertex uses that vertex (and its key).
+    Inserted vertices have no OSM node. `edge_nodes` and `inferred` are re-indexed.
+    """
+    arc = arc_lengths(piece.xy)
+    new_points: list[tuple[float, int, np.ndarray, str]] = []  # (pos, order, xy, key)
+    for order, (pos, key) in enumerate(zip(positions, keys, strict=True)):
+        near = int(np.argmin(np.abs(arc - pos)))
+        if abs(arc[near] - pos) <= SNAP_M:
+            continue
+        k = int(np.clip(np.searchsorted(arc, pos, side="right") - 1, 0, len(arc) - 2))
+        t = (pos - arc[k]) / (arc[k + 1] - arc[k])
+        xy = piece.xy[k] + t * (piece.xy[k + 1] - piece.xy[k])
+        new_points.append((pos, order, xy, key))
+    new_points.sort(key=lambda p: p[0])
+    old_to_new: list[int] = []
+    xy_out: list[np.ndarray] = []
+    keys_out: list[str] = []
+    ids_out: list[int | None] = []
+    inserted: dict[int, int] = {}
+    j = 0
+    for i in range(len(piece.xy)):
+        while j < len(new_points) and new_points[j][0] < arc[i]:
+            inserted[new_points[j][1]] = len(xy_out)
+            xy_out.append(new_points[j][2])
+            keys_out.append(new_points[j][3])
+            ids_out.append(None)
+            j += 1
+        old_to_new.append(len(xy_out))
+        xy_out.append(piece.xy[i])
+        keys_out.append(piece.keys[i])
+        ids_out.append(piece.node_ids[i])
+    piece.xy = np.array(xy_out)
+    piece.keys, piece.node_ids = keys_out, ids_out
+    piece.edge_nodes = frozenset(old_to_new[i] for i in piece.edge_nodes)
+    piece.inferred = [(old_to_new[a], old_to_new[b]) for a, b in piece.inferred]
+    piece.decks = [(old_to_new[a], old_to_new[b], src) for a, b, src in piece.decks]
+    result = []
+    new_arc = arc_lengths(piece.xy)
+    for order, pos in enumerate(positions):
+        if order in inserted:
+            result.append(inserted[order])
+        else:
+            result.append(int(np.argmin(np.abs(new_arc - pos))))
+    return result
 
 
 def clip_segment(
@@ -90,8 +156,13 @@ class Piece:
     keys: list[str]
     node_ids: list[int | None]
     z: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    # Inferred bridge spans as inclusive vertex ranges (start < end), filled by `bridges`.
+    # Water-inferred bridge spans as inclusive vertex ranges (start < end), found by
+    # `bridges.infer_spans` before the deck extents are known.
     inferred: list[tuple[int, int]] = field(default_factory=list)
+    # The final bridge decks on this piece: inclusive vertex ranges and their source.
+    decks: list[tuple[int, int, BridgeSource]] = field(default_factory=list)
+    # A tunnel piece that passes under a deck: draped like a ground way (tunnel stays true).
+    under_deck: bool = False
     # End vertices that are OSM nodes on the area edge where the way continues outside.
     edge_nodes: frozenset[int] = frozenset()
 
@@ -100,7 +171,19 @@ class Piece:
         return self.way.osm_id
 
     def is_cut(self, i: int) -> bool:
-        return self.node_ids[i] is None
+        return self.keys[i].startswith("cut:")
+
+    @property
+    def tunnel_span(self) -> bool:
+        """A tunnel piece in the graph only (no mesh): not under a deck."""
+        return self.attrs.tunnel and not self.under_deck
+
+    def deck_source(self, a: int, b: int) -> "BridgeSource | None":
+        """The source of the deck that covers vertices a..b, or None (ground)."""
+        for start, end, source in self.decks:
+            if start <= a and b <= end:
+                return source
+        return None
 
     def at_area_edge(self, i: int) -> bool:
         """A cut, or an OSM node on the area edge where the way leaves the area."""
@@ -205,7 +288,7 @@ class GraphEdge:
     piece: Piece
     start: int  # vertex range in the piece, inclusive, in way order
     end: int
-    bridge_source: Literal["osm", "inferred"] | None
+    bridge_source: BridgeSource | None
     points: np.ndarray  # (n, 3) local x, y, z in the allowed direction
 
     @property
@@ -220,7 +303,7 @@ class RoadGraph:
 
 
 def build_graph(pieces: Sequence[Piece]) -> RoadGraph:
-    """Nodes and edges of the included pieces (their `z` and `inferred` must be set)."""
+    """Nodes and edges of the included pieces (their `z` and `decks` must be set)."""
     uses: Counter[int] = Counter()
     for piece in pieces:
         uses.update(n for n in piece.node_ids if n is not None)
@@ -235,7 +318,7 @@ def build_graph(pieces: Sequence[Piece]) -> RoadGraph:
         splits |= {
             i for i, node in enumerate(piece.node_ids) if node is not None and uses[node] > 1
         }
-        for start, end in piece.inferred:
+        for start, end, _ in piece.decks:
             splits |= {start, end}
         cut_points = sorted(splits)
         for i in cut_points:
@@ -246,10 +329,7 @@ def build_graph(pieces: Sequence[Piece]) -> RoadGraph:
                     key, (float(x), float(y), float(piece.z[i])), piece.node_ids[i]
                 )
         for a, b in zip(cut_points[:-1], cut_points[1:], strict=True):
-            inferred = any(s <= a and b <= e for s, e in piece.inferred)
-            source: Literal["osm", "inferred"] | None = (
-                "osm" if piece.attrs.bridge else "inferred" if inferred else None
-            )
+            source = piece.deck_source(a, b)
             points = np.column_stack([piece.xy[a : b + 1], piece.z[a : b + 1]])
             from_key, to_key = piece.keys[a], piece.keys[b]
             if piece.attrs.oneway < 0:
@@ -275,7 +355,9 @@ def build_graph(pieces: Sequence[Piece]) -> RoadGraph:
         ends[edge.from_key] += 1
         ends[edge.to_key] += 1
     for key, node in nodes.items():
-        if node.osm_node is None or key in area_edge:
+        if key.startswith("span:"):
+            node.kind = "span_end"
+        elif key.startswith("cut:") or key in area_edge:
             node.kind = "area_edge"
         elif ends[key] >= 3:
             node.kind = "junction"

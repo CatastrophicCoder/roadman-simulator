@@ -114,7 +114,8 @@
             {
               "enum": [
                 "osm",
-                "inferred"
+                "inferred",
+                "inferred_underpass"
               ],
               "type": "string"
             },
@@ -231,7 +232,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "description": "osm:node/<id>, or cut:way/<id>:<n> for an area_edge cut",
+          "description": "osm:node/<id>, cut:way/<id>:<n> for an area_edge cut, or span:way/<id>:<n> for a span_end node",
           "title": "Id",
           "type": "string"
         },
@@ -240,7 +241,8 @@
             "junction",
             "joint",
             "dead_end",
-            "area_edge"
+            "area_edge",
+            "span_end"
           ],
           "title": "Kind",
           "type": "string"

@@ -120,7 +120,11 @@ class TerrainSurface:
         if segment.is_empty:
             return float(self.height(np.array([p, q])).max())
         best = -np.inf
+        sx0, sy0, sx1, sy1 = segment.bounds
         for mesh in self.meshes.values():
+            tb = mesh.tile.bounds
+            if sx1 < tb.min_x or sx0 > tb.max_x or sy1 < tb.min_y or sy0 > tb.max_y:
+                continue
             candidates = mesh.tree.query(segment, predicate="intersects")
             if len(candidates) == 0:
                 continue
@@ -153,17 +157,18 @@ class GroundRun:
 
 
 def ground_runs(pieces: Sequence[Piece], bridge_end_keys: set[str]) -> list[GroundRun]:
-    """The ground parts of every piece that is neither a bridge nor a tunnel.
+    """The parts of every piece outside its decks, except tunnels in the graph only (a
+    tunnel under a deck is draped like any ground way).
 
     An end gets a flat cap when it meets a bridge span or is an area-edge cut.
     """
     runs: list[GroundRun] = []
     for piece in pieces:
-        if piece.attrs.bridge or piece.attrs.tunnel:
+        if piece.tunnel_span:
             continue
         n = len(piece.xy)
         bounds = [0]
-        for s, e in sorted(piece.inferred):
+        for s, e, _ in sorted(piece.decks):
             bounds += [s, e]
         bounds.append(n - 1)
         flat = [piece.at_area_edge(i) or key in bridge_end_keys for i, key in enumerate(piece.keys)]

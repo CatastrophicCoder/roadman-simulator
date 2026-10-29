@@ -35,8 +35,11 @@ class _StrictJsonModel(BaseModel):
 
 
 class RoadNode(_StrictJsonModel):
-    id: str = Field(description="osm:node/<id>, or cut:way/<id>:<n> for an area_edge cut")
-    kind: Literal["junction", "joint", "dead_end", "area_edge"]
+    id: str = Field(
+        description="osm:node/<id>, cut:way/<id>:<n> for an area_edge cut, or "
+        "span:way/<id>:<n> for a span_end node"
+    )
+    kind: Literal["junction", "joint", "dead_end", "area_edge", "span_end"]
     position: Vec3 = Field(description="[x, y, z] in Godot local metres")
     osm_node: int | None
 
@@ -58,7 +61,7 @@ class RoadEdge(_StrictJsonModel):
     width_source: ValueSource
     oneway: bool = Field(description="true: only from -> to is allowed for driving")
     bridge: bool
-    bridge_source: Literal["osm", "inferred"] | None
+    bridge_source: Literal["osm", "inferred", "inferred_underpass"] | None
     tunnel: bool
     layer: int
     length_m: float = Field(ge=0, description="3D length of the polyline")

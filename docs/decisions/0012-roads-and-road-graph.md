@@ -30,3 +30,20 @@ The map needs road surfaces that cars drive on and a road graph for traffic AI, 
 - Streaming tiles later must load the road pieces of each tile, since roads are split.
 - The road graph has real street names; how business names are shown is a separate decision.
 - Building cost (2026-10-29): a full Somero build takes about 30 s, of which the roads stage is about 19 s, the pack checks 3.4 s and the read-back 0.25 s; a test-area build takes about 1.4 s.
+
+## Amendment (2026-10-29): deck heights from lidar, span nodes and underpasses
+
+A playtest showed Jokioistentie dipping 3.5–3.9 m into two cycleway underpasses (tunnel ways under a road with no bridge tag). The MML 0.5 p lidar also showed that the ground class (2) holds the surfaces of bridge decks and of roads over underpasses, while the DEM has those structures removed. Straight lines through those points fit Somero's decks within 0.02–0.23 m, and showed decks drawn between the OSM bridge ends up to 4 m too low at one end. Spec: `docs/specs/roads-and-road-graph.md` ("Deck heights", "Deck extent", "Underpasses").
+
+- **Deck heights.** Each span's straight line comes from the point cloud when the map has one and the fit passes the `roads.bridge.lidar_fit` thresholds (top point per bin, consensus line, minimum agreeing bins and share); otherwise from the line between the rims, the highest road surface within `rim_search_m` beyond each end. The report gives the method and fit quality per span. The lidar classes are config, because other sources classify decks differently.
+- **Span nodes.** A deck extends along the connected road until its line meets the road surface, and ends at a new `span_end` node (`span:way/<id>:<n>`, not an OSM node). Graph nodes are therefore OSM nodes, `area_edge` cuts or `span_end` nodes. A deck end at a junction, or one whose line doesn't meet the road within `rim_search_m`, stays at the OSM node with a ramp.
+- **Underpasses.** A way without a bridge tag that crosses a tunnel or lower-layer way without a shared node gets a deck over the dip (`bridge_source: "inferred_underpass"`). Tunnel ways under any deck are draped like other ways, with collision, and keep `tunnel: true`. Remaining crossings that dip more than `dip_report_m` are listed under `suspected_dips`.
+- **Ground above decks** more than `ground_above_deck_warning_m` (Somero: 0.05 m) is a build warning, not a failure.
+
+Consequences: maps without a point cloud get geometric decks, which in Somero differ from the lidar by up to about 2.6 m at an end. The road graph reader accepts the new node kind and bridge source.
+
+Implementation details, accepted on 2026-10-29:
+
+- A deck end where the lidar line runs below the road is raised to the road (at most 0.15 m in Somero) rather than leaving a step. "Road surface" at a deck end is the highest terrain + offset across the deck's width. The meeting-point search continues across joints and stops at junctions.
+- The lidar fit uses the OSM bridge footprint only (tagged and water-inferred spans), so approach road can't outweigh the deck; underpasses fit over `rim_search_m` on each side. The geometric fallback takes each rim's height at the OSM end. The lidar is read once, around ways with `bridge`, `tunnel` or `layer` tags and around water.
+- Walk-only decks search up to `walk_rim_search_m` (60 m), also across junctions. If they still meet no path, the end gets a ramp along the path no steeper than `max_ramp_grade` (8%) instead of the standard 5 m ramp, which in Somero would have climbed 3.3 m and 3.9 m.

@@ -837,8 +837,11 @@ def check_las_crs(path: Path, header: laspy.LasHeader, target_crs: str) -> None:
         )
 
 
-def read_points(path: Path, target_crs: str, bounds: BBox) -> PointCloud:
-    """The points of one LAS/LAZ file inside `bounds`, without `DROPPED_CLASSES`.
+def read_points(
+    path: Path, target_crs: str, bounds: BBox, classes: tuple[int, ...] | None = None
+) -> PointCloud:
+    """The points of one LAS/LAZ file inside `bounds`, without `DROPPED_CLASSES`, or with
+    only `classes` when given (e.g. ground points for bridge decks).
 
     Reads in chunks so a whole sheet never sits in memory at once. The file's CRS must be
     equivalent to `target_crs` (points are not reprojected).
@@ -847,6 +850,7 @@ def read_points(path: Path, target_crs: str, bounds: BBox) -> PointCloud:
     with laspy.open(path) as reader:
         check_las_crs(path, reader.header, target_crs)
         dropped = np.array(DROPPED_CLASSES, dtype=np.uint8)
+        wanted = np.array(classes or (), dtype=np.uint8)
         for chunk in reader.chunk_iterator(LAZ_CHUNK_POINTS):
             x = np.asarray(chunk.x, dtype=np.float64)
             y = np.asarray(chunk.y, dtype=np.float64)
@@ -856,7 +860,11 @@ def read_points(path: Path, target_crs: str, bounds: BBox) -> PointCloud:
                 & (x <= bounds.max_x)
                 & (y >= bounds.min_y)
                 & (y <= bounds.max_y)
-                & ~np.isin(classification, dropped)
+                & (
+                    np.isin(classification, wanted)
+                    if classes is not None
+                    else ~np.isin(classification, dropped)
+                )
             )
             if not keep.any():
                 continue
@@ -920,7 +928,8 @@ class MmlLidarAdapter(MmlSheetAdapter):
         ]
 
     def load(self, ctx: LoadContext) -> SourceData:
-        """Non-ground points inside `ctx.bounds` from every LAZ file that overlaps them.
+        """Points inside `ctx.bounds` from every LAZ file that overlaps them: non-ground
+        points, or only `ctx.point_classes` when set.
 
         Only files that contribute to the area are listed in `files` (for the credits).
         """
@@ -937,7 +946,7 @@ class MmlLidarAdapter(MmlSheetAdapter):
             try:
                 if not laz_overlaps(path, ctx.target_crs, ctx.bounds):
                     continue
-                clouds.append(read_points(path, ctx.target_crs, ctx.bounds))
+                clouds.append(read_points(path, ctx.target_crs, ctx.bounds, ctx.point_classes))
             except SourceLoadError as exc:
                 raise SourceLoadError(f"[{ctx.source_name}] {exc}") from exc
             except (laspy.errors.LaspyException, OSError, ValueError) as exc:

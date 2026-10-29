@@ -72,6 +72,17 @@ roads:
     railing_width_m: 0.3
     min_clearance_m: 2.5
     ramp_length_m: 3.5
+    rim_search_m: 25.0
+    walk_rim_search_m: 45.0
+    max_ramp_grade: 0.1
+    dip_report_m: 1.5
+    ground_above_deck_warning_m: 0.08
+    lidar_fit:
+      classes: [2, 11]
+      bin_m: 1.5
+      band_m: 0.25
+      min_bins: 5
+      min_inlier_share: 0.7
     inferred_waterways: [river, stream]
   classes:
     primary:     {width_m: 9.0, lanes: 3, drivable: true,  walkable: true, speed_kmh: 70}

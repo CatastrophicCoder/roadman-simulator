@@ -60,6 +60,13 @@ SNIPPET_ROADS: dict[str, Any] = {
         "railing_width_m": 0.25,
         "min_clearance_m": 1.5,
         "ramp_length_m": 4.0,
+        "rim_search_m": 28.0,
+        "walk_rim_search_m": 70.0,
+        "max_ramp_grade": 0.06,
+        "dip_report_m": 1.2,
+        "ground_above_deck_warning_m": 0.06,
+        "lidar_fit": {"classes": [2], "bin_m": 2.0, "band_m": 0.3, "min_bins": 4,
+                      "min_inlier_share": 0.6},
         "inferred_waterways": ["river", "stream", "ditch"],
     },
     "classes": {

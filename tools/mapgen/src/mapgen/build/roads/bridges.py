@@ -59,7 +59,7 @@ class SpanPart:
 @dataclass
 class Span:
     kind: SpanKind
-    source: Literal["osm", "inferred"]
+    source: Literal["osm", "inferred", "inferred_underpass"]
     parts: list[SpanPart]
     xy: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))  # centre line
     s: np.ndarray = field(default_factory=lambda: np.zeros(0))  # distance along it
@@ -67,6 +67,8 @@ class Span:
     z1: float = 0.0
     water: list[str] = field(default_factory=list)  # inferred: the water features crossed
     crossing: tuple[float, float] | None = None  # inferred: where it crosses first
+    # End heights fixed by the deck line (lidar or geometric); None: from the road surface.
+    fixed_z: tuple[float, float] | None = None
 
     @property
     def length(self) -> float:
@@ -104,7 +106,7 @@ def tagged_spans(pieces: Sequence[Piece], kind: SpanKind) -> list[Span]:
     """Chains of bridge (or tunnel) pieces, joined at nodes no other included way uses."""
 
     def wanted(p: Piece) -> bool:
-        return p.attrs.bridge if kind == "bridge" else p.attrs.tunnel
+        return p.attrs.bridge if kind == "bridge" else p.tunnel_span
 
     units = sorted((p for p in pieces if wanted(p)), key=lambda p: (p.way_id, p.index))
     edge_nodes = {p.keys[i] for p in pieces for i in p.edge_nodes}
@@ -301,6 +303,8 @@ def set_span_heights(
     ends = terrain.height(span.xy[[0, -1]]) + offset
     if field is not None:
         ends = field.apply(span.xy[[0, -1]], ends)
+    if span.fixed_z is not None:
+        ends = np.array(span.fixed_z)
     fixed = fixed or {}
     start, end = span.end_keys()
     span.z0 = float(fixed.get(start, ends[0]))
@@ -456,7 +460,10 @@ def build_ramps(
             u = u / norm
             half = part.piece.attrs.width_m / 2
             n = np.array([-u[1], u[0]])
-            z_end = terrain.max_along(e + n * half, e - n * half) + offset
+            if span.fixed_z is not None:  # the deck line's end height (deck stays straight)
+                z_end = span.fixed_z[0] if key == start else span.fixed_z[1]
+            else:
+                z_end = terrain.max_along(e + n * half, e - n * half) + offset
             ramps.append(
                 Ramp(
                     key, (float(e[0]), float(e[1])), (float(u[0]), float(u[1])), half, z_end, length

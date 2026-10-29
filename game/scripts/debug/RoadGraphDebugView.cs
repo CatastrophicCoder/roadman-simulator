@@ -14,9 +14,10 @@ namespace Roadman.Debug;
 /// <item>drivable edges as flat ribbons coloured by class (<see cref="ClassColours"/>; a class not listed gets a
 /// stable colour from its name), walkable-only edges in <see cref="WalkableColour"/>;</item>
 /// <item>an arrow at the middle of every one-way edge, pointing in the allowed direction;</item>
-/// <item>nodes as flat markers coloured by kind: dead ends as diamonds, area-edge cuts as large squares, junctions as
-/// squares and joints as small squares.</item>
+/// <item>nodes as flat markers coloured by kind: dead ends as diamonds, area-edge cuts as large squares, span ends
+/// (where a bridge deck meets the road) as triangles, junctions as squares and joints as small squares.</item>
 /// </list>
+/// Bridge edges (any <see cref="RoadEdge.BridgeSource"/>) are drawn like the other edges, by class.
 /// A legend in the top-right corner lists the classes drawn and the node kinds. The geometry is unshaded and casts no
 /// shadow; it is built once per graph and kept until the map reloads.
 /// <para>
@@ -93,6 +94,9 @@ public partial class RoadGraphDebugView : Node3D
 
     [Export]
     public Color AreaEdgeColour { get; set; } = new(0f, 0.95f, 1f);
+
+    [Export]
+    public Color SpanEndColour { get; set; } = new(1f, 0.1f, 0.9f);
 
     /// <summary>How long the "no road graph" message stays on screen, in seconds.</summary>
     [Export]
@@ -273,6 +277,7 @@ public partial class RoadGraphDebugView : Node3D
             RoadNodeKind.Junction => JunctionColour,
             RoadNodeKind.Joint => JointColour,
             RoadNodeKind.DeadEnd => DeadEndColour,
+            RoadNodeKind.SpanEnd => SpanEndColour,
             _ => AreaEdgeColour,
         };
 
@@ -422,6 +427,19 @@ public partial class RoadGraphDebugView : Node3D
             return;
         }
 
+        if (node.Kind == RoadNodeKind.SpanEnd)
+        {
+            // A triangle, so span ends differ from the square joints they usually sit next to.
+            var r = half * 1.3f;
+            AddTriangle(
+                mesh,
+                colour,
+                centre + new Vector3(0f, 0f, -r),
+                centre + new Vector3(r * 0.866f, 0f, r * 0.5f),
+                centre + new Vector3(-r * 0.866f, 0f, r * 0.5f));
+            return;
+        }
+
         AddQuad(
             mesh,
             colour,
@@ -493,6 +511,7 @@ public partial class RoadGraphDebugView : Node3D
         AddLegendRow(rows, "joint", JointColour);
         AddLegendRow(rows, "dead end (diamond)", DeadEndColour);
         AddLegendRow(rows, "area edge (large)", AreaEdgeColour);
+        AddLegendRow(rows, "span end (triangle)", SpanEndColour);
         AddLegendRow(rows, $"{graph.Nodes.Count} nodes, {graph.Edges.Count} edges", null);
     }
 

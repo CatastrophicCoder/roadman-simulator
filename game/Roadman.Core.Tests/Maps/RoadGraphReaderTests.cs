@@ -60,6 +60,54 @@ public class RoadGraphReaderTests
         }
         """;
 
+    // A road (way 50) over an underpass: ground edge, inferred deck between two span ends, ground edge.
+    // P: dead end, S0 and S1: span ends (no OSM node), Q: dead end.
+    private const string UnderpassGraph = """
+        {
+          "schema_version": 1,
+          "map_id": "somero",
+          "area": "test",
+          "nodes": [
+            {"id": "osm:node/5", "kind": "dead_end", "position": [0, 90, 0], "osm_node": 5},
+            {"id": "span:way/50:0", "kind": "span_end", "position": [20, 91, 0], "osm_node": null},
+            {"id": "span:way/50:1", "kind": "span_end", "position": [50, 91, 0], "osm_node": null},
+            {"id": "osm:node/6", "kind": "dead_end", "position": [70, 90, 0], "osm_node": 6}
+          ],
+          "edges": [
+            {
+              "id": "osm:way/50#0", "from": "osm:node/5", "to": "span:way/50:0", "class": "secondary",
+              "drivable": true, "drivable_source": "default", "walkable": true, "walkable_source": "default",
+              "lanes": 2, "lanes_source": "default", "speed_kmh": 50, "speed_source": "default",
+              "width_m": 7.0, "width_source": "default", "oneway": false,
+              "bridge": false, "bridge_source": null, "tunnel": false, "layer": 0,
+              "length_m": 20.02, "osm_way": 50, "name": null, "name_sv": null, "ref": null,
+              "points": [[0, 90, 0], [20, 91, 0]]
+            },
+            {
+              "id": "osm:way/50#1", "from": "span:way/50:0", "to": "span:way/50:1", "class": "secondary",
+              "drivable": true, "drivable_source": "default", "walkable": true, "walkable_source": "default",
+              "lanes": 2, "lanes_source": "default", "speed_kmh": 50, "speed_source": "default",
+              "width_m": 7.0, "width_source": "default", "oneway": false,
+              "bridge": true, "bridge_source": "inferred_underpass", "tunnel": false, "layer": 0,
+              "length_m": 30.0, "osm_way": 50, "name": null, "name_sv": null, "ref": null,
+              "points": [[20, 91, 0], [35, 91, 0], [50, 91, 0]]
+            },
+            {
+              "id": "osm:way/50#2", "from": "span:way/50:1", "to": "osm:node/6", "class": "secondary",
+              "drivable": true, "drivable_source": "default", "walkable": true, "walkable_source": "default",
+              "lanes": 2, "lanes_source": "default", "speed_kmh": 50, "speed_source": "default",
+              "width_m": 7.0, "width_source": "default", "oneway": false,
+              "bridge": false, "bridge_source": null, "tunnel": false, "layer": 0,
+              "length_m": 20.02, "osm_way": 50, "name": null, "name_sv": null, "ref": null,
+              "points": [[50, 91, 0], [70, 90, 0]]
+            }
+          ]
+        }
+        """;
+
+    private const string S0 = "span:way/50:0";
+    private const string S1 = "span:way/50:1";
+
     /// <summary>What the pipeline writes for a map without roads.</summary>
     private const string EmptyGraph =
         """{"schema_version": 1, "map_id": "somero", "area": "full", "nodes": [], "edges": []}""";
@@ -132,6 +180,52 @@ public class RoadGraphReaderTests
         var json = ModifyEdge(3, edge => edge["bridge_source"] = "inferred");
 
         Assert.Equal(RoadBridgeSource.Inferred, RoadGraphReader.Parse(json).Edge("osm:way/30#0").BridgeSource);
+    }
+
+    [Fact]
+    public void Parse_InferredUnderpassBridge_IsRead()
+    {
+        var json = ModifyEdge(3, edge => edge["bridge_source"] = "inferred_underpass");
+
+        var edge = RoadGraphReader.Parse(json).Edge("osm:way/30#0");
+        Assert.True(edge.Bridge);
+        Assert.Equal(RoadBridgeSource.InferredUnderpass, edge.BridgeSource);
+    }
+
+    [Fact]
+    public void Parse_SpanEndNodes_AreRead()
+    {
+        var graph = RoadGraphReader.Parse(UnderpassGraph);
+
+        Assert.Equal(new RoadNode(S0, RoadNodeKind.SpanEnd, new LocalPoint(20, 91, 0), null), graph.Node(S0));
+        Assert.Equal(RoadNodeKind.SpanEnd, graph.Node(S1).Kind);
+        Assert.Null(graph.Node(S1).OsmNode);
+
+        var deck = graph.Edge("osm:way/50#1");
+        Assert.Equal(S0, deck.From);
+        Assert.Equal(S1, deck.To);
+        Assert.True(deck.Bridge);
+        Assert.Equal(RoadBridgeSource.InferredUnderpass, deck.BridgeSource);
+        Assert.Null(graph.Edge("osm:way/50#0").BridgeSource);
+    }
+
+    [Fact]
+    public void Lookups_PassThroughSpanEnds()
+    {
+        var graph = RoadGraphReader.Parse(UnderpassGraph);
+
+        Assert.Equal(["osm:way/50#0", "osm:way/50#1"], graph.EdgesAt(S0).Select(edge => edge.Id));
+        Assert.Equal(["osm:way/50#1", "osm:way/50#2"], graph.EdgesAt(S1).Select(edge => edge.Id));
+
+        Assert.Equal(
+            [("osm:way/50#0", "osm:node/5"), ("osm:way/50#1", S1)],
+            graph.DrivableEdgesFrom(S0).Select(step => (step.Edge.Id, step.EndNode)));
+        Assert.Equal(
+            [("osm:way/50#1", S0), ("osm:way/50#2", "osm:node/6")],
+            graph.WalkableEdgesAt(S1).Select(step => (step.Edge.Id, step.EndNode)));
+
+        Assert.True(graph.Matches(S0, RoadNodeFilter.Drivable));
+        Assert.Equal(S1, graph.NearestNode(new LocalPoint(48, 91, 1), RoadNodeFilter.Drivable)!.Id);
     }
 
     [Fact]
@@ -392,7 +486,7 @@ public class RoadGraphReaderTests
 
     [Theory]
     [InlineData("drivable_source", "guess", "must be 'osm' or 'default'")]
-    [InlineData("bridge_source", "guess", "must be 'osm', 'inferred' or null")]
+    [InlineData("bridge_source", "guess", "must be 'osm', 'inferred', 'inferred_underpass' or null")]
     [InlineData("lanes", 0, "must be at least 1")]
     [InlineData("speed_kmh", 0, "must be greater than 0")]
     [InlineData("width_m", 0, "must be greater than 0")]

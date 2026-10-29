@@ -14,6 +14,9 @@ public enum RoadNodeKind
 
     /// <summary>Where a way was cut at the build area's edge (<c>area_edge</c>).</summary>
     AreaEdge,
+
+    /// <summary>Where a bridge deck meets the road (<c>span_end</c>); not an OSM node.</summary>
+    SpanEnd,
 }
 
 /// <summary>Where an edge attribute came from (<c>*_source</c> in <c>road_graph.json</c>).</summary>
@@ -34,6 +37,12 @@ public enum RoadBridgeSource
 
     /// <summary>Crosses water without a bridge tag; treated as a bridge by the pipeline (<c>inferred</c>).</summary>
     Inferred,
+
+    /// <summary>
+    /// Crosses over a tunnel or a lower-<c>layer</c> way without a bridge tag; the pipeline spans the dip with a deck
+    /// (<c>inferred_underpass</c>).
+    /// </summary>
+    InferredUnderpass,
 }
 
 /// <summary>Which nodes a lookup such as <see cref="RoadGraph.NearestNode"/> considers.</summary>
@@ -60,10 +69,13 @@ public sealed record FeatureNames(string? Name, string? NameSv, string? Ref)
 }
 
 /// <summary>A node of the road graph.</summary>
-/// <param name="Id">Stable id: <c>osm:node/&lt;id&gt;</c>, or <c>cut:way/&lt;id&gt;:&lt;n&gt;</c> for an area-edge cut.</param>
-/// <param name="Kind">Junction, joint, dead end or area edge.</param>
+/// <param name="Id">
+/// Stable id: <c>osm:node/&lt;id&gt;</c>, <c>cut:way/&lt;id&gt;:&lt;n&gt;</c> for an area-edge cut, or
+/// <c>span:way/&lt;id&gt;:&lt;n&gt;</c> for a span end.
+/// </param>
+/// <param name="Kind">Junction, joint, dead end, area edge or span end.</param>
 /// <param name="Position">Godot local metres, at the road surface.</param>
-/// <param name="OsmNode">The OSM node id; null for an area-edge cut.</param>
+/// <param name="OsmNode">The OSM node id; null for an area-edge cut or a span end.</param>
 public sealed record RoadNode(string Id, RoadNodeKind Kind, LocalPoint Position, long? OsmNode);
 
 /// <summary>

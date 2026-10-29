@@ -99,6 +99,9 @@ class LoadResult:
     # Imagery files overlapping the area (debug orthophoto textures). None without a source
     # or without files; the build then writes no `debug/` folder.
     imagery: Imagery | None = None
+    # Ground-class lidar points over the area (local coordinates), for bridge deck heights.
+    # None without a point cloud source or a `roads` block.
+    deck_points: PointCloud | None = None
     # Road ways, water and the water relations left out, from the `osm_vector` source.
     roads: list[LocalRoadWay] = field(default_factory=list)
     roads_skipped: list[SkippedFeature] = field(default_factory=list)
@@ -167,7 +170,9 @@ def run_load(
     def load(source: SelectedSource) -> SourceData:
         return load_bounded(source, read_bounds)
 
-    def load_bounded(source: SelectedSource, bounds: BBox) -> SourceData:
+    def load_bounded(
+        source: SelectedSource, bounds: BBox, classes: tuple[int, ...] | None = None
+    ) -> SourceData:
         ctx = LoadContext(
             map_config=config,
             source_name=source.name,
@@ -176,6 +181,7 @@ def run_load(
             target_crs=config.crs,
             bounds=bounds,
             log=log,
+            point_classes=classes,
         )
         try:
             return source.adapter.load(ctx)
@@ -243,6 +249,8 @@ def run_load(
     # or without files; the build then writes no `debug/` folder.
     imagery: Imagery | None = None
     point_bounds: BBox | None = None
+    deck_points: PointCloud | None = None
+    deck_window: BBox | None = None
     if point_source is not None:
         lidar_params = LidarParams.from_options(point_source.options)
         points = PointCloud.empty(config.crs)
@@ -254,6 +262,18 @@ def run_load(
                 raise BuildError(f"source {point_source.name!r} returned no point cloud")
             points = data_points.points.offset(-config.origin.x, -config.origin.y)
         log(f"[{point_source.name}] {len(points)} lidar points around {len(in_area)} footprints")
+        deck_window = deck_points_bounds(roads, water_areas + water_lines, config, read_bounds)
+        if config.roads is not None and deck_window is not None:
+            # Deck surfaces are ground points in the lidar (the DEM has them removed): the
+            # roads stage fits bridge deck heights to them. Read around every way that can
+            # have or cross a deck (bridge, tunnel or layer tags, water), plus the search.
+            classes = tuple(config.roads.bridge.lidar_fit.classes)
+            data_ground = load_bounded(point_source, deck_window, classes)
+            files += [f for f in data_ground.files if f not in files]
+            if data_ground.points is not None:
+                deck_points = data_ground.points.offset(-config.origin.x, -config.origin.y)
+            count = len(deck_points) if deck_points is not None else 0
+            log(f"[{point_source.name}] {count} points of classes {list(classes)} for decks")
     imagery: Imagery | None = None
     if imagery_source is not None:
         data_imagery = load_bounded(imagery_source, world_area)
@@ -293,6 +313,8 @@ def run_load(
         "point_cloud": {
             "source": point_source.name if point_source else None,
             "points": len(points) if points is not None else 0,
+            "deck_points": len(deck_points) if deck_points is not None else 0,
+            "deck_points_bounds_world": deck_window.as_list() if deck_window else None,
             "bounds_world": point_bounds.as_list() if point_bounds else None,
             "params": lidar_params.as_dict() if lidar_params else None,
         },
@@ -339,9 +361,50 @@ def run_load(
         imagery=imagery,
         roads=roads,
         roads_skipped=roads_skipped,
+        deck_points=deck_points,
         water_areas=water_areas,
         water_lines=water_lines,
         water_skipped=water_skipped,
+    )
+
+
+def deck_points_bounds(
+    roads: list[LocalRoadWay], water: list[LocalWater], config: MapConfig, limit: BBox
+) -> BBox | None:
+    """World bounds of the lidar points for bridge decks: around the highway ways with a
+    `bridge`, `tunnel` or `layer` tag and the water, plus `rim_search_m` and the widest
+    road class. None when there is nothing that can carry or create a deck."""
+    if config.roads is None:
+        return None
+    boxes = [
+        r.xy
+        for r in roads
+        if any(r.tags.get(k) not in (None, "no") for k in ("bridge", "tunnel", "layer"))
+    ]
+    if water and roads:
+        boxes += [np.asarray(w.geometry.bounds).reshape(2, 2) for w in water]
+    if not boxes:
+        return None
+    pts = np.vstack(boxes)
+    margin = (
+        config.roads.bridge.rim_search_m + max(c.width_m for c in config.roads.classes.values())
+        if config.roads.classes
+        else config.roads.bridge.rim_search_m
+    )
+    local = BBox(
+        float(pts[:, 0].min()) - margin,
+        float(pts[:, 1].min()) - margin,
+        float(pts[:, 0].max()) + margin,
+        float(pts[:, 1].max()) + margin,
+    )
+    world = to_world(local, config)
+    if not world.intersects(limit):
+        return None
+    return BBox(
+        max(world.min_x, limit.min_x),
+        max(world.min_y, limit.min_y),
+        min(world.max_x, limit.max_x),
+        min(world.max_y, limit.max_y),
     )
 
 

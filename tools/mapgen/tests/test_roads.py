@@ -73,6 +73,11 @@ def test_somero_and_testtown_roads_blocks_differ(fixture_config: MapConfig) -> N
         (("default_speed_kmh",), -5),
         (("bridge", "deck_thickness_m"), 0),
         (("bridge", "min_clearance_m"), -0.1),
+        (("bridge", "walk_rim_search_m"), 0),
+        (("bridge", "walk_rim_search_m"), 10.0),  # below rim_search_m
+        (("bridge", "max_ramp_grade"), 0),
+        (("bridge", "max_ramp_grade"), 1.0),
+        (("bridge", "max_ramp_grade"), -0.08),
         (("bridge", "inferred_waterways"), "river"),
         (("classes", "primary", "width_m"), 0),
         (("classes", "primary", "lanes"), 0),
@@ -276,6 +281,7 @@ def test_inferred_bridge_over_a_river_and_exclusions() -> None:
     assert span.water == ["osm:way/50"] and span.source == "inferred"
     assert [c.reason for c in crossings] == ["culvert", None]
     set_span_heights(span, terrain, 0.05)
+    road.decks = [(a, b, "inferred") for a, b in road.inferred]  # as `decks.plan_decks` sets
     graph = build_graph([road])
     bridge_edges = [e for e in graph.edges if e.bridge_source == "inferred"]
     assert len(bridge_edges) == 1 and bridge_edges[0].points[0, 2] == pytest.approx(span.z0)

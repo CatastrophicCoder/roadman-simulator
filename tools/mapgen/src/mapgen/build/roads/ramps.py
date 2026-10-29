@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import shapely
+import shapely.ops
 from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
@@ -102,17 +104,84 @@ class Ramp:
         )
 
 
+GRADED_TOL = 1e-6  # m: a point this close to a graded ramp's zone is in it
+
+
+@dataclass(frozen=True)
+class GradedRamp:
+    """A gradient-limited ramp along a path, for a walk-only deck end that meets no path.
+
+    The surface descends from the deck end at `grade` by distance to the deck's end edge:
+    `z = max(z_end - grade * d, terrain + offset)`, inside `zone` (the path, as wide as the
+    path, from the deck end to where the descent has met the terrain, plus the deck-wide
+    area right beyond the end edge so the whole edge meets the ramp). On the end edge
+    `z = z_end`. Along the path, the distance to the edge grows at most 1 m per metre, so
+    the surface is never steeper than `grade` where it is above the terrain.
+    """
+
+    edge: Ramp  # the deck end edge (and the standard ramp area it replaces)
+    grade: float
+    path: tuple[tuple[float, float], ...]  # the path's centre line from the deck end
+    path_half_width: float
+    zone_length: float  # along the path
+
+    def zone(self) -> BaseGeometry:
+        line = LineString(self.path)
+        length = min(self.zone_length, line.length)
+        along = shapely.ops.substring(line, 0.0, length).buffer(
+            self.path_half_width, cap_style="flat"
+        )
+        return along.union(self.edge.zone())
+
+    def height(self, xy: np.ndarray) -> np.ndarray:
+        """The descent from the deck end (before the max with the terrain)."""
+        rel = np.asarray(xy, dtype=float).reshape(-1, 2) - np.array(self.edge.end)
+        u = np.array(self.edge.u)
+        t = rel @ u
+        s = rel @ np.array([-u[1], u[0]])
+        lateral = np.maximum(np.abs(s) - self.edge.half_width, 0.0)
+        d = np.hypot(np.maximum(t, 0.0), lateral)
+        return self.edge.z_end - self.grade * d
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "edge": self.edge.as_dict(),
+            "grade": self.grade,
+            "path_local": [list(p) for p in self.path],
+            "path_half_width_m": self.path_half_width,
+            "zone_length_m": self.zone_length,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GradedRamp":
+        return cls(
+            Ramp.from_dict(data["edge"]),
+            float(data["grade"]),
+            tuple((float(x), float(y)) for x, y in data["path_local"]),
+            float(data["path_half_width_m"]),
+            float(data["zone_length_m"]),
+        )
+
+
 class RampField:
     """The surface height with ramps: `apply(xy, base)` (see the module docstring)."""
 
-    def __init__(self, ramps: Sequence[Ramp], tol: float = EDGE_TOL) -> None:
+    def __init__(
+        self,
+        ramps: Sequence[Ramp],
+        tol: float = EDGE_TOL,
+        graded: Sequence[GradedRamp] = (),
+        zone_tol: float = GRADED_TOL,
+    ) -> None:
         self.ramps = list(ramps)
         self.tol = tol  # on-edge tolerance (the pack checks read float32 vertices)
+        self.graded = list(graded)
+        self.zones = [g.zone().buffer(zone_tol) for g in self.graded]
 
     def apply(self, xy: np.ndarray, base: np.ndarray) -> np.ndarray:
         xy = np.asarray(xy, dtype=float).reshape(-1, 2)
         base = np.asarray(base, dtype=float).reshape(-1)
-        if not self.ramps or len(xy) == 0:
+        if len(xy) == 0 or (not self.ramps and not self.graded):
             return base.copy()
         weight = np.zeros(len(xy))
         weighted = np.zeros(len(xy))
@@ -126,7 +195,15 @@ class RampField:
             weighted += w * ramp.z_end
         blend = (weighted + base) / (weight + 1.0)
         blend = np.where(np.isnan(exact), blend, exact)
-        return np.maximum(blend, base)
+        return self._graded(xy, base, np.maximum(blend, base))
+
+    def _graded(self, xy: np.ndarray, base: np.ndarray, z: np.ndarray) -> np.ndarray:
+        """Inside a graded ramp's zone: max(descent from the deck end, terrain + offset)."""
+        for ramp, zone in zip(self.graded, self.zones, strict=True):
+            inside = shapely.contains_xy(zone, xy[:, 0], xy[:, 1])
+            if inside.any():
+                z[inside] = np.maximum(ramp.height(xy[inside]), base[inside])
+        return z
 
     def in_zone(self, xy: np.ndarray) -> np.ndarray:
         """Where any ramp has a weight > 0."""

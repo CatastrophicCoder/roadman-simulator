@@ -120,6 +120,16 @@ class SnapshotConfig(StrictModel):
         return f"https://github.com/{self.repo}/releases/download/{self.release_tag}/{self.asset}"
 
 
+class LidarFitConfig(StrictModel):
+    """Deck heights from the point cloud: the straight line most bins agree with."""
+
+    classes: list[int] = Field(min_length=1)  # point classes that hit deck surfaces
+    bin_m: float = Field(gt=0)  # top point per bin along the span
+    band_m: float = Field(gt=0)  # a bin agrees with the line within this
+    min_bins: int = Field(ge=2)
+    min_inlier_share: float = Field(gt=0, le=1)
+
+
 class BridgeConfig(StrictModel):
     """Bridge deck geometry, the clearance check and the waterways that imply a bridge."""
 
@@ -129,8 +139,22 @@ class BridgeConfig(StrictModel):
     min_clearance_m: float = Field(ge=0)  # deck underside above terrain; below: a warning
     # Road side of each deck end: the surface blends from the deck end to the terrain.
     ramp_length_m: float = Field(gt=0)
+    rim_search_m: float = Field(gt=0)  # how far along the road deck ends and dips are searched
+    # Walk-only decks: the deck end's meeting point is searched this far, across junctions.
+    walk_rim_search_m: float = Field(gt=0)
+    # Walk-only deck ends that meet no road: a ramp along the path at most this steep.
+    max_ramp_grade: float = Field(gt=0, lt=1)
+    dip_report_m: float = Field(gt=0)  # a crossing road dipping more than this: reported
+    ground_above_deck_warning_m: float = Field(gt=0)  # ground this far above a deck: warning
+    lidar_fit: LidarFitConfig
     # `waterway` values whose lines, crossed by a way without a bridge tag, imply a bridge.
     inferred_waterways: list[str]
+
+    @model_validator(mode="after")
+    def _walk_search_covers_the_road_search(self) -> "BridgeConfig":
+        if self.walk_rim_search_m < self.rim_search_m:
+            raise ValueError("walk_rim_search_m must be at least rim_search_m")
+        return self
 
 
 class RoadClassConfig(StrictModel):

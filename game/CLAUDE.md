@@ -60,7 +60,7 @@ Building with `-c ExportRelease` or `ExportDebug` re-restores the shared `obj/` 
 
 ## Road graph debug view
 
-- G (`debug_road_graph`, physical key; F3 is Mission Control on macOS) toggles a drawing of `MapLoader.RoadGraph` above the surfaces (`scripts/debug/RoadGraphDebugView.cs`): drivable edges coloured by class, walkable-only edges in one colour, arrows on one-way edges, nodes coloured by kind, and a legend. Sizes and colours are exports.
+- G (`debug_road_graph`, physical key; F3 is Mission Control on macOS) toggles a drawing of `MapLoader.RoadGraph` above the surfaces (`scripts/debug/RoadGraphDebugView.cs`): drivable edges coloured by class, walkable-only edges in one colour, arrows on one-way edges, nodes coloured by kind (`span_end` nodes, where a bridge deck meets the road, are magenta triangles), and a legend. Sizes and colours are exports.
 - Debug builds only, like the orthophoto view. Without a graph it shows "No road graph in this pack; run /regen-map <id>" and stays off. A map without roads has an empty graph (the pipeline always writes `road_graph.json`); the view then switches on with nothing drawn and a legend saying "road graph is empty".
 
 ## Screenshots

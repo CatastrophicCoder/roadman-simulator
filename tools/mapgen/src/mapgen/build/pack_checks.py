@@ -52,9 +52,16 @@ FLOAT32_SLACK = 1e-5  # criterion 11: 0.01 mm, float32 rounding at ~100 m is und
 DECK_RISE = 0.05  # criterion 11: the driving surface is at most 0.05 m above the line
 OVERLAP_M2 = 0.01  # criterion 10: road and path intersection area per tile
 MAX_STEP_M = 0.02  # ramps: vertical gap between a deck end edge and the ramp surface
+GRADE_SPACING_M = 0.25  # graded ramps: samples along the path
+# Graded ramps: along a straight path the descent is linear, so the meshes reproduce it
+# exactly; what is left is float32 rounding of heights near 100 m (under 8 µm per value,
+# about 6e-5 over the 0.25 m samples) and the slight curvature of the descent where a path
+# bends. 0.001 allows both with margin.
+GRADE_TOL = 0.001
 STEP_SPACING_M = 0.1  # ramps: samples along each deck end edge
 ROAD_SURFACES = ("road-col", "path-col")
 BRIDGE_NODE = re.compile(r"^bridge_osm_way_(\d+)(?:_p\d+)?-col$")
+SPAN_END_ID = re.compile(r"^span:way/(\d+):(\d+)$")
 
 _GLB_DTYPES = {5121: "u1", 5123: "<u2", 5125: "<u4", 5126: "<f4"}
 _GLB_WIDTH = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
@@ -336,8 +343,10 @@ def bridge_chains(graph: dict[str, Any]) -> list[Chain]:
             continue
         a, b = (graph["edges"][i] for i in on_bridge)
         same_way = a["osm_way"] == b["osm_way"]
-        tagged_pair = len(at) == 2 and a["bridge_source"] == b["bridge_source"] == "osm"
-        if same_way or tagged_pair:
+        # Two decks joined at a node nothing else uses: one span (a bridge of several
+        # ways, or a deck extended along the road beyond its OSM end).
+        only_pair = len(at) == 2
+        if same_way or only_pair:
             parent[find(on_bridge[0])] = find(on_bridge[1])
     groups: dict[int, list[int]] = {}
     for i in bridge:
@@ -382,6 +391,7 @@ class RoadSummary:
     deck_nodes: dict[str, str]  # deck node -> tile id
     max_step_m: float = 0.0  # largest gap between a deck end edge and the ramp surface
     ramp_ends: int = 0
+    max_graded_grade: float = 0.0  # steepest measured along any graded ramp
 
 
 def _terrain_at(
@@ -524,7 +534,7 @@ def check_roads(
 ) -> RoadSummary:
     """Criteria 1, 8, 9, 10, 11, 13b, 15 (report), 16 and the ramp steps."""
     from mapgen.build.roads.model import committed_schema as road_schema
-    from mapgen.build.roads.ramps import Ramp, RampField
+    from mapgen.build.roads.ramps import GradedRamp, Ramp, RampField
 
     for rel in (
         "04-roads/roads.geojson",
@@ -544,7 +554,15 @@ def check_roads(
     offset = roads.surface_offset_m
     _require(report["surface_offset_m"] == offset, "04-roads report: surface offset")
     # Vertices are float32 in the tiles: points within 0.1 mm of a deck end edge are on it.
-    field = RampField([Ramp.from_dict(r) for r in report.get("ramps", [])], tol=0.1 * MM)
+    # Graded ramp zones: the same 0.1 mm, so their boundary vertices count as inside.
+    graded = [GradedRamp.from_dict(g) for g in report.get("graded_ramps", [])]
+    field = RampField(
+        [Ramp.from_dict(r) for r in report.get("ramps", [])],
+        tol=0.1 * MM,
+        graded=graded,
+        zone_tol=0.1 * MM,
+    )
+    deck_edges = [*field.ramps, *(g.edge for g in field.graded)]
     origin = (manifest["origin"]["x"], manifest["origin"]["y"])
     if tiles is None:
         tiles = {t["id"]: (t, read_glb_meshes(pack_dir / t["file"])) for t in manifest["tiles"]}
@@ -569,6 +587,11 @@ def check_roads(
             on_edge = min(abs(p[0] - area[0]), abs(p[0] - area[2]))
             on_edge = min(on_edge, abs(p[1] - area[1]), abs(p[1] - area[3]))
             _require(on_edge <= 1e-6, f"4: {node['id']} isn't on the area edge")
+        elif node["kind"] == "span_end":
+            _require(
+                node["osm_node"] is None and SPAN_END_ID.match(node["id"]),
+                f"4: span_end node {node['id']}",
+            )
         else:
             _require(node["id"] == f"osm:node/{node['osm_node']}", f"4: {node['id']}")
     positions = {n["id"]: np.array(n["position"], dtype=float) for n in graph["nodes"]}
@@ -619,17 +642,24 @@ def check_roads(
                 deck_nodes[name] = tid
     # Nodes inside a bridge or tunnel span (two span edges meet there) are on the span's
     # line, also as the end of a ground edge that joins the span there.
+    draped_tunnels = set(report.get("tunnels_under_decks", []))
+
+    def graph_only_tunnel(edge: dict[str, Any]) -> bool:
+        return bool(edge["tunnel"]) and f"osm:way/{edge['osm_way']}" not in draped_tunnels
+
     span_ends: dict[str, int] = {}
     for edge in graph["edges"]:
-        if edge["bridge"] or edge["tunnel"]:
+        if edge["bridge"] or graph_only_tunnel(edge):
             for key in (edge["from"], edge["to"]):
                 span_ends[key] = span_ends.get(key, 0) + 1
     in_span = {key for key, count in span_ends.items() if count >= 2}
     ground: list[np.ndarray] = []
     owner: list[str] = []
     for edge in graph["edges"]:
-        if edge["bridge"] or edge["tunnel"]:
+        if edge["bridge"]:
             continue
+        if graph_only_tunnel(edge):
+            continue  # heights linear between its ends
         p = local_points(edge["points"])
         keep = np.ones(len(p), dtype=bool)
         keep[0] = edge["from"] not in in_span
@@ -688,8 +718,6 @@ def check_roads(
             {int(BRIDGE_NODE.match(n).group(1)) for n in names} == chain.ways,
             f"11: {label}: deck nodes {names}",
         )
-        width = max(e["width_m"] for e in chain.edges)
-        half = width / 2
         top_s: list[np.ndarray] = []
         for name in names:
             v, _ = tiles[deck_nodes[name]][1].nodes[name]
@@ -707,12 +735,22 @@ def check_roads(
             top_s.append(s[top])
             deck_tops.setdefault(chain.end_nodes[0], []).append(v[top])
             deck_tops.setdefault(chain.end_nodes[1], []).append(v[top])
+            # A box railing along each long edge of this way's deck. Where the span bends
+            # (a deck extended onto the next way), corners project onto the other segment,
+            # so the length is checked within half the deck width there.
+            way = int(BRIDGE_NODE.match(name).group(1))
+            own = max(e["width_m"] for e in chain.edges if e["osm_way"] == way) / 2
+            centre = shapely.MultiLineString(
+                [local_points(e["points"])[:, :2] for e in chain.edges if e["osm_way"] == way]
+            )
+            off = shapely.distance(centre, shapely.points(v[:, :2]))  # from this way's line
             for side in (1.0, -1.0):
-                outer = rail & (np.abs(side * d - half) <= MM)
-                inner = rail & (np.abs(side * d - (half - min(rw, half))) <= MM)
+                outer = rail & (side * d > 0) & (np.abs(off - own) <= MM)
+                inner = rail & (side * d > 0) & (np.abs(off - (own - min(rw, own))) <= MM)
                 _require(outer.any() and inner.any(), f"11: {name}: no railing on side {side}")
+                along = rail & (side * d > 0)
                 _require(
-                    s[outer].min() <= s[top].min() + MM and s[outer].max() >= s[top].max() - MM,
+                    s[along].min() <= s[top].min() + own and s[along].max() >= s[top].max() - own,
                     f"11: {name}: railing shorter than the deck",
                 )
         covered = np.concatenate(top_s)
@@ -738,7 +776,7 @@ def check_roads(
         for chain in chains
     ]
     max_step = 0.0
-    for ramp in field.ramps:
+    for ramp in deck_edges:
         corners = ramp.corners
         count = max(int(np.ceil(2 * ramp.half_width / STEP_SPACING_M)), 1) + 1
         f = np.linspace(0.0, 1.0, count)
@@ -771,6 +809,69 @@ def check_roads(
         _require(step <= MAX_STEP_M, f"ramp at {ramp.node}: {step} m step at the deck end")
         max_step = max(max_step, step)
 
+    # Graded ramps: never steeper than `max_ramp_grade` along the path where they are above
+    # the terrain (sampled on the meshes along the path's centre line).
+    max_grade = 0.0
+    # The longest terrain triangle edge (DEM cell diagonal): the mesh is linear within it.
+    triangle_m = max(
+        (
+            float(np.linalg.norm(np.diff(sm.triangles[:, [0, 1, 2, 0], :2], axis=1), axis=2).max())
+            for sm in samplers.values()
+            if len(sm.triangles)
+        ),
+        default=0.0,
+    )
+    for ramp in field.graded:
+        line = LineString(ramp.path)
+        length = min(ramp.zone_length, line.length)
+        us = np.arange(0.0, length + 1e-9, GRADE_SPACING_M)
+        xy = np.array([np.asarray(line.interpolate(u).coords)[0] for u in us])
+        h = np.full(len(xy), np.nan)
+        for sampler in road_samplers.values():
+            h = np.where(np.isnan(h), sampler.height(xy, distance=0.1 * MM), h)
+        _require(not np.isnan(h).any(), f"graded ramp at {ramp.edge.node}: no surface on the path")
+        base = _terrain_at(xy, tiles, samplers) + offset
+        # On the descent: where it is above the terrain. Within one terrain triangle of
+        # where it meets the terrain, the mesh interpolates between the descent and the
+        # terrain (the terrain's slope, not the ramp's), so those samples are left out.
+        descent = ramp.height(xy) > base + MM
+        meets = us[~descent]
+        if len(meets):
+            near = np.min(np.abs(us[:, None] - meets[None, :]), axis=1) <= triangle_m
+            descent &= ~near
+        on = descent & (h > base + MM)
+        pair = on[1:] & on[:-1]
+        if pair.any():
+            grade = np.abs(np.diff(h))[pair] / np.diff(us)[pair]
+            worst = float(grade.max())
+            _require(
+                worst <= ramp.grade + GRADE_TOL,
+                f"graded ramp at {ramp.edge.node}: grade {worst:.4f} over {ramp.grade}",
+            )
+            max_grade = max(max_grade, worst)
+
+    # 4: every span_end node is a deck end where the deck line meets the road surface (the
+    # highest terrain + offset across the deck end, within 1 mm), or a reported ramped end.
+    ends_by_node = {e["node"]: e for span in report.get("bridges", []) for e in span["ends"]}
+    for node in graph["nodes"]:
+        if node["kind"] != "span_end":
+            continue
+        end = ends_by_node.get(node["id"])
+        _require(end is not None, f"4: {node['id']} isn't a deck end in the report")
+        if end["reason"] == "no_meeting":
+            continue  # listed: the deck stops at the search limit and its ramp takes it up
+        ramp = next((r for r in deck_edges if r.node == node["id"]), None)
+        _require(ramp is not None, f"4: {node['id']} has no ramp (no road meets the deck end)")
+        corners = ramp.corners
+        count = max(int(np.ceil(np.linalg.norm(corners[1] - corners[0]) / 0.005)), 1) + 1
+        edge = corners[0] + np.outer(np.linspace(0, 1, count), corners[1] - corners[0])
+        road = float(np.nanmax(_terrain_at(edge, tiles, samplers))) + offset
+        (z,) = local_points(node["position"])[:, 2]
+        _require(
+            abs(z - road) <= MM,
+            f"4: {node['id']} at {z:.4f} m, the road surface across its deck end at {road:.4f} m",
+        )
+
     # 13b: the terrain under every deck is the DEM-only terrain.
     dem = _DemTerrain(work_dir, origin)
     for chain in chains:
@@ -798,5 +899,6 @@ def check_roads(
         chains,
         deck_nodes,
         max_step,
-        len(field.ramps),
+        len(deck_edges),
+        max_grade,
     )

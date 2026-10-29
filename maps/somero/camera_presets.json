@@ -18,6 +18,12 @@
       "look_at": [-15.8, 2.8, -20.1],
       "fov": 70,
       "ground_relative": true
+    },
+    "jokioistentie-underpass": {
+      "position": [1.9, 1.7, 455.0],
+      "look_at": [43.6, 1.7, 411.9],
+      "fov": 70,
+      "ground_relative": true
     }
   }
 }

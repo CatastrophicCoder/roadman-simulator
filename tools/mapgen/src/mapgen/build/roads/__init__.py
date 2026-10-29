@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import shapely
 from shapely.geometry import LineString, Point
 
@@ -33,6 +34,7 @@ from mapgen.build.roads.bridges import (
     tagged_spans,
     terrain_above_deck,
 )
+from mapgen.build.roads.decks import Plan, plan_decks, suspected_dips
 from mapgen.build.roads.graph import (
     Piece,
     RoadGraph,
@@ -43,7 +45,7 @@ from mapgen.build.roads.graph import (
     graph_document,
 )
 from mapgen.build.roads.model import validate_document
-from mapgen.build.roads.ramps import RampField
+from mapgen.build.roads.ramps import GradedRamp, Ramp, RampField
 from mapgen.build.roads.surface import (
     TerrainSurface,
     drape_tile,
@@ -172,10 +174,15 @@ def build_roads(
         loaded.water_areas, loaded.water_lines, roads.bridge.inferred_waterways
     )
     inferred, crossings = infer_spans(pieces, water)
-    spans: list[Span] = tagged_spans(pieces, "bridge") + inferred + tagged_spans(pieces, "tunnel")
+    tagged = tagged_spans(pieces, "bridge")
+    plans, underpasses_left_out = plan_decks(
+        pieces, tagged, inferred, terrain, roads.bridge, offset, loaded.deck_points
+    )
+    bridges: list[Span] = [p.span for p in plans if p.span is not None]
+    spans: list[Span] = bridges + tagged_spans(pieces, "tunnel")
     for span in spans:
         set_centre_line(span)
-    bridges = [s for s in spans if s.kind == "bridge"]
+    water_spans = [p.span for p in plans if p.source == "inferred" and p.span is not None]
 
     # Ground runs meeting a deck (at its ends, or joining it in the middle) end flat, and
     # lose the part under the deck.
@@ -196,8 +203,25 @@ def build_roads(
     ramp_ends = {
         k for span in bridges for k in span.end_keys() if k in run_ends and k not in interior
     }
-    ramps = build_ramps(bridges, ramp_ends, terrain, offset, roads.bridge.ramp_length_m)
-    field = RampField(ramps)
+    all_ramps = build_ramps(bridges, ramp_ends, terrain, offset, roads.bridge.ramp_length_m)
+    # Walk-only deck ends that meet no path get a gradient-limited ramp along the path
+    # instead of the standard one.
+    graded_plans = {
+        e.key: e.graded for p in plans for e in p.ends if e.graded and e.graded.get("fits")
+    }
+    ramps = [r for r in all_ramps if r.node not in graded_plans]
+    graded = [
+        GradedRamp(
+            r,
+            graded_plans[r.node]["grade"],
+            graded_plans[r.node]["path"],
+            graded_plans[r.node]["path_half_width_m"],
+            graded_plans[r.node]["zone_length_m"],
+        )
+        for r in all_ramps
+        if r.node in graded_plans
+    ]
+    field = RampField(ramps, graded=graded)
     for piece in pieces:
         piece.z = field.apply(piece.xy, terrain.height(piece.xy) + offset)
     settle_span_heights(spans, pieces, terrain, offset, field)
@@ -212,12 +236,14 @@ def build_roads(
         for key, part in zip(span.end_keys(), (span.parts[0], span.parts[-1]), strict=True)
     }
     zones_road = [r.zone() for r in ramps if drivable_end[r.node]]
+    zones_road += [g.zone() for g in graded if drivable_end[g.edge.node]]
     zones_path = [r.zone() for r in ramps if not drivable_end[r.node]]
+    zones_path += [g.zone() for g in graded if not drivable_end[g.edge.node]]
     road, path = merged_surfaces(runs, decks, zones_road, zones_path)
     # Cut every surface at the ramped deck ends: no surface reaches under a deck end, so
     # the only surface meeting the end edge is the ramp (exactly at the deck's height).
     footprints = {k: deck_footprint(span) for span in bridges for k in span.end_keys()}
-    under = [r.under(footprints[r.node]) for r in ramps]
+    under = [r.under(footprints[r.node]) for r in [*ramps, *(g.edge for g in graded)]]
     if under:
         cut = shapely.union_all(under)
         road, path = road.difference(cut), path.difference(cut)
@@ -258,9 +284,32 @@ def build_roads(
         )
         deck_entries.append({"node": name, "tile": tid, "osm_way": f"osm:way/{part.way_id}"})
 
+    ramp_nodes = {r.node for r in ramps}
+    above = [terrain_above_deck(s, terrain) for s in bridges]
+    limit = roads.bridge.ground_above_deck_warning_m
+    deck_warnings = [
+        {
+            "warning": "ground_above_deck",
+            "osm_ways": a["osm_ways"],
+            "max_rise_m": a["max_rise_m"],
+            "area_m2": a["area_m2"],
+            "from_end_m": a["from_end_m"],
+        }
+        for a in above
+        if a["max_rise_m"] is not None and a["max_rise_m"] > limit
+    ]
+    for w in deck_warnings:
+        log(
+            f"[roads] warning: ground {w['max_rise_m']} m above the deck of "
+            f"{', '.join(w['osm_ways'])} ({w['area_m2']} m², {w['from_end_m']} m from an end)"
+        )
+    dips = [
+        _dip_entry(d, config, terrain, offset)
+        for d in suspected_dips(pieces, terrain, offset, roads.bridge)
+    ]
     spacing = min(heightfield.dx, heightfield.dy) / 2
     warnings = [w for s in bridges if (w := clearance_check(s, terrain, roads.bridge, spacing))]
-    suspected = [_suspected(span, config) for span in inferred]
+    suspected = [_suspected(span, config) for span in water_spans]
     excluded = [
         {
             "osm_way": f"osm:way/{c.way_id}",
@@ -280,11 +329,23 @@ def build_roads(
             "path_area_m2": round(float(path.area), 1),
             "tiles": surface_stats,
         },
-        "bridges": [_span_entry(s) for s in bridges],
+        "bridges": [_plan_entry(p, terrain, offset, ramp_nodes) for p in plans],
+        "underpasses_left_out": underpasses_left_out,
         "tunnels": [_span_entry(s) for s in spans if s.kind == "tunnel"],
+        # Tunnel ways under a deck: draped road/path surfaces with collision (tunnel: true).
+        "tunnels_under_decks": sorted({f"osm:way/{p.way_id}" for p in pieces if p.under_deck}),
         "decks": deck_entries,
-        "ramps": [r.as_dict() for r in ramps],
-        "terrain_above_deck": [terrain_above_deck(s, terrain) for s in bridges],
+        "ramps": [_ramp_entry(r, terrain, offset) for r in ramps],
+        "graded_ramps": [
+            {
+                **g.as_dict(),
+                **{k: graded_plans[g.edge.node][k] for k in _GRADED_KEYS},
+            }
+            for g in graded
+        ],
+        "terrain_above_deck": above,
+        "warnings": deck_warnings,
+        "suspected_dips": dips,
         "clearance_warnings": warnings,
         "suspected_missing_bridges": suspected,
         "excluded_crossings": excluded,
@@ -318,6 +379,88 @@ def build_roads(
             f"[roads] warning: the largest drivable component is under {CONNECTIVITY_THRESHOLD:.0%}"
         )
     return RoadsResult(document, tile_nodes, report, graph_report)
+
+
+_GRADED_KEYS = ("length_m", "nominal_length_m", "height_difference_m")
+
+
+def _graded_entry(graded: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A walk-only end's graded ramp for the report (without its geometry)."""
+    if graded is None:
+        return None
+    return {k: v for k, v in graded.items() if k not in ("edge", "path")}
+
+
+def _plan_entry(
+    plan: Plan, terrain: TerrainSurface, offset: float, ramp_nodes: set[str]
+) -> dict[str, Any]:
+    """A bridge span in the report: how its line was found and where its deck ends."""
+    span = plan.span
+    assert span is not None
+    first = span.parts[0].piece
+    ends = []
+    for end, z in zip(plan.ends, (span.z0, span.z1), strict=True):
+        xy = span.xy[0] if end is plan.ends[0] else span.xy[-1]
+        ground = float(terrain.height(xy[None])[0]) + offset
+        ends.append(
+            {
+                "node": end.key,
+                "kind": end.kind,
+                "reason": end.reason,
+                "extension_m": round(end.extension_m, 3),
+                "raised_m": end.raised_m,
+                "searched_m": end.searched_m,
+                "search_stop": end.search_stop,
+                "graded_ramp": _graded_entry(end.graded),
+                "ramp": end.key in ramp_nodes,
+                "height": round(z, 3),
+                "height_above_road_m": round(z - ground, 3),
+            }
+        )
+    return {
+        "osm_ways": [f"osm:way/{w}" for w in span.way_ids],
+        **first.attrs.names,
+        "source": plan.source,
+        "method": plan.method,
+        "fallback_reason": plan.fallback_reason,
+        "lidar": plan.lidar,
+        "lidar_end_heights": plan.lidar_ends,
+        "geometric_end_heights": plan.geometric_ends,
+        "end_heights": [round(span.z0, 3), round(span.z1, 3)],
+        "length_m": round(span.length, 2),
+        "ends": ends,
+        "lower_ways": [f"osm:way/{w}" for w in plan.lower_ways],
+        "water": plan.water,
+    }
+
+
+def _ramp_entry(ramp: Ramp, terrain: TerrainSurface, offset: float) -> dict[str, Any]:
+    """A ramp: its geometry, and the height difference it takes up over its length."""
+    base = float(terrain.height(np.array([ramp.end]))[0]) + offset
+    return {**ramp.as_dict(), "height_difference_m": round(ramp.z_end - base, 3)}
+
+
+def _dip_entry(
+    dip: dict[str, Any], config: MapConfig, terrain: TerrainSurface, offset: float
+) -> dict[str, Any]:
+    way, other = dip["way"], dip["other"]
+    x, y = dip["point"]
+    z = float(terrain.height(np.array([[x, y]]))[0]) + offset
+    wx, wy = x + config.origin.x, y + config.origin.y
+    lon, lat = map_to_wgs84(wx, wy, config.crs)
+    return {
+        "osm_way": f"osm:way/{way.way_id}",
+        "class": way.attrs.road_class,
+        **way.attrs.names,
+        "crossing_way": f"osm:way/{other.way_id}",
+        "crossing_class": other.attrs.road_class,
+        "crossing_name": other.attrs.names["name"],
+        "dip_m": dip["depth_m"],
+        "position_local": godot_point(x, y, z),
+        "position_world": [round(wx, 3), round(wy, 3), round(z, 3)],
+        "crs": config.crs,
+        "position_wgs84": {"lat": round(lat, 7), "lon": round(lon, 7)},
+    }
 
 
 def _span_entry(span: Span) -> dict[str, Any]:

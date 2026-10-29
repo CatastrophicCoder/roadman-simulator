@@ -200,6 +200,11 @@ def test_ac4_graph_nodes_are_osm_nodes_or_area_edge_cuts(somero_area: SomeroArea
     way_refs = {w: set(refs) for w, (refs, _) in ways.items()}
     for node in graph["nodes"]:
         ends = edge_ends[node["id"]]
+        if node["kind"] == "span_end":  # where a deck meets the road (not an OSM node)
+            assert node["osm_node"] is None
+            way_id = int(re.fullmatch(r"span:way/(\d+):\d+", node["id"]).group(1))
+            assert way_id in way_refs
+            continue
         if node["kind"] == "area_edge" and node["osm_node"] is None:  # a cut
             way_id = int(re.fullmatch(r"cut:way/(\d+):\d+", node["id"]).group(1))
             assert way_id in way_refs
@@ -246,11 +251,12 @@ def test_ac8_to_ac11_ac13b_somero_test_area_passes_the_road_pack_checks(
     assert roads is not None
     graph = _json(somero_area.pack / "road_graph.json")
     assert (roads.edges, roads.nodes) == (len(graph["edges"]), len(graph["nodes"]))
-    # Both origin bridge ways are separate spans with their own deck node.
-    spans = sorted(sorted(c.ways) for c in roads.chains)
-    assert spans == [[w] for w in sorted(ORIGIN_BRIDGE)]
+    # Both origin bridge ways are separate spans with their own deck node; a deck may
+    # extend along the next way until its line meets the road ("Deck extent").
+    assert len(roads.chains) == len(ORIGIN_BRIDGE)
+    assert sorted(len(set(ORIGIN_BRIDGE) & c.ways) for c in roads.chains) == [1, 1]
     decks = {int(BRIDGE_NODE.match(n).group(1)) for n in roads.deck_nodes}
-    assert decks == set(ORIGIN_BRIDGE)
+    assert set(ORIGIN_BRIDGE) <= decks
     print(
         f"\nsomero test area: surface max error {roads.max_surface_error_m * 1e3:.4f} mm, "
         f"graph max error {roads.max_graph_error_m * 1e3:.4f} mm, deck minus line "

@@ -35,6 +35,7 @@ public static class RoadGraphReader
         ["joint"] = RoadNodeKind.Joint,
         ["dead_end"] = RoadNodeKind.DeadEnd,
         ["area_edge"] = RoadNodeKind.AreaEdge,
+        ["span_end"] = RoadNodeKind.SpanEnd,
     };
 
     /// <param name="json">The file's contents.</param>
@@ -267,7 +268,11 @@ public static class RoadGraphReader
             null => null,
             "osm" => RoadBridgeSource.Osm,
             "inferred" => RoadBridgeSource.Inferred,
-            _ => throw PackJson.Error(source, $"{path}.bridge_source", $"must be 'osm', 'inferred' or null, not '{value}'"),
+            "inferred_underpass" => RoadBridgeSource.InferredUnderpass,
+            _ => throw PackJson.Error(
+                source,
+                $"{path}.bridge_source",
+                $"must be 'osm', 'inferred', 'inferred_underpass' or null, not '{value}'"),
         };
     }
 

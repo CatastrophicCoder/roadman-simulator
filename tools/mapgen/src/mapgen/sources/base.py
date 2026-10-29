@@ -375,6 +375,8 @@ class LoadContext:
     target_crs: str
     bounds: BBox  # the area to read, in `target_crs` world coordinates
     log: Callable[[str], None] = print
+    # Point clouds: keep only these classes (None: the adapter's default selection).
+    point_classes: tuple[int, ...] | None = None
 
 
 class SourceAdapter(ABC):
