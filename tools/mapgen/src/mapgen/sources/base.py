@@ -311,6 +311,18 @@ class SkippedFeature:
 
 
 @dataclass(frozen=True)
+class SkippedBuildingUse(SkippedFeature):
+    """A skipped building-use record, with where it lies when anything is known.
+
+    `geometry` (in `crs`) is the raw geometry when it could be parsed, otherwise its
+    stored envelope; None when neither is available.
+    """
+
+    geometry: BaseGeometry | None = None
+    crs: str | None = None
+
+
+@dataclass(frozen=True)
 class ElevationRaster:
     """A north-up elevation grid. `data` rows run north to south; nodata cells are NaN."""
 
@@ -436,7 +448,7 @@ class SourceData:
     landuse_skipped: list[SkippedFeature] = field(default_factory=list)
     # Building-use records (`building_use`), and the ones skipped (unrepairable polygons).
     building_use: list[BuildingUseRecord] = field(default_factory=list)
-    building_use_skipped: list[SkippedFeature] = field(default_factory=list)
+    building_use_skipped: list[SkippedBuildingUse] = field(default_factory=list)
 
 
 def valid_area(geom: BaseGeometry) -> Polygon | MultiPolygon | None:

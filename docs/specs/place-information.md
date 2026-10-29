@@ -272,7 +272,7 @@ A new file in the pack, found by its fixed name and not listed in the manifest, 
   | `name`, `name_sv`, `ref` | Name fields; `null` for unnamed POIs |
   | `type` | The first of `shop`, `amenity`, `office`, `tourism`, `leisure` the feature has |
   | `subtype` | That tag's value, e.g. `parking` |
-  | `other_tags` | Any further of those five keys as sorted `key=value` strings, e.g. `["shop=convenience"]` on an `amenity=fuel` |
+  | `other_tags` | Any further of those five keys as sorted `key=value` strings, e.g. `["amenity=fuel"]` on a `shop=convenience` that is also tagged `amenity=fuel` (its `type` is `shop`, the first key in the order above) |
   | `geometry` | `point` (node) or `area` (way or relation) |
   | `position` | `[x, y, z]`, Godot local metres: the node, or the area's representative point; y is the terrain height there (`Heightfield.sample`) |
   | `outline` | Areas: a list of polygons, each a list of rings (exterior first, then holes), each ring a list of `[x, z]` Godot local points, closed (first point repeated). `null` for points |
@@ -287,8 +287,8 @@ A new file in the pack, found by its fixed name and not listed in the manifest, 
 
 ### Reports and pack checks
 
-- `03-buildings/report.json` gains: count per `category` and per `category_source`; class 6 buildings split at 40 m²; class 2 buildings decided by land use and by the fallback; MML matched, unmatched OSM, unmatched MML, MML buildings matched more than once; unmapped raw values per step with counts; buildings with conflicting POI categories; POIs covered by more than one footprint; applied and unmatched overrides. `03-buildings/buildings.geojson` gains the new fields.
-- A new `08-places/` folder: `pois.geojson` (map CRS, for QGIS) and `report.json` (POI counts by type, named and unnamed, linked and unlinked, skipped with reasons, land use areas used and left out).
+- `03-buildings/report.json` gains: count per `category` and per `category_source`; class 6 buildings split at 40 m²; class 2 buildings decided by land use and by the fallback; MML matched, unmatched OSM, unmatched MML, MML buildings matched more than once; unmapped raw values per step with counts; buildings with conflicting POI categories; POIs covered by more than one footprint; applied overrides (entries that set at least one field), shadowed overrides (entries that reach a building but whose every field lost to the OSM key) and unmatched overrides; MML records skipped in the build area, and skipped records without a location (counted separately, since they can't be placed). `03-buildings/buildings.geojson` gains the new fields.
+- A new `08-places/` folder: `pois.geojson` (map CRS, for QGIS) and `report.json` (POI counts by type, named and unnamed, linked and unlinked, skipped with reasons, land use areas used and left out). Its `pois.outside_area` counts the POIs whose geometry touches the build area but whose position (the node, or an area's representative point) lies outside it, so they aren't in `pois.json`. POIs that don't touch the build area at all are dropped at load and counted nowhere.
 - Pack checks (`build/pack_checks.py`), in every build: every building's `category`, `category_source`, `name_source` and `address_source` are valid values; `category_source` agrees with `category_raw` (the winning step has a raw value); every `poi_ids` and `area_poi_ids` entry exists in `pois.json` and the POI links back; every POI's `building_id` and `contains_building_ids` name existing buildings that link back; every POI position and outline point is finite and inside the area bounds; every outline ring is closed with at least 4 points.
 
 ### Test-area fixture
@@ -390,6 +390,8 @@ After the implementation passes `/verify`, Claude runs `uv run mapgen snapshot c
 ## Amendments
 
 - 2026-10-29, during implementation: `buildings.json` v2 gains `overrides` (`{id, source, licence, fields}` per applied entry), so the debug inspector can show an override's source from the pack. Overrides marked `own work` add no credit; third-party overrides require `attribution` and `retrieved_at` and add a manifest credit, following the outline's rule that the pipeline writes every override's licence into the credits. `mapgen notice` learns `CC BY-SA 4.0`. Decided by the user.
+- 2026-10-29, game part: the `other_tags` example corrected to match the `type` key order (`["amenity=fuel"]` on a feature also tagged `shop=convenience`), and `08-places/report.json`'s `pois.outside_area` described exactly (POIs that touch the build area but whose position lies outside it). Decided by the user.
+- 2026-10-29, review: the buildings report separates `overrides.shadowed` from `overrides.applied`, and counts skipped MML records only inside the build area, de-duplicated by id across files, with records without a location under `skipped_without_location`.
 
 ## Open questions
 

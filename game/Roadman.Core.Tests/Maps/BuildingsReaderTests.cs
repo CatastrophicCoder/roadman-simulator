@@ -431,10 +431,23 @@ public class BuildingsReaderTests
             "'buildings[0].mml_overlap' must be between 0 and 1",
             Assert.Throws<MapPackException>(() => BuildingsReader.Parse(overOne)).Message);
 
-        var badId = ModifyBuilding(0, building => building["mml_building"] = "9001");
-        Assert.Contains(
-            "'buildings[0].mml_building' must be 'mml:rakennus/<mtk_id>' or null",
-            Assert.Throws<MapPackException>(() => BuildingsReader.Parse(badId)).Message);
+        foreach (var bad in new[] { "9001", "mml:rakennus/", "MML:rakennus/1", "mml:rakennus/12a", "mml/1", "mml:rakennus/1/2" })
+        {
+            var badId = ModifyBuilding(0, building => building["mml_building"] = bad);
+            Assert.Contains(
+                "'buildings[0].mml_building' must be a building id '<source>:<table>/<number>' or null",
+                Assert.Throws<MapPackException>(() => BuildingsReader.Parse(badId)).Message);
+        }
+    }
+
+    [Theory]
+    [InlineData("mml:rakennus/9001")]
+    [InlineData("other_agency:building_table/7")]
+    [InlineData("osm:way/123")]
+    public void Parse_MmlBuilding_AcceptsAnySourceAndTable(string id)
+    {
+        var json = ModifyBuilding(0, building => building["mml_building"] = id);
+        Assert.Equal(id, BuildingsReader.Parse(json).Items[0].MmlBuilding);
     }
 
     [Fact]

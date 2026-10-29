@@ -298,6 +298,7 @@ def _building_report(
             {
                 "records_in_area": len(records),
                 "records_skipped": len(loaded.building_use_skipped),
+                "records_skipped_without_location": len(loaded.building_use_skipped_unlocated),
                 "matched_buildings": len(matches),
                 "unmatched_buildings": len(footprints) - len(matches),
                 "unmatched_records": sum(1 for r in records if r.id not in matched_ids),
@@ -331,31 +332,44 @@ def _building_report(
             "buildings": len(decided),
             "by_category_source": dict(sorted(Counter(map(str, decided)).items())),
         }
-    applied = []
-    unmatched_overrides = []
+    applied: list[dict[str, Any]] = []
+    shadowed: list[dict[str, Any]] = []
+    unmatched_overrides: list[dict[str, Any]] = []
     if overrides is not None:
         for key, entry in sorted(overrides.buildings.items()):
             hit = override_hits.get(key)
-            if hit is None:
-                reached = key in by_id or any(m.record.id == key for m in matches.values())
-                if not reached:
-                    unmatched_overrides.append(
-                        {
-                            "id": key,
-                            "source": entry.source,
-                            "licence": entry.licence,
-                            "warning": "matches no building in the build area",
-                        }
-                    )
-                    continue
-                hit = {"buildings": set(), "fields": set()}
-            applied.append(
+            if hit is not None:
+                applied.append(
+                    {
+                        "id": key,
+                        "buildings": sorted(hit["buildings"]),
+                        "fields": sorted(hit["fields"]),
+                        "source": entry.source,
+                        "licence": entry.licence,
+                    }
+                )
+                continue
+            reached_ids = {bid for bid, m in matches.items() if m.record.id == key}
+            if key in by_id:
+                reached_ids.add(key)
+            reached = sorted(reached_ids)
+            if reached:
+                # Reaches a building, but every field it sets loses to another entry.
+                shadowed.append(
+                    {
+                        "id": key,
+                        "buildings": reached,
+                        "source": entry.source,
+                        "licence": entry.licence,
+                    }
+                )
+                continue
+            unmatched_overrides.append(
                 {
                     "id": key,
-                    "buildings": sorted(hit["buildings"]),
-                    "fields": sorted(hit["fields"]),
                     "source": entry.source,
                     "licence": entry.licence,
+                    "warning": "matches no building in the build area",
                 }
             )
     return {
@@ -378,6 +392,7 @@ def _building_report(
         "overrides": {
             "file": overrides_file,
             "applied": applied,
+            "shadowed": shadowed,
             "unmatched": unmatched_overrides,
         },
         "buildings_with_pois": sum(1 for e in entries if e["poi_ids"]),

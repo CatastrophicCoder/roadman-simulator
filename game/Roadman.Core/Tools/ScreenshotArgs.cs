@@ -4,7 +4,7 @@ namespace Roadman.Core.Tools;
 
 /// <summary>
 /// The screenshot tool's user arguments (after <c>--</c> on the Godot command line):
-/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph]</c>.
+/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect]</c>.
 /// </summary>
 /// <param name="Preset">Camera preset name.</param>
 /// <param name="OutputPath">PNG to write, as given; resolve it with <see cref="OutputPath.Resolve"/>.</param>
@@ -19,22 +19,28 @@ namespace Roadman.Core.Tools;
 /// <param name="RoadGraph">
 /// Render with the road graph debug view on. The pack must have a readable <c>road_graph.json</c>.
 /// </param>
+/// <param name="Inspect">
+/// Render with the place inspector on, its centre ray through the preset's look-at point. Debug builds only; the pack
+/// must have readable <c>buildings.json</c> and <c>pois.json</c>.
+/// </param>
 public sealed record ScreenshotArgs(
     string Preset,
     string OutputPath,
     string? PresetsPath,
     string? MapId = null,
     bool Orthophoto = false,
-    bool RoadGraph = false)
+    bool RoadGraph = false,
+    bool Inspect = false)
 {
     public const string ScreenshotFlag = "--screenshot";
     public const string PresetsFlag = "--presets";
     public const string MapFlag = "--map";
     public const string OrthophotoFlag = "--orthophoto";
     public const string RoadGraphFlag = "--road-graph";
+    public const string InspectFlag = "--inspect";
 
     private const string Usage =
-        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}]";
+        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}]";
 
     /// <summary>
     /// Parses the user arguments.
@@ -64,6 +70,7 @@ public sealed record ScreenshotArgs(
         var seenMap = false;
         var orthophoto = false;
         var roadGraph = false;
+        var inspect = false;
 
         for (var i = 0; i < userArgs.Count; i++)
         {
@@ -119,6 +126,14 @@ public sealed record ScreenshotArgs(
 
                     roadGraph = true;
                     break;
+                case InspectFlag:
+                    if (inspect)
+                    {
+                        throw new ArgumentException($"{InspectFlag} is given more than once");
+                    }
+
+                    inspect = true;
+                    break;
                 default:
                     throw new ArgumentException($"unexpected argument '{userArgs[i]}'; usage: {Usage}");
             }
@@ -129,7 +144,7 @@ public sealed record ScreenshotArgs(
             throw new ArgumentException($"the output path '{output}' must end in .png");
         }
 
-        return new ScreenshotArgs(preset!, output, presetsPath, mapId, orthophoto, roadGraph);
+        return new ScreenshotArgs(preset!, output, presetsPath, mapId, orthophoto, roadGraph, inspect);
     }
 
     private static string Value(IReadOnlyList<string> args, int index, string error)
@@ -152,7 +167,8 @@ public static class ScreenshotExitCode
     /// <summary>
     /// Any failure: bad arguments, unknown preset, missing pack, a map that didn't load completely, headless
     /// display, flat-colour image, <c>--orthophoto</c> without orthophoto images in the pack, or
-    /// <c>--road-graph</c> without a readable road graph or without the debug view (not a debug build).
+    /// <c>--road-graph</c> without a readable road graph or without the debug view (not a debug build), or
+    /// <c>--inspect</c> without place data or without the inspector (not a debug build).
     /// </summary>
     public const int Error = 1;
 

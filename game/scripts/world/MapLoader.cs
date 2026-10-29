@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Godot;
 using Roadman.Core.Maps;
@@ -9,8 +10,9 @@ namespace Roadman.Scenes;
 /// Loads a generated map pack (<c>res://maps/&lt;id&gt;/</c>, ADR 0006): reads and checks <c>manifest.json</c>,
 /// then instances every tile under a <c>Tiles</c> child, named by tile id, at the origin (the tile meshes are
 /// already in map-local coordinates). All tiles load at once; streaming comes later.
-/// After the tiles it reads <c>road_graph.json</c> into <see cref="RoadGraph"/>; a missing or invalid graph is
-/// reported, and the tiles stay loaded.
+/// After the tiles it reads <c>road_graph.json</c> into <see cref="RoadGraph"/>, then <c>buildings.json</c> and
+/// <c>pois.json</c> into <see cref="Places"/>; a missing or invalid file is reported, and the tiles stay loaded.
+/// Building collision bodies are in <see cref="BuildingGroup"/>; <see cref="BuildingOf"/> resolves one to its building.
 /// Errors are pushed with the pack path and the <c>/regen-map</c> hint; the game keeps running without a map.
 /// </summary>
 public partial class MapLoader : Node3D
@@ -42,6 +44,15 @@ public partial class MapLoader : Node3D
     /// <summary>Prefix of the bridge deck meshes, <c>bridge_osm_way_&lt;id&gt;</c> or <c>bridge_osm_way_&lt;id&gt;_p&lt;n&gt;</c>.</summary>
     public const string BridgeNodePrefix = "bridge_osm_way_";
 
+    /// <summary>
+    /// Group of the building collision bodies (from the <c>bld_…-colonly</c> glTF nodes). Each body is named after
+    /// its glTF node, so <see cref="BuildingOf"/> finds its building through <see cref="PlaceIndex.TryGetBuildingByNode"/>.
+    /// </summary>
+    public const string BuildingGroup = "map_buildings";
+
+    /// <summary>Godot's import suffix for collision-only nodes.</summary>
+    public const string CollisionOnlySuffix = BuildingBodies.CollisionOnlySuffix;
+
     private const float RayHalfLength = 10_000f;
     private const int MaxRayHits = 32;
 
@@ -52,7 +63,7 @@ public partial class MapLoader : Node3D
     public delegate void MapLoadFailedEventHandler(string message);
 
     /// <summary>Prefix of the building visual mesh nodes (ADR 0006).</summary>
-    public const string BuildingNodePrefix = "bld_";
+    public const string BuildingNodePrefix = BuildingBodies.NodePrefix;
 
     /// <summary>Folder of the placeholder map materials, until the art-direction palette replaces them.</summary>
     public const string PlaceholderMaterialsPath = "res://materials/placeholder";
@@ -82,6 +93,9 @@ public partial class MapLoader : Node3D
 
     public int LoadedTileCount { get; private set; }
 
+    /// <summary>Number of building collision bodies put in <see cref="BuildingGroup"/> by the last <see cref="Load"/>.</summary>
+    public int BuildingBodyCount { get; private set; }
+
     /// <summary>
     /// The pack's road graph, read after the tiles; null before a <see cref="Load"/> and when the pack's
     /// <c>road_graph.json</c> is missing or invalid (an error is pushed then).
@@ -90,6 +104,18 @@ public partial class MapLoader : Node3D
 
     /// <summary>Path of the road graph file in the pack.</summary>
     public string RoadGraphPath => $"{PackPath}/{MapPack.RoadGraphFile}";
+
+    /// <summary>
+    /// The pack's buildings and points of interest, read after the road graph; null before a <see cref="Load"/> and
+    /// when <c>buildings.json</c> or <c>pois.json</c> is missing or invalid (an error is pushed then).
+    /// </summary>
+    public PlaceIndex? Places { get; private set; }
+
+    /// <summary>Path of the buildings file in the pack.</summary>
+    public string BuildingsPath => $"{PackPath}/{MapPack.BuildingsFile}";
+
+    /// <summary>Path of the points of interest file in the pack.</summary>
+    public string PoisPath => $"{PackPath}/{MapPack.PoisFile}";
 
     /// <summary>The map id in use: <see cref="MapId"/>, or the project setting when that is empty.</summary>
     public string ResolvedMapId =>
@@ -110,7 +136,7 @@ public partial class MapLoader : Node3D
 
     /// <summary>
     /// Reads the manifest and instances every tile. Emits <see cref="SignalName.MapLoaded"/> with the number of
-    /// tiles loaded (a missing tile is reported and skipped; <see cref="RoadGraph"/> is set before it), or <see cref="SignalName.MapLoadFailed"/> when the
+    /// tiles loaded (a missing tile is reported and skipped; <see cref="RoadGraph"/> and <see cref="Places"/> are set before it), or <see cref="SignalName.MapLoadFailed"/> when the
     /// pack can't be used at all.
     /// </summary>
     /// <returns>True when the manifest was read and every tile loaded.</returns>
@@ -168,6 +194,8 @@ public partial class MapLoader : Node3D
 
         GD.Print($"MapLoader: loaded {LoadedTileCount} of {manifest.Tiles.Count} tiles from {PackPath}");
         RoadGraph = LoadRoadGraph(mapId);
+        Places = LoadPlaces(mapId, manifest);
+        PrepareBuildingBodies(mapId);
         EmitSignal(SignalName.MapLoaded, LoadedTileCount);
         return complete;
     }
@@ -296,7 +324,9 @@ public partial class MapLoader : Node3D
 
         Manifest = null;
         RoadGraph = null;
+        Places = null;
         LoadedTileCount = 0;
+        BuildingBodyCount = 0;
     }
 
     /// <summary>
@@ -331,6 +361,72 @@ public partial class MapLoader : Node3D
 
         GD.Print($"MapLoader: road graph with {graph.Nodes.Count} nodes and {graph.Edges.Count} edges from {path}");
         return graph;
+    }
+
+    /// <summary>
+    /// The building whose collision body is <paramref name="body"/> (a body in <see cref="BuildingGroup"/>, named
+    /// after its glTF node); null for any other node or when <see cref="Places"/> is null.
+    /// </summary>
+    public Building? BuildingOf(Node? body)
+    {
+        if (Places is null || body is null || !IsInstanceValid(body) || !body.IsInGroup(BuildingGroup))
+        {
+            return null;
+        }
+
+        return Places.TryGetBuildingByNode(body.Name.ToString(), out var building) ? building : null;
+    }
+
+    /// <summary>The id of <see cref="BuildingOf"/>'s building, or null.</summary>
+    public string? BuildingIdOf(Node? body) => BuildingOf(body)?.Id;
+
+    /// <summary>
+    /// Reads <see cref="BuildingsPath"/> and <see cref="PoisPath"/> and joins them. A missing, invalid or other
+    /// map's file, a <c>pois.json</c> of another area than the manifest's, or links that don't agree, push an error
+    /// and give null; the tiles and road graph stay loaded.
+    /// </summary>
+    private PlaceIndex? LoadPlaces(string mapId, MapManifest manifest)
+    {
+        var buildingsPath = BuildingsPath;
+        var poisPath = PoisPath;
+        foreach (var path in new[] { buildingsPath, poisPath })
+        {
+            if (!FileAccess.FileExists(path))
+            {
+                GD.PushError($"MapLoader: no place data: {path} doesn't exist; {MapPack.RegenHint(mapId)}");
+                return null;
+            }
+        }
+
+        PlaceIndex places;
+        try
+        {
+            var buildings = BuildingsReader.Parse(FileAccess.GetFileAsString(buildingsPath), buildingsPath);
+            if (buildings.MapId != mapId)
+            {
+                GD.PushError($"MapLoader: {buildingsPath}: map_id is '{buildings.MapId}', expected '{mapId}'; {MapPack.RegenHint(mapId)}");
+                return null;
+            }
+
+            var pois = PoisReader.Parse(FileAccess.GetFileAsString(poisPath), poisPath);
+            if (pois.Area != manifest.Area)
+            {
+                GD.PushError(
+                    $"MapLoader: no place data: {poisPath}: area is '{pois.Area}', but the manifest's is '{manifest.Area}'; {MapPack.RegenHint(mapId)}");
+                return null;
+            }
+
+            places = PlaceIndex.Create(buildings, pois);
+        }
+        catch (MapPackException ex)
+        {
+            GD.PushError($"MapLoader: {ex.Message} ({PackPath}); {MapPack.RegenHint(mapId)}");
+            return null;
+        }
+
+        GD.Print(
+            $"MapLoader: {places.Buildings.Items.Count} buildings and {places.Pois.Items.Count} points of interest from {PackPath}");
+        return places;
     }
 
     private bool Fail(string message)
@@ -403,6 +499,77 @@ public partial class MapLoader : Node3D
             }
         }
     }
+
+    /// <summary>
+    /// Names each building collision body after its glTF node and puts it in <see cref="BuildingGroup"/>, using
+    /// <see cref="BuildingBodies.Resolve"/> (a body Godot renamed to <c>@StaticBody3D@…</c> takes the name of the
+    /// <c>bld_</c> mesh immediately before it). With <see cref="Places"/>, every loaded tile's bodies must be a
+    /// bijection with the collision nodes of its buildings in <c>buildings.json</c>; a mismatch pushes an error naming
+    /// the tile and the first offending names, and the bodies that can't be trusted stay out of the group, so
+    /// <see cref="BuildingOf"/> never returns a wrong building. Without <see cref="Places"/> the names are resolved
+    /// from node order alone.
+    /// </summary>
+    private void PrepareBuildingBodies(string mapId)
+    {
+        IReadOnlySet<string>? knownNodes = null;
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? nodesByTile = null;
+        if (Places is not null)
+        {
+            knownNodes = Places.Buildings.Items.SelectMany(building => building.CollisionNodes).ToHashSet(System.StringComparer.Ordinal);
+            nodesByTile = BuildingBodies.CollisionNodesByTile(Places.Buildings);
+        }
+
+        var mismatchedTiles = 0;
+        foreach (var tile in Tiles.GetChildren())
+        {
+            var tileId = tile.Name.ToString();
+            var nodes = tile.GetChildren();
+            var children = nodes.Select(node => new TileChild(KindOf(node), node.Name.ToString())).ToList();
+            var bodies = BuildingBodies.Resolve(children, knownNodes);
+
+            IReadOnlyList<bool> accepted;
+            if (nodesByTile is null)
+            {
+                accepted = bodies.Select(body => body.CollisionNode is not null).ToList();
+            }
+            else
+            {
+                var expected = nodesByTile.TryGetValue(tileId, out var tileNodes) ? tileNodes : [];
+                var check = BuildingBodies.Check(tileId, bodies, expected);
+                accepted = check.Accepted;
+                if (!check.IsBijection)
+                {
+                    mismatchedTiles++;
+                    GD.PushError($"MapLoader: {BuildingsPath}: {check.Describe()}; {MapPack.RegenHint(mapId)}");
+                }
+            }
+
+            for (var i = 0; i < bodies.Count; i++)
+            {
+                if (!accepted[i] || bodies[i].CollisionNode is not { } collisionNode)
+                {
+                    continue;
+                }
+
+                var body = nodes[bodies[i].ChildIndex];
+                body.Name = collisionNode;
+                body.AddToGroup(BuildingGroup, persistent: false);
+                BuildingBodyCount++;
+            }
+        }
+
+        var expectedCount = Places?.Buildings.Items.Sum(building => building.CollisionNodes.Count);
+        GD.Print(
+            $"MapLoader: {BuildingBodyCount} building collision bodies resolved"
+            + (expectedCount is null ? " (no place data to check them against)" : $" of {expectedCount}, {mismatchedTiles} tiles with mismatches"));
+    }
+
+    private static TileChildKind KindOf(Node node) => node switch
+    {
+        StaticBody3D => TileChildKind.Body,
+        MeshInstance3D => TileChildKind.Mesh,
+        _ => TileChildKind.Other,
+    };
 
     /// <summary>True for the mesh names of road, path and bridge surfaces (the glTF names without <c>-col</c>).</summary>
     public static bool IsRoadSurfaceName(string name) =>

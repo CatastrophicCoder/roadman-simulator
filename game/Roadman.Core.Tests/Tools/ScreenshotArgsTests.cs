@@ -155,6 +155,46 @@ public class ScreenshotArgsTests
         Assert.Contains("[--road-graph]", ex.Message);
     }
 
+    [Fact]
+    public void Parse_Inspect_InAnyPosition()
+    {
+        var after = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--inspect"]);
+        var before = ScreenshotArgs.Parse(["--inspect", "--map", "x", "--screenshot", "a", "a.png"]);
+        var all = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--inspect", "--road-graph", "--orthophoto"]);
+
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, null, Inspect: true), after);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, "x", Inspect: true), before);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, null, Orthophoto: true, RoadGraph: true, Inspect: true), all);
+    }
+
+    [Fact]
+    public void Parse_WithoutInspect_LeavesItOff()
+    {
+        Assert.False(ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--road-graph"])!.Inspect);
+    }
+
+    [Fact]
+    public void Parse_WithoutScreenshotFlag_IgnoresInspect()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--inspect"]));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--inspect", "--inspect")]
+    [InlineData("--screenshot", "a", "--inspect")]
+    [InlineData("--screenshot", "a", "a.png", "--inspect", "yes")]
+    public void Parse_InspectRepeatedOrMisplaced_Throws(params string[] args)
+    {
+        Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+    }
+
+    [Fact]
+    public void Parse_UnknownArgument_ListsInspectInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--inspector"]));
+        Assert.Contains("[--inspect]", ex.Message);
+    }
+
     [Theory]
     [InlineData(3, 3, null)]
     [InlineData(2, 3, ScreenshotExitCode.Error)]

@@ -6,13 +6,14 @@ using System.Linq;
 using Godot;
 using Roadman.Core.Maps;
 using Roadman.Core.Tools;
+using Roadman.Hud;
 using Roadman.Scenes;
 
 namespace Roadman.Debug;
 
 /// <summary>
 /// Renders the world from a named camera preset to a PNG and quits:
-/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph]</c>.
+/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect]</c>.
 /// <para>
 /// The image comes from its own <see cref="SubViewport"/> of <see cref="ImageSize"/>, so it doesn't depend on the
 /// window size, display scaling or where the window is. Rendering needs a real display server: the tool refuses to
@@ -60,6 +61,19 @@ public partial class ScreenshotTool : Node
     /// outside debug builds, where <c>--road-graph</c> is an error.
     /// </summary>
     public RoadGraphDebugView? RoadGraphView { get; set; }
+
+    /// <summary>
+    /// The HUD street label; moved into the capture viewport so the label is in every image, measured from the
+    /// capture camera. Null leaves the image without it.
+    /// </summary>
+    public StreetLabelHud? Hud { get; set; }
+
+    /// <summary>
+    /// The place inspector switched on for <c>--inspect</c>; its panel and crosshair are moved into the capture
+    /// viewport, and its ray starts from the capture camera, through the preset's look-at point. Null outside debug
+    /// builds, where <c>--inspect</c> is an error.
+    /// </summary>
+    public PlaceInspector? Inspector { get; set; }
 
     private CameraPreset? _preset;
     private string _outputPath = "";
@@ -118,6 +132,12 @@ public partial class ScreenshotTool : Node
             return;
         }
 
+        if (Request.Inspect && Inspector is null)
+        {
+            Finish(ScreenshotExitCode.Error, "--inspect needs the place inspector, which only debug builds have");
+            return;
+        }
+
         CreateViewport();
         Loader.MapLoaded += OnMapLoaded;
         Loader.MapLoadFailed += OnMapLoadFailed;
@@ -169,6 +189,13 @@ public partial class ScreenshotTool : Node
         _viewport.AddChild(_camera);
         AddChild(_viewport);
 
+        // A CanvasLayer draws only in its own viewport, and the HUD measures from its viewport's camera.
+        if (Hud is not null)
+        {
+            Hud.GetParent()?.RemoveChild(Hud);
+            _viewport.AddChild(Hud);
+        }
+
         // The window's own 3D view isn't saved; skip rendering it.
         GetViewport().Disable3D = true;
     }
@@ -194,6 +221,11 @@ public partial class ScreenshotTool : Node
         }
 
         if (Request.RoadGraph && !EnableRoadGraph())
+        {
+            return;
+        }
+
+        if (Request.Inspect && !EnableInspector())
         {
             return;
         }
@@ -234,6 +266,26 @@ public partial class ScreenshotTool : Node
         return false;
     }
 
+    /// <summary>
+    /// Switches the place inspector on, with its panel and crosshair drawn in the capture viewport. Its ray then
+    /// starts from the capture camera, through the screen centre, which the camera aims at the preset's look-at point.
+    /// </summary>
+    private bool EnableInspector()
+    {
+        var inspector = Inspector!;
+        if (Loader!.Places is null)
+        {
+            Finish(
+                ScreenshotExitCode.Error,
+                $"--inspect: no readable place data at {Loader.BuildingsPath} and {Loader.PoisPath}; {MapPack.RegenHint(Loader.ResolvedMapId)}");
+            return false;
+        }
+
+        inspector.Camera = _camera;
+        inspector.AttachOverlayTo(_viewport!);
+        return inspector.SetEnabled(true);
+    }
+
     private async void CaptureAsync()
     {
         var loader = Loader!;
@@ -270,6 +322,18 @@ public partial class ScreenshotTool : Node
             {
                 return;
             }
+        }
+
+        // Spec criterion 18: the --inspect image must show the panel on a building. The inspector casts its ray each
+        // physics frame, so after the settle frames its selection is the building at the screen centre, if any.
+        if (Request!.Inspect && Inspector!.SelectedBuilding is null)
+        {
+            Finish(
+                ScreenshotExitCode.Error,
+                $"--inspect: the centre ray of preset '{preset.Name}' selects no building "
+                + $"({(Inspector.SelectionId is { } id ? $"selected {id}" : $"panel '{Inspector.PanelText.Split('\n')[0]}'")}); "
+                + "aim the preset's look_at at a building");
+            return;
         }
 
         Save();

@@ -152,7 +152,10 @@ class LoadResult:
     landuse_skipped: list[SkippedFeature] = field(default_factory=list)
     # Building-use records intersecting the area; None without a `building_use` source.
     building_use: list[LocalBuildingUse] | None = None
+    # Skipped building-use records whose geometry or envelope intersects the area, and
+    # the skipped ones with no location at all (counted apart, never dropped).
     building_use_skipped: list[SkippedFeature] = field(default_factory=list)
+    building_use_skipped_unlocated: list[SkippedFeature] = field(default_factory=list)
     building_use_source: str | None = None
 
 
@@ -323,6 +326,7 @@ def run_load(
 
     building_use: list[LocalBuildingUse] | None = None
     building_use_skipped: list[SkippedFeature] = []
+    building_use_unlocated: list[SkippedFeature] = []
     if building_use_source is not None:
         data_use = load(building_use_source)
         files += data_use.files
@@ -335,10 +339,15 @@ def run_load(
                         record.id, geometry, record.feature_class, record.use_class, record.rule
                     )
                 )
-        building_use_skipped = list(data_use.building_use_skipped)
+        for skip in data_use.building_use_skipped:
+            if skip.geometry is None or skip.crs is None:
+                building_use_unlocated.append(skip)
+            elif _geometry_to_local(skip.geometry, skip.crs, config).intersects(area_box):
+                building_use_skipped.append(skip)
         log(
             f"[{building_use_source.name}] {len(building_use)} building-use records in the "
-            f"area ({len(building_use_skipped)} skipped)"
+            f"area ({len(building_use_skipped)} skipped, {len(building_use_unlocated)} "
+            "skipped without a location)"
         )
     else:
         log(
@@ -421,6 +430,10 @@ def run_load(
             "in_area": len(building_use) if building_use is not None else 0,
             "skipped": len(building_use_skipped),
             "skipped_records": [{"id": s.id, "reason": s.reason} for s in building_use_skipped],
+            "skipped_without_location": len(building_use_unlocated),
+            "skipped_without_location_records": [
+                {"id": s.id, "reason": s.reason} for s in building_use_unlocated
+            ],
         },
         "point_cloud": {
             "source": point_source.name if point_source else None,
@@ -483,6 +496,7 @@ def run_load(
         landuse_skipped=landuse_skipped,
         building_use=building_use,
         building_use_skipped=building_use_skipped,
+        building_use_skipped_unlocated=building_use_unlocated,
         building_use_source=building_use_source.name if building_use_source else None,
     )
 

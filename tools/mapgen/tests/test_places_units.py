@@ -8,6 +8,7 @@ test_places_snippets.py; the Somero test area in test_places_acceptance.py.
 """
 
 import json
+import math
 import re
 import struct
 import unicodedata
@@ -47,7 +48,13 @@ from mapgen.config import MapConfig
 from mapgen.geo import BBox
 from mapgen.licences import LICENCE_URLS
 from mapgen.sources.base import LoadContext, SourceLoadError
-from mapgen.sources.mml import GpkgError, gpkg_wkb, rakennus_rule, read_rakennus
+from mapgen.sources.mml import (
+    GpkgError,
+    gpkg_envelope,
+    gpkg_wkb,
+    rakennus_rule,
+    read_rakennus,
+)
 from mapgen.sources.registry import ADAPTERS
 
 SPEC = REPO_ROOT / "docs" / "specs" / "place-information.md"
@@ -457,6 +464,50 @@ def test_read_rakennus_reads_ids_classes_and_polygons(tmp_path: Path) -> None:
     }
 
 
+def test_read_rakennus_skips_keep_the_raw_geometry_or_the_header_envelope(
+    tmp_path: Path,
+) -> None:
+    flat = _world(Polygon([(0, 0), (5, 0), (10, 0)]))
+    envelope = _world(box(20, 0, 30, 10))
+    broken = gpkg_blob(envelope)[: 8 + 32] + b"\x01\x03\x00\x00"  # envelope, bad WKB
+    no_envelope = gpkg_blob(envelope, envelope=False)[:8] + b"\x01\x03\x00\x00"
+    path = write_rakennus_gpkg(
+        tmp_path / "t.gpkg",
+        [
+            (1, flat, 42211, 1),
+            (2, broken, 42211, 1),
+            (3, no_envelope, 42211, 1),
+            (4, gpkg_blob(envelope, empty=True), 42211, 1),
+            (5, None, 42211, 1),
+        ],
+    )
+    records, skipped = read_rakennus(path)
+    assert records == []
+    by_id = {s.id.rsplit("/", 1)[1]: s for s in skipped}
+    assert by_id["1"].reason == "polygon has no area after repair"
+    assert by_id["1"].geometry is not None and by_id["1"].geometry.equals(flat)
+    assert by_id["1"].crs == "EPSG:3067"
+    assert by_id["2"].reason.startswith("geometry error")
+    assert by_id["2"].geometry is not None and by_id["2"].geometry.equals(envelope)
+    assert by_id["3"].reason.startswith("geometry error") and by_id["3"].geometry is None
+    assert by_id["4"].reason == "empty geometry"  # located by its (here finite) envelope
+    assert by_id["4"].geometry is not None and by_id["4"].geometry.equals(envelope)
+    assert (by_id["5"].reason, by_id["5"].geometry) == ("no geometry", None)
+
+
+def test_gpkg_envelope_reads_the_header_and_ignores_missing_or_nan_envelopes() -> None:
+    square = box(1, 2, 3, 4)
+    for little in (False, True):
+        found = gpkg_envelope(gpkg_blob(square, little_endian=little))
+        assert found is not None and found.equals(square)
+    point = gpkg_envelope(gpkg_blob(shapely.Point(5, 6)))
+    assert point is not None and point.equals(shapely.Point(5, 6))
+    assert gpkg_envelope(gpkg_blob(square, envelope=False)) is None
+    nan = b"GP" + bytes([0, 0b11]) + struct.pack("<i", 3067) + struct.pack("<4d", *[math.nan] * 4)
+    assert gpkg_envelope(nan) is None
+    assert gpkg_envelope(b"XX" + bytes(40)) is None
+
+
 def test_read_rakennus_takes_the_crs_from_the_geopackage(tmp_path: Path) -> None:
     path = write_rakennus_gpkg(
         tmp_path / "t.gpkg", [(1, box(23.5, 60.6, 23.51, 60.61), 42211, 1)], srs_id=4326
@@ -501,6 +552,28 @@ def test_ac11_topographic_load_reads_every_gpkg_once(
     assert [(r.id, r.feature_class) for r in data.building_use] == [
         ("mml:rakennus/1", 42221),
         ("mml:rakennus/2", 42211),  # the first file (by name) wins
+    ]
+
+
+def test_ac11_topographic_load_counts_a_skipped_record_once_across_files(
+    fixture_config: MapConfig, tmp_path: Path
+) -> None:
+    folder = tmp_path / "mml" / "topographic"
+    flat = Polygon([(0, 0), (5, 0), (10, 0)])
+    write_rakennus_gpkg(
+        folder / "a.gpkg",
+        [(1, None, 42211, 1), (2, _world(flat), 42211, 1), (3, _world(box(0, 0, 9, 9)), 42211, 1)],
+    )
+    write_rakennus_gpkg(
+        folder / "b.gpkg",
+        # 1 skipped in both (a's reason wins); 2 skipped in a but readable here; 3
+        # readable in a but skipped here.
+        [(1, _world(flat), 42211, 1), (2, _world(box(0, 0, 9, 9)), 42211, 1), (3, None, 1, 1)],
+    )
+    data = ADAPTERS["mml_topographic"]().load(_ctx(fixture_config, tmp_path))
+    assert [r.id for r in data.building_use] == ["mml:rakennus/2", "mml:rakennus/3"]
+    assert [(s.id, s.reason) for s in data.building_use_skipped] == [
+        ("mml:rakennus/1", "no geometry")
     ]
 
 

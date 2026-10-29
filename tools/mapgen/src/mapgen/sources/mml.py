@@ -13,6 +13,7 @@ lists the image files that overlap the area (the build reads them per tile for t
 textures), and the 3D buildings adapter is a stub until its file format is confirmed.
 """
 
+import math
 import re
 import shutil
 import sqlite3
@@ -38,6 +39,8 @@ from rasterio.merge import merge
 from rasterio.transform import Affine
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import transform_bounds
+from shapely.geometry import MultiPoint
+from shapely.geometry.base import BaseGeometry
 
 from mapgen import tm35
 from mapgen.geo import BBox, projected_bbox
@@ -56,7 +59,7 @@ from mapgen.sources.base import (
     Imagery,
     LoadContext,
     PointCloud,
-    SkippedFeature,
+    SkippedBuildingUse,
     SourceAdapter,
     SourceData,
     SourceError,
@@ -643,6 +646,26 @@ def gpkg_wkb(blob: bytes) -> bytes | None:
     return blob[8 + _ENVELOPE_BYTES[envelope] :]
 
 
+def gpkg_envelope(blob: bytes) -> BaseGeometry | None:
+    """The xy envelope stored in a GeoPackage geometry blob's header, as a geometry.
+
+    None when the blob has no envelope, can't be read or holds NaN (an empty geometry).
+    A degenerate envelope is a point or a line.
+    """
+    if len(blob) < 8 or blob[:2] != b"GP":
+        return None
+    flags = blob[3]
+    if ((flags >> 1) & 0b111) not in (1, 2, 3, 4) or len(blob) < 8 + 32:
+        return None
+    order = "<" if flags & 1 else ">"
+    min_x, max_x, min_y, max_y = struct.unpack_from(f"{order}4d", blob, 8)
+    if not all(math.isfinite(v) for v in (min_x, max_x, min_y, max_y)):
+        return None
+    if min_x > max_x or min_y > max_y:
+        return None
+    return MultiPoint([(min_x, min_y), (max_x, max_y)]).envelope
+
+
 def gpkg_srs_id(blob: bytes) -> int:
     """The srs_id stored in a GeoPackage geometry blob's header."""
     order = "<" if blob[3] & 1 else ">"
@@ -663,14 +686,15 @@ def _table_crs(con: sqlite3.Connection, table: str) -> str:
     return f"EPSG:{int(code)}"
 
 
-def read_rakennus(path: Path) -> tuple[list[BuildingUseRecord], list[SkippedFeature]]:
+def read_rakennus(path: Path) -> tuple[list[BuildingUseRecord], list[SkippedBuildingUse]]:
     """The buildings of table `rakennus` in a Topographic Database GeoPackage.
 
     Read with `sqlite3` and shapely's WKB reader (the GeoPackage header is skipped).
     Each record: "mml:rakennus/<mtk_id>", the polygon in 2D, `kohdeluokka` and
     `kayttotarkoitus`, and its category rule. Invalid polygons are repaired with
     `make_valid`; those with no area left, or that can't be read, are skipped with a
-    reason. Raises `GpkgError` when the file has no `rakennus` table.
+    reason and, when available, the raw geometry or the header's envelope. Raises
+    `GpkgError` when the file has no `rakennus` table.
     """
     con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
@@ -693,23 +717,30 @@ def read_rakennus(path: Path) -> tuple[list[BuildingUseRecord], list[SkippedFeat
     finally:
         con.close()
     records: list[BuildingUseRecord] = []
-    skipped: list[SkippedFeature] = []
+    skipped: list[SkippedBuildingUse] = []
     for blob, mtk_id, feature_class, use_class in rows:
         fid = f"{RAKENNUS_ID_PREFIX}{mtk_id}"
         if blob is None:
-            skipped.append(SkippedFeature(fid, "no geometry"))
+            skipped.append(SkippedBuildingUse(fid, "no geometry"))
             continue
+        raw = bytes(blob)
+        located = gpkg_envelope(raw)
         try:
-            wkb = gpkg_wkb(bytes(blob))
+            wkb = gpkg_wkb(raw)
             if wkb is None:
-                skipped.append(SkippedFeature(fid, "empty geometry"))
+                skipped.append(SkippedBuildingUse(fid, "empty geometry", located, crs))
                 continue
-            geometry = valid_area(shapely.force_2d(shapely.from_wkb(wkb)))
+            shape = shapely.force_2d(shapely.from_wkb(wkb))
+            if not shape.is_empty:
+                located = shape
+            geometry = valid_area(shape)
         except (GpkgError, shapely.errors.GEOSException, ValueError) as exc:
-            skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+            skipped.append(SkippedBuildingUse(fid, f"geometry error: {exc}", located, crs))
             continue
         if geometry is None:
-            skipped.append(SkippedFeature(fid, "polygon has no area after repair"))
+            skipped.append(
+                SkippedBuildingUse(fid, "polygon has no area after repair", located, crs)
+            )
             continue
         kohdeluokka = int(feature_class) if feature_class is not None else None
         records.append(
@@ -739,7 +770,9 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
 
         Fails without a GeoPackage (with the download hint) or when one has no
         `rakennus` table. A building in several files is kept once (the first file, by
-        name). The build reprojects the records and drops those outside the area.
+        name). Skipped records are kept once too (the first file), and not at all when
+        another file has a good record with the same id. The build reprojects the
+        records and drops those outside the area.
         """
         folder = ctx.raw_dir / "mml" / self.layer
         files = [p for p in list_files(folder) if p.suffix.lower() in GPKG_SUFFIXES]
@@ -749,7 +782,7 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
                 f"{ctx.map_config.id} --only {ctx.source_name}`"
             )
         records: dict[str, BuildingUseRecord] = {}
-        skipped: list[SkippedFeature] = []
+        skipped: dict[str, SkippedBuildingUse] = {}
         for path in files:
             try:
                 found, bad = read_rakennus(path)
@@ -757,11 +790,12 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
                 raise SourceLoadError(f"[{ctx.source_name}] {exc}") from exc
             for record in found:
                 records.setdefault(record.id, record)
-            skipped += bad
+            for skip in bad:
+                skipped.setdefault(skip.id, skip)
         return SourceData(
             files=files,
             building_use=sorted(records.values(), key=_record_order),
-            building_use_skipped=skipped,
+            building_use_skipped=[s for s in skipped.values() if s.id not in records],
         )
 
     def extra_inputs(self, options: MmlBBoxOptions) -> dict[str, Any]:

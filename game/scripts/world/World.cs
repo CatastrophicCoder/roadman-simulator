@@ -2,14 +2,16 @@ using System;
 using Godot;
 using Roadman.Core.Tools;
 using Roadman.Debug;
+using Roadman.Hud;
 
 namespace Roadman.Scenes;
 
 /// <summary>
 /// Root of the game world. Builds the environment, sun, map loader and debug camera in code, loads the map, and
 /// places the camera above the terrain at the origin. With <c>-- --screenshot &lt;preset&gt; &lt;out.png&gt;</c> on
-/// the command line it adds a <see cref="ScreenshotTool"/> instead of placing the camera. Debug builds also get the
-/// <see cref="OrthophotoDebugView"/> (F2) and the <see cref="RoadGraphDebugView"/> (G).
+/// the command line it adds a <see cref="ScreenshotTool"/> instead of placing the camera. Always adds the
+/// <see cref="StreetLabelHud"/>. Debug builds also get the <see cref="OrthophotoDebugView"/> (F2), the
+/// <see cref="RoadGraphDebugView"/> (G) and the <see cref="PlaceInspector"/> (I).
 /// </summary>
 public partial class World : Node3D
 {
@@ -47,6 +49,12 @@ public partial class World : Node3D
     /// <summary>The road graph debug view (G); null outside debug builds.</summary>
     public RoadGraphDebugView? RoadGraphView { get; private set; }
 
+    /// <summary>The HUD street label; in every build.</summary>
+    public StreetLabelHud Hud { get; private set; } = null!;
+
+    /// <summary>The place inspector (I); null outside debug builds.</summary>
+    public PlaceInspector? Inspector { get; private set; }
+
     public override void _Ready()
     {
         AddChild(CreateEnvironment());
@@ -55,12 +63,17 @@ public partial class World : Node3D
         MapLoader = new MapLoader { Name = "MapLoader" };
         AddChild(MapLoader);
 
+        Hud = new StreetLabelHud { Name = "StreetLabelHud", Loader = MapLoader };
+        AddChild(Hud);
+
         if (OS.IsDebugBuild())
         {
             Orthophoto = new OrthophotoDebugView { Name = "OrthophotoDebugView", Loader = MapLoader };
             AddChild(Orthophoto);
             RoadGraphView = new RoadGraphDebugView { Name = "RoadGraphDebugView", Loader = MapLoader };
             AddChild(RoadGraphView);
+            Inspector = new PlaceInspector { Name = "PlaceInspector", Loader = MapLoader };
+            AddChild(Inspector);
         }
 
         Camera = new DebugCamera { Name = "DebugCamera", Current = true };
@@ -89,6 +102,8 @@ public partial class World : Node3D
                 Loader = MapLoader,
                 OrthophotoView = Orthophoto,
                 RoadGraphView = RoadGraphView,
+                Hud = Hud,
+                Inspector = Inspector,
             });
         }
 

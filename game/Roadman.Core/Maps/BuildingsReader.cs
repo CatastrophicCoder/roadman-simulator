@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Roadman.Core.Maps;
 
@@ -17,7 +18,15 @@ public static class BuildingsReader
 {
     public const int SupportedSchemaVersion = 2;
 
-    private const string MmlBuildingPrefix = "mml:rakennus/";
+    /// <summary>True when <paramref name="id"/> matches the pipeline's building id pattern <c>&lt;source&gt;:&lt;table&gt;/&lt;number&gt;</c>.</summary>
+    public static bool IsBuildingId(string id) => BuildingIdPattern.IsMatch(id);
+
+    /// <summary>
+    /// The pipeline's building id pattern (<c>BuildingId</c> in <c>tools/mapgen/src/mapgen/build/places/model.py</c>):
+    /// <c>&lt;source&gt;:&lt;table&gt;/&lt;number&gt;</c>, e.g. <c>osm:way/123</c>. Map-agnostic (ADR 0002).
+    /// </summary>
+    private static readonly Regex BuildingIdPattern =
+        new("^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*/[0-9]+$", RegexOptions.CultureInvariant);
 
     private static readonly string[] RootFields = ["schema_version", "map_id", "buildings"];
 
@@ -231,10 +240,10 @@ public static class BuildingsReader
         var areaPoiIds = PackJson.Strings(element, "area_poi_ids", source, path);
 
         var mmlBuilding = PackJson.NullableString(element, "mml_building", source, path);
-        if (mmlBuilding is not null && (!mmlBuilding.StartsWith(MmlBuildingPrefix, StringComparison.Ordinal)
-                                        || mmlBuilding.Length == MmlBuildingPrefix.Length))
+        if (mmlBuilding is not null && !IsBuildingId(mmlBuilding))
         {
-            throw PackJson.Error(source, $"{path}.mml_building", $"must be '{MmlBuildingPrefix}<mtk_id>' or null, not '{mmlBuilding}'");
+            throw PackJson.Error(
+                source, $"{path}.mml_building", $"must be a building id '<source>:<table>/<number>' or null, not '{mmlBuilding}'");
         }
 
         double? mmlOverlap = null;

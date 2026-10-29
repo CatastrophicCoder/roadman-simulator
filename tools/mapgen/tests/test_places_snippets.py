@@ -33,6 +33,7 @@ from conftest import (
     FIXTURE_YAML,
     FixtureBuild,
     TmpRepo,
+    gpkg_blob,
     plane_z,
     write_fixture_raw,
     write_rakennus_gpkg,
@@ -201,6 +202,14 @@ PARK_OUTERS = [(-80, 15, -60, 45), (-55, 15, -40, 45)]
 PARKING = 5001  # outer ring with a hole
 PARKING_OUTER, PARKING_INNER = (65, 10, 105, 50), (75, 20, 95, 40)
 OUTSIDE_RECORD = 9000  # an MML building far outside the area
+# Skipped MML records (local coordinates; the area is 300 m around the origin): inside or
+# far outside the area, located by their raw geometry or only by the header's envelope,
+# and one without any geometry.
+SKIP_LINE = (0, -140, 10, -140)  # a polygon with no area: located by its raw geometry
+SKIP_ENVELOPE = (10, -140, 14, -136)  # unreadable WKB: located by the header's envelope
+SKIPPED_IN_AREA = {9101: "polygon has no area after repair", 9102: "geometry error"}
+SKIPPED_OUTSIDE = (9103, 9104)  # the same two cases 1 km outside the area
+SKIPPED_UNLOCATED = 9105  # no geometry at all
 
 RAW_DEFAULT: dict[str, Any] = {
     "osm_building": "yes",
@@ -322,6 +331,14 @@ def mml_rows() -> list[tuple[int, Any, int | None, int | None]]:
             local = box(min_x - 0.5, min_y - 0.5, max_x + 0.5, max_y + 0.5)
         rows.append((way, shapely.affinity.translate(local, ox, oy), *case.mml))
     rows.append((OUTSIDE_RECORD, box(ox + 1000, oy + 1000, ox + 1010, oy + 1010), 42211, 1))
+    for (line_id, envelope_id), dx in ((tuple(SKIPPED_IN_AREA), 0), (SKIPPED_OUTSIDE, 1000)):
+        x0, y0, x1, y1 = SKIP_LINE
+        flat = Polygon([(x0, y0), ((x0 + x1) / 2, y0), (x1, y1)])
+        rows.append((line_id, shapely.affinity.translate(flat, ox + dx, oy), 42211, 1))
+        envelope = shapely.affinity.translate(box(*SKIP_ENVELOPE), ox + dx, oy)
+        header = gpkg_blob(envelope)[: 8 + 32]  # the xy envelope, then broken WKB
+        rows.append((envelope_id, header + b"\x01\x03\x00\x00", 42211, 1))
+    rows.append((SKIPPED_UNLOCATED, None, 42211, 1))
     return rows
 
 
@@ -521,6 +538,24 @@ def test_ac5_matching_in_the_build(places: PlaceBuild) -> None:
     assert use["records_matched_more_than_once_ids"] == ["mml:rakennus/1034"]
 
 
+def test_ac5_skipped_records_count_only_inside_the_area_or_apart_without_location(
+    places: PlaceBuild,
+) -> None:
+    use = places.json("03-buildings/report.json")["building_use"]
+    assert use["records_skipped"] == len(SKIPPED_IN_AREA)
+    assert use["records_skipped_without_location"] == 1
+    load = places.json("01-load/report.json")["building_use"]
+    reasons = {r["id"]: r["reason"] for r in load["skipped_records"]}
+    assert set(reasons) == {f"mml:rakennus/{i}" for i in SKIPPED_IN_AREA}
+    for record, reason in SKIPPED_IN_AREA.items():
+        assert reasons[f"mml:rakennus/{record}"].startswith(reason)
+    assert load["skipped"] == len(SKIPPED_IN_AREA)  # 9103 and 9104 lie outside
+    assert load["skipped_without_location"] == 1
+    assert load["skipped_without_location_records"] == [
+        {"id": f"mml:rakennus/{SKIPPED_UNLOCATED}", "reason": "no geometry"}
+    ]
+
+
 # AC6
 
 
@@ -577,6 +612,27 @@ def test_ac6_unmatched_override_ids_are_warnings_in_the_report(places: PlaceBuil
         assert applied[key["id"]]["source"] == key["source"]
         assert applied[key["id"]]["licence"] == key["licence"]
     assert applied["mml:rakennus/1034"]["buildings"] == ["osm:way/1034", "osm:way/1035"]
+
+
+def test_ac6_report_lists_only_overrides_that_set_something_as_applied(
+    places: PlaceBuild,
+) -> None:
+    overrides = places.json("03-buildings/report.json")["overrides"]
+    applied = {a["id"]: a for a in overrides["applied"]}
+    expected = {o["id"] for entries in EXPECTED_OVERRIDES.values() for o in entries}
+    assert set(applied) == expected
+    assert all(a["buildings"] and a["fields"] for a in applied.values())
+    # The MML entry whose only field lost to the OSM key reaches a building but sets
+    # nothing: shadowed, not applied, not unmatched.
+    assert overrides["shadowed"] == [
+        {
+            "id": "mml:rakennus/1033",
+            "buildings": ["osm:way/1033"],
+            "source": LOST["source"],
+            "licence": LOST["licence"],
+        }
+    ]
+    assert "mml:rakennus/1033" not in {u["id"] for u in overrides["unmatched"]}
 
 
 def _override_credits(pack: Path) -> list[dict[str, Any]]:

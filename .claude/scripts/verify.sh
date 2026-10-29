@@ -187,6 +187,21 @@ else
       *) report FAIL "screenshot road graph" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
     esac
   fi
+  # The place inspector and HUD street label at street level (docs/specs/place-information.md).
+  log="$LOGS/screenshot-centre-street-level-inspect.log"
+  if [ ! -f "$PACK/buildings.json" ] || [ ! -f "$PACK/pois.json" ]; then
+    report N/A "screenshot inspect" "pack has no buildings.json or pois.json (run /regen-map $MAP_ID)"
+  elif ! grep -qx "centre-street-level" <<<"$PRESETS"; then
+    report N/A "screenshot inspect" "pack has no centre-street-level preset"
+  else
+    screenshot_preset "$GODOT_BIN" "$MAP_ID" centre-street-level "$SHOTS/centre-street-level-inspect.png" "$log" --inspect
+    case $? in
+      0) report PASS "screenshot inspect" "build/screenshots/centre-street-level-inspect.png" ;;
+      2) report N/A "screenshot inspect" "outside built area (log: $log)" ;;
+      124) report FAIL "screenshot inspect" "timed out after ${GODOT_SCREENSHOT_TIMEOUT:-120}s (log: $log)" ;;
+      *) report FAIL "screenshot inspect" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
+    esac
+  fi
 fi
 
 echo "verify summary (logs: $LOGS)"

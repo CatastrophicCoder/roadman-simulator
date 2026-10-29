@@ -222,7 +222,7 @@ public sealed record BuildingLidar(int Points, double BufferM, LidarReturns Retu
 /// <param name="AddressSource"><see cref="Maps.AddressSource.Osm"/> when the address has a value, else null.</param>
 /// <param name="PoiIds">The POIs on or in the building.</param>
 /// <param name="AreaPoiIds">The POI areas the building is inside.</param>
-/// <param name="MmlBuilding">The matched MML building (<c>mml:rakennus/&lt;mtk_id&gt;</c>).</param>
+/// <param name="MmlBuilding">The matched building of the <c>building_use</c> source, a building id <c>&lt;source&gt;:&lt;table&gt;/&lt;number&gt;</c> (Somero: <c>mml:rakennus/&lt;mtk_id&gt;</c>).</param>
 /// <param name="MmlOverlap">Share of the footprint the MML building covers, 0 to 1; null exactly when <paramref name="MmlBuilding"/> is.</param>
 /// <param name="Lidar">The lidar measurement, when the height came from lidar.</param>
 /// <param name="LidarRejected">Why lidar wasn't used, when it was tried and rejected.</param>

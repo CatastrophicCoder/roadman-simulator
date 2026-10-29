@@ -205,7 +205,7 @@ TODO: the JSON formats of markers, vegetation and boundary. TODO: shipping packs
 
 A node in the `World` scene. It reads the map id from settings or a menu, checks the manifest's schema version, and instances tiles. It loads all tiles at first and adds streaming near the camera later. It also places barrier scenes from `boundary.json`.
 
-After the tiles it reads `road_graph.json` into `MapLoader.RoadGraph` (null, with an error naming `/regen-map`, when the file is missing or invalid; the tiles still load). Road, path and bridge collision bodies are in the group `map_roads`, terrain bodies in `map_terrain`.
+After the tiles it reads `road_graph.json` into `MapLoader.RoadGraph`, then `buildings.json` and `pois.json` into `MapLoader.Places` (a `PlaceIndex`). Each is null, with an error naming the pack path and `/regen-map`, when its file is missing or invalid; the tiles still load. Road, path and bridge collision bodies are in the group `map_roads`, terrain bodies in `map_terrain`, building collision bodies in `map_buildings`. Each building body is named after its glTF collision node, so `MapLoader.BuildingOf(body)` resolves it through `PlaceIndex.TryGetBuildingByNode`.
 
 Tile `.glb` files import with the project-wide `[importer_defaults]` (ADR 0008). The screenshot tool renders the pack's camera presets for visual checks (ADR 0008, `game/CLAUDE.md`).
 
@@ -237,7 +237,9 @@ TODO: routing (with the traffic AI spec), mission state, and the respawn state m
 ### Gameplay (Godot C#)
 
 - Autoloads: `Events` (global signal bus) and `GameState` (player, wanted level, settings). Both stay small.
-- `World` scene: MapLoader, WorldEnvironment, sun, debug camera. In debug builds also the orthophoto view (F2) and the road graph view (G).
+- `World` scene: MapLoader, WorldEnvironment, sun, debug camera, HUD street label. In debug builds also the orthophoto view (F2), the road graph view (G) and the place inspector (I).
+- HUD street label (ADR 0013): the street of the nearest road graph edge within 40 m of the player, or of the ground below the camera until there is a player, in every build. Never business names.
+- Place inspector (debug builds only): a crosshair and a panel with the pack's data for the building or point of interest under the screen centre, including raw names and the override sources. Its text comes from `Roadman.Core`'s `PlaceText`.
 - Vehicle (`VehicleBody3D`), chase camera, HUD with minimap, input map.
 - World edge: barrier scenes, the void `Area3D` and its death sequence, space backdrop.
 - Missions refer to marker ids in the pack, never to raw coordinates.

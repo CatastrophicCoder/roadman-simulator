@@ -383,6 +383,14 @@ public class RoadGraphTest
         File.WriteAllText(
             Path.Combine(_tempPack, MapPack.RoadGraphFile),
             $$"""{"schema_version": 1, "map_id": "{{mapId}}", "area": "test", "nodes": [], "edges": []}""");
+        // The place data too, so the only difference from a complete pack is the empty graph.
+        foreach (var file in new[] { MapPack.BuildingsFile, MapPack.PoisFile })
+        {
+            var json = JsonNode.Parse(File.ReadAllText(ProjectSettings.GlobalizePath($"res://maps/{MapId}/{file}")))!;
+            json["map_id"] = mapId;
+            File.WriteAllText(Path.Combine(_tempPack, file), json.ToJsonString());
+        }
+
         using var runner = ISceneRunner.Load(new Node3D { Name = "Root" }, true);
         var loader = new MapLoader { Name = "MapLoader", MapId = mapId };
         runner.Scene()!.AddChild(loader);
