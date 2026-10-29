@@ -165,12 +165,12 @@ A Python pipeline in `tools/mapgen/` turns any map's raw data into a Godot-ready
 
 1. **Load and project:** read OSM and MML data, reproject to EPSG:3067, subtract the local origin.
 2. **Terrain:** produce either chunked terrain meshes or a 16-bit heightmap for the Terrain3D add-on. Decide with an ADR (see below).
-3. **Buildings:** extrude footprints to height, from MML 0.5 p lidar (median roof height minus ground), MML 3D data, OSM `height` or `building:levels` tags, or a default of 2 floors × 3 m. Set the base at terrain height under the footprint. Start with flat roofs; add simple pitched roofs later.
+3. **Buildings:** extrude footprints to height, from MML 0.5 p lidar (median roof height minus ground), MML 3D data, OSM `height` or `building:levels` tags, or a default of 2 floors × 3 m. Set the base at terrain height under the footprint. Start with flat roofs; add simple pitched roofs later. Each building also carries its category, name and address (see Place information).
 4. **Roads:** buffer centre lines to widths by road class, triangulate, drape onto the terrain with a small offset. Handle bridges with OSM `bridge` and `layer` tags.
 5. **Water and land use:** water polygons as flat meshes, land-use polygons as material zones on the ground.
 6. **Vegetation:** scatter tree positions inside forest and park polygons; output positions only, not meshes.
-7. **Road graph:** nodes at intersections, edges with class, lane count, speed limit and one-way flag. Godot uses it for traffic and the minimap.
-8. **Gameplay markers:** the spawn area, parking spots, and points of interest with fictional names.
+7. **Road graph:** nodes at intersections, edges with class, lane count, speed limit, one-way flag, street name (Finnish and Swedish) and road number. Godot uses it for traffic and the minimap.
+8. **Gameplay markers:** the spawn area, parking spots, and points of interest from OSM with their real names (display rules in Place information).
 9. **Tiling and export:** split everything into tiles (start with 256 m), export one `.glb` per tile plus JSON for the graph, vegetation and markers, and render a top-down minimap PNG.
 
 **Collision on import.** Godot generates collision automatically from glTF node name suffixes, such as `-col`, `-colonly` and `-convcolonly`. Name meshes accordingly in the pipeline, for example simplified building boxes as collision-only shapes.
@@ -236,6 +236,38 @@ Tooling for this layer:
 | Google Street View | Viewing it yourself as a modelling reference | Google Maps Platform terms forbid exporting or extracting its content for use outside Google's services, so no textures or automated extraction ([Cesium forum, quoting the terms](https://community.cesium.com/t/saving-google-map-data/31228)). |
 
 Whether CC BY-SA's share-alike reaches beyond the textures themselves is a legal question; keep those textures in a separate, labelled folder. Tags you add to OSM from your own survey help both the pipeline and other OSM users, but OSM doesn't accept data copied from Google sources.
+
+## Place information
+
+All place information goes into the map pack, so the game can always tell the player where they are: street names, road numbers, addresses, building categories and names, and points of interest.
+
+**Sources**
+
+- OSM (already local): street `name`, `name:sv` and `ref` (road number); building `building` values; `addr:street` and `addr:housenumber`; named points of interest (`shop`, `amenity`, `office`, `tourism`, `leisure`); land use areas.
+- MML topographic database: a use class for every building (residential, commercial or public, industrial, holiday home, church, other). It's fetched once, by explicit request, and included in the next data snapshot.
+
+**In the map pack**
+
+- Road graph edges: street name in Finnish and Swedish, and road number.
+- `buildings.json`: category, category source, name, address, and links to the points of interest inside.
+- `pois.json`: id, name, Swedish name, type, map-local position, and the building it belongs to.
+
+**Building category**, from the first source that has a value:
+
+1. Manual override.
+2. A specific OSM `building` value (`apartments`, `industrial`, `church` and so on, but not `yes`).
+3. A shop, amenity or office on or inside the building.
+4. MML topographic use class.
+5. The OSM land use area the building stands in.
+6. Unknown.
+
+Raw values map onto a small fixed set: residential, commercial, retail, industrial, public, religious, education, agricultural, garage or shed, other, unknown. The raw values are kept alongside.
+
+**In the game**
+
+- HUD: the current street name. Minimap: street labels.
+- A debug inspector shows the building or point of interest under the crosshair, with its category, name, address and the source of each value.
+- How real business names are displayed (real, fictional replacements or generic labels such as "Café") is a separate decision; the pack always stores the real data, and logos are never used.
 
 ## World edge
 
@@ -407,7 +439,7 @@ Settle the trademark and attribution items before the first public build. This i
 - [ ] Credits screen and `CREDITS.md`: "© OpenStreetMap contributors" (ODbL), plus MML attribution with source, dataset and date as MML's CC BY 4.0 terms specify.
 - [x] Godot's MIT licence text and third-party licences, the .NET runtime's licence and notices, and every shipped package's licence included with the game: each release zip has a `licenses/` folder, checked by `check-export.sh`. An in-game credits screen can come later.
 - [ ] Licence of every add-on and asset recorded in `CREDITS.md`.
-- [ ] Real business names and logos from OSM replaced with fictional ones.
+- [ ] Decide how real business names from OSM are shown in the game (real, fictional replacements, or generic labels); logos are never used.
 
 **Risks**
 
