@@ -4,6 +4,7 @@ import pytest
 
 from conftest import FIXTURE_YAML, SOMERO_YAML, TmpRepo
 from mapgen.config import ConfigError, load_map_config
+from mapgen.snapshot import set_snapshot_block
 
 
 def test_real_somero_config_loads() -> None:
@@ -30,6 +31,26 @@ def test_fixture_config_loads() -> None:
     }
     x, y = config.bbox_wgs84.centre_in(config.crs)
     assert (config.origin.x, config.origin.y) == (round(x), round(y)) == (309657, 6726616)
+
+
+@pytest.mark.parametrize(
+    ("tag", "asset"),
+    [
+        ("data-testtown-2026-10-29", "mapdata-testtown-2026-10-29.zip"),
+        ("data-testtown-2026-10-29.2", "mapdata-testtown-2026-10-29.2.zip"),
+        ("data-testtown-2026-10-29.10", "mapdata-testtown-2026-10-29.10.zip"),
+    ],
+)
+def test_snapshot_tags_with_and_without_a_suffix_round_trip(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any], tag: str, asset: str
+) -> None:
+    block = {**VALID_SNAPSHOT, "release_tag": tag, "asset": asset}
+    path = tmp_repo.write_map(fixture_data)
+    path.write_text(set_snapshot_block(path.read_text(encoding="utf-8"), block), encoding="utf-8")
+    snapshot = load_map_config(path).snapshot
+    assert snapshot is not None
+    assert snapshot.model_dump() == block
+    assert snapshot.asset_url().endswith(f"/releases/download/{tag}/{asset}")
 
 
 @pytest.mark.parametrize(
@@ -178,6 +199,16 @@ def test_valid_snapshot_block_loads(tmp_repo: TmpRepo, fixture_data: dict[str, A
         ("release_tag", "data-testtown-2026-13-01", "no valid date"),
         ("release_tag", "data-testtown", "must end in -YYYY-MM-DD"),
         ("release_tag", "v-data-testtown-2026-10-29", "must be data-testtown-YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-10-29.0", "must end in -YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-10-29.1", "must end in -YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-10-29.01", "must end in -YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-10-29.x", "must end in -YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-10-29.2x", "must end in -YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-10-29.2.3", "must end in -YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-10-29-2", "must end in -YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-10-29.", "must end in -YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-02-30.2", "no valid date"),
+        ("release_tag", "data-somero-2026-10-29.2", "must be data-testtown-YYYY-MM-DD"),
         ("sha256", "g" * 64, "sha256"),
         ("sha256", "0" * 63, "sha256"),
         ("sha256", "A" * 64, "sha256"),

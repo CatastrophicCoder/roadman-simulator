@@ -1,8 +1,9 @@
-"""Map data snapshots: `snapshot create`, `fetch` and the map.yaml block writer.
+"""Map data snapshots: `snapshot create`, `publish`, `fetch` and the map.yaml block writer.
 
-No test touches the network, starts `gh` or calls `snapshot publish`: HTTP goes to
-FakeHttp. The leak check runs the real `.github/scripts/check-no-secret.sh` only where a
-test says so; elsewhere a stub runner passes it.
+No test touches the network or starts `gh`: HTTP goes to FakeHttp, and `publish` runs
+only against FakeGh, a stub runner that answers like `gh` and records every command.
+The leak check runs the real `.github/scripts/check-no-secret.sh` only where a test says
+so; elsewhere a stub runner passes it.
 """
 
 import json
@@ -609,6 +610,296 @@ def test_block_writer_replaces_only_the_block() -> None:
     assert text.startswith(before_lines)
     assert text.endswith(old.split("# After comment.")[1])
     assert set_snapshot_block(text, BLOCK) == text  # idempotent
+
+
+# publish (FakeGh only: never the real gh)
+
+REPO = "owner/name"
+
+
+class FakeGh:
+    """A stub `Runner` that answers `gh` commands from in-memory releases and git tags.
+
+    `fail` names a listing ("releases" or "refs") that exits non-zero. `listed_size`, if
+    given, is the asset size that `release view --json assets` reports after a create.
+    Every command is recorded; `release create` records the uploaded file's name, size
+    and SHA-256. The listing calls must have exactly the arguments `existing_tags` uses.
+    """
+
+    def __init__(
+        self,
+        releases: Sequence[str] = (),
+        tags: Sequence[str] = (),
+        fail: str = "",
+        listed_size: int | None = None,
+    ) -> None:
+        self.releases = {tag: {} for tag in releases}  # tag -> {asset name: size}
+        self.tags = set(tags) | set(releases)
+        self.fail = fail
+        self.listed_size = listed_size
+        self.calls: list[list[str]] = []
+        self.uploads: list[tuple[str, int, str]] = []
+
+    def __call__(self, args: Sequence[str]) -> "subprocess.CompletedProcess[str]":
+        args = list(args)
+        self.calls.append(args)
+        if args[0] == "bash":  # the leak check
+            return _done(args)
+        assert args[0] == "gh", args
+        gh = args[1:]
+        if gh in (["--version"], ["auth", "status"]):
+            return _done(args)
+        if gh[0] == "api":
+            path = gh[2]
+            if path == f"repos/{REPO}/releases":
+                assert gh == ["api", "--paginate", path, "--jq", ".[].tag_name"], gh
+                if self.fail == "releases":
+                    return _done(args, 1, err="HTTP 502")
+                return _done(args, out="".join(f"{t}\n" for t in sorted(self.releases)))
+            prefix = path.removeprefix(f"repos/{REPO}/git/matching-refs/tags/")
+            assert prefix != path, gh
+            assert gh == ["api", "--paginate", path, "--jq", ".[].ref"], gh
+            if self.fail == "refs":
+                return _done(args, 1, err="HTTP 403")
+            refs = sorted(f"refs/tags/{t}" for t in self.tags if t.startswith(prefix))
+            return _done(args, out="".join(f"{r}\n" for r in refs))
+        if gh[:2] == ["release", "view"]:
+            tag = gh[2]
+            if tag not in self.releases:
+                return _done(args, 1, err="release not found")
+            assets = [{"name": n, "size": z} for n, z in self.releases[tag].items()]
+            return _done(args, out=json.dumps({"assets": assets}))
+        if gh[:2] == ["release", "create"]:
+            tag, file = gh[2], Path(gh[3])
+            assert tag not in self.releases and tag not in self.tags, "would reuse a tag"
+            size = file.stat().st_size if self.listed_size is None else self.listed_size
+            self.releases[tag] = {file.name: size}
+            self.tags.add(tag)
+            self.uploads.append((file.name, file.stat().st_size, sha256_of(file)))
+            return _done(args)
+        raise AssertionError(f"unexpected gh command: {args}")
+
+
+def _done(
+    args: Sequence[str], code: int = 0, out: str = "", err: str = ""
+) -> "subprocess.CompletedProcess[str]":
+    return subprocess.CompletedProcess(list(args), code, out, err)
+
+
+def _publish(repo: TmpRepo, gh: FakeGh, archive: snap.SnapshotArchive) -> snap.PublishResult:
+    config = _config(repo)
+    return snap.publish_snapshot(
+        config,
+        repo_root=repo.root,
+        map_yaml=repo.root / "maps" / "testtown" / "map.yaml",
+        archive=archive.path,
+        repo=REPO,
+        runner=gh,
+        now=lambda: FIXED_NOW,
+        log=lambda _msg: None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("existing", "expected"),
+    [
+        ((), TAG),
+        ((TAG,), f"{TAG}.2"),
+        ((TAG, f"{TAG}.2"), f"{TAG}.3"),
+        (
+            (
+                TAG,
+                f"{TAG}.2",
+                f"{TAG}.3",
+                f"{TAG}.4",
+                f"{TAG}.5",
+                f"{TAG}.6",
+                f"{TAG}.7",
+                f"{TAG}.8",
+                f"{TAG}.9",
+            ),
+            f"{TAG}.10",
+        ),
+        # other dates and maps don't count
+        (("data-testtown-2026-10-26", "data-othertown-2026-10-27"), TAG),
+    ],
+)
+def test_publish_picks_the_first_free_tag_and_names_the_asset_after_it(
+    repo: TmpRepo, archive: snap.SnapshotArchive, existing: tuple[str, ...], expected: str
+) -> None:
+    gh = FakeGh(releases=existing)
+    before = {tag: dict(assets) for tag, assets in gh.releases.items()}
+    result = _publish(repo, gh, archive)
+
+    asset = f"mapdata-{expected.removeprefix('data-')}.zip"
+    assert (result.tag, result.asset, result.sha256) == (expected, asset, archive.sha256)
+    assert gh.uploads == [(asset, archive.size, archive.sha256)]  # the archive's bytes
+    assert archive.path.name == ASSET and archive.path.is_file()  # create's name unchanged
+    assert {t: a for t, a in gh.releases.items() if t != expected} == before
+    pinned = _config(repo).snapshot
+    assert pinned is not None
+    assert (pinned.repo, pinned.release_tag, pinned.asset, pinned.sha256) == (
+        REPO,
+        expected,
+        asset,
+        archive.sha256,
+    )
+
+
+def test_a_git_tag_without_a_release_is_not_reused(
+    repo: TmpRepo, archive: snap.SnapshotArchive
+) -> None:
+    gh = FakeGh(releases=[TAG], tags=[f"{TAG}.2"])
+    assert _publish(repo, gh, archive).tag == f"{TAG}.3"
+
+
+def test_publish_never_changes_an_existing_release(
+    repo: TmpRepo, archive: snap.SnapshotArchive
+) -> None:
+    gh = FakeGh(releases=[TAG, f"{TAG}.2"])
+    _publish(repo, gh, archive)
+    mutating = {"delete", "edit", "upload", "delete-asset"}
+    for call in gh.calls:
+        if call[0] != "gh":
+            continue
+        assert not mutating & set(call), call
+        if call[1] == "api":
+            assert "--method" not in call and "-X" not in call, call
+    created = [c for c in gh.calls if c[1:3] == ["release", "create"]]
+    assert [c[3] for c in created] == [f"{TAG}.3"]
+
+
+@pytest.mark.parametrize("fail", ["releases", "refs"])
+def test_a_gh_listing_error_aborts_without_publishing(
+    repo: TmpRepo, archive: snap.SnapshotArchive, fail: str
+) -> None:
+    map_yaml = repo.root / "maps" / "testtown" / "map.yaml"
+    before = map_yaml.read_text(encoding="utf-8")
+    gh = FakeGh(fail=fail)
+    with pytest.raises(SnapshotError, match="could not list"):
+        _publish(repo, gh, archive)
+    assert not any(c[1:3] == ["release", "create"] for c in gh.calls if c[0] == "gh")
+    assert not any(c[0] == "bash" for c in gh.calls)  # stopped before the leak check
+    assert gh.uploads == [] and map_yaml.read_text(encoding="utf-8") == before
+
+
+def test_an_existing_release_found_by_the_pre_check_aborts(
+    repo: TmpRepo, archive: snap.SnapshotArchive
+) -> None:
+    """The listings miss the tag (e.g. a release made meanwhile); `release view` finds it."""
+    map_yaml = repo.root / "maps" / "testtown" / "map.yaml"
+    before = map_yaml.read_text(encoding="utf-8")
+    gh = FakeGh()
+    gh.releases[TAG] = {ASSET: 1}  # not in the listings' answers below
+    real = gh.__call__
+
+    def hide_from_listings(args: Sequence[str]) -> "subprocess.CompletedProcess[str]":
+        if list(args[1:2]) == ["api"]:
+            gh.calls.append(list(args))
+            return _done(args)
+        return real(args)
+
+    with pytest.raises(SnapshotError, match=f"release {TAG} already exists"):
+        snap.publish_snapshot(
+            _config(repo),
+            repo_root=repo.root,
+            map_yaml=map_yaml,
+            archive=archive.path,
+            repo=REPO,
+            runner=hide_from_listings,
+            now=lambda: FIXED_NOW,
+            log=lambda _msg: None,
+        )
+    assert ["gh", "release", "view", TAG, "--repo", REPO] in gh.calls
+    assert not any(c[1:3] == ["release", "create"] for c in gh.calls if c[0] == "gh")
+    assert gh.uploads == [] and gh.releases == {TAG: {ASSET: 1}}
+    assert map_yaml.read_text(encoding="utf-8") == before
+
+
+def test_a_differing_copy_of_the_archive_aborts_before_uploading(
+    repo: TmpRepo, archive: snap.SnapshotArchive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    map_yaml = repo.root / "maps" / "testtown" / "map.yaml"
+    before = map_yaml.read_text(encoding="utf-8")
+    real_copy = shutil.copyfile
+
+    def corrupt_copy(src: Path, dst: Path) -> Path:
+        real_copy(src, dst)
+        with open(dst, "ab") as handle:
+            handle.write(b"x")
+        return dst
+
+    monkeypatch.setattr(snap.shutil, "copyfile", corrupt_copy)
+    gh = FakeGh(releases=[TAG])  # the .2 tag needs a renamed copy
+    with pytest.raises(SnapshotError, match="differs from .*nothing was uploaded"):
+        _publish(repo, gh, archive)
+    assert not any(c[1:3] == ["release", "create"] for c in gh.calls if c[0] == "gh")
+    assert gh.uploads == [] and map_yaml.read_text(encoding="utf-8") == before
+
+
+def test_a_wrong_asset_after_create_names_the_kept_release(
+    repo: TmpRepo, archive: snap.SnapshotArchive
+) -> None:
+    map_yaml = repo.root / "maps" / "testtown" / "map.yaml"
+    before = map_yaml.read_text(encoding="utf-8")
+    gh = FakeGh(listed_size=archive.size - 1)
+    with pytest.raises(SnapshotError) as raised:
+        _publish(repo, gh, archive)
+    message = str(raised.value)
+    assert f"release {TAG} was created in {REPO} and left as is" in message
+    assert f"{ASSET} isn't listed" in message and "was not updated" in message
+    assert TAG in gh.releases  # left as is: no delete or edit
+    assert not any({"delete", "edit"} & set(c) for c in gh.calls)
+    assert map_yaml.read_text(encoding="utf-8") == before
+
+
+def test_a_map_yaml_write_error_after_create_names_the_kept_release(
+    repo: TmpRepo, archive: snap.SnapshotArchive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    map_yaml = repo.root / "maps" / "testtown" / "map.yaml"
+    before = map_yaml.read_text(encoding="utf-8")
+    real_write = Path.write_text
+
+    def failing_write(self: Path, *args: Any, **kwargs: Any) -> int:
+        if self == map_yaml:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", failing_write)
+    gh = FakeGh()
+    with pytest.raises(SnapshotError) as raised:
+        _publish(repo, gh, archive)
+    message = str(raised.value)
+    assert f"release {TAG} was created in {REPO} and left as is" in message
+    assert "Permission denied" in message and "was not updated" in message
+    assert gh.uploads == [(ASSET, archive.size, archive.sha256)]
+    assert map_yaml.read_text(encoding="utf-8") == before
+
+
+def test_first_free_tag_and_asset_names() -> None:
+    assert snap.first_free_tag("x", DATE, []) == f"data-x-{DATE}"
+    assert snap.first_free_tag("x", DATE, [f"data-x-{DATE}", f"data-x-{DATE}.3"]) == (
+        f"data-x-{DATE}.2"
+    )
+    assert snap.asset_for_tag("x", f"data-x-{DATE}.12") == f"mapdata-x-{DATE}.12.zip"
+    for bad in (f"data-x-{DATE}.1", f"data-x-{DATE}.01", f"data-y-{DATE}"):
+        with pytest.raises(SnapshotError):
+            snap.asset_for_tag("x", bad)
+
+
+def test_fetch_accepts_a_suffixed_tag(repo: TmpRepo, archive: snap.SnapshotArchive) -> None:
+    data = _data()
+    data["snapshot"] = {
+        "repo": REPO,
+        "release_tag": f"{TAG}.2",
+        "asset": f"mapdata-testtown-{DATE}.2.zip",
+        "sha256": archive.sha256,
+    }
+    config = repo.load(data)
+    _empty_raw(repo)
+    http = _serving(archive.path.read_bytes())
+    _fetch(repo, config, http)
+    assert http.calls[0].url.endswith(f"/releases/download/{TAG}.2/mapdata-testtown-{DATE}.2.zip")
 
 
 # workflows

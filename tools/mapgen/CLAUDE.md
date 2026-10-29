@@ -45,7 +45,8 @@ uv run mapgen build <map-id> --release    # skip debug_only sources: no debug/or
 uv run mapgen notice <map-id>... --out build/NOTICE.txt   # plain-text NOTICE from the packs' manifest credits
 uv run mapgen notice --check build/NOTICE.txt <map-id>... # exit 1 if any credit or licence line is missing
 uv run mapgen snapshot create <map-id>    # zip the non-debug raw data into build/snapshots/ (no network)
-uv run mapgen snapshot publish <map-id>   # USER ONLY: gh release data-<map-id>-<date>, writes map.yaml snapshot
+uv run mapgen snapshot publish <map-id>   # USER ONLY: new gh release data-<map-id>-<date>[.<n>] (first free
+                                          #   tag; never changes an existing one), writes map.yaml snapshot
 uv run mapgen snapshot fetch <map-id>     # download the pinned snapshot into data/raw/<map-id>/ (fresh clones, CI)
 uv run mapgen snapshot fetch <map-id> --force   # also replace differing and delete extra local files of its sources
 uv run mapgen enhance <map-id>            # TODO: merge building overrides

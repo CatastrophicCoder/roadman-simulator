@@ -22,7 +22,15 @@ from mapgen import geo
 
 SLUG_PATTERN = r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
 REPO_PATTERN = r"^[A-Za-z0-9-]+/[A-Za-z0-9_-][A-Za-z0-9._-]*$"  # <owner>/<name>, no leading .
-_TAG_DATE_RE = re.compile(r"-(\d{4}-\d{2}-\d{2})$")
+# Snapshot release tags: data-<map-id>-<YYYY-MM-DD>, or data-<map-id>-<YYYY-MM-DD>.<n> with
+# n >= 2 and no leading zeros when an earlier data release already has that date (ADR 0011).
+SNAPSHOT_SUFFIX_PATTERN = r"(?:\.(?:[2-9]|[1-9][0-9]+))?"
+_TAG_DATE_RE = re.compile(rf"-(\d{{4}}-\d{{2}}-\d{{2}}){SNAPSHOT_SUFFIX_PATTERN}$")
+
+
+def snapshot_tag_pattern(map_id: str) -> str:
+    """Full-match regex of a snapshot release tag of `map_id`; group 1 is the date."""
+    return rf"data-{re.escape(map_id)}-(\d{{4}}-\d{{2}}-\d{{2}}){SNAPSHOT_SUFFIX_PATTERN}"
 
 
 class ConfigError(ValueError):
@@ -99,7 +107,7 @@ class SnapshotConfig(StrictModel):
     def _tag_has_a_real_date(cls, value: str) -> str:
         match = _TAG_DATE_RE.search(value)
         if not match:
-            raise ValueError(f"release_tag {value!r} must end in -YYYY-MM-DD")
+            raise ValueError(f"release_tag {value!r} must end in -YYYY-MM-DD or -YYYY-MM-DD.<n>")
         try:
             date.fromisoformat(match.group(1))
         except ValueError:
@@ -234,8 +242,11 @@ class MapConfig(StrictModel):
             raise ValueError("test_area does not fit inside the bbox around the origin")
         if self.snapshot is not None:
             tag = self.snapshot.release_tag
-            if not re.fullmatch(rf"data-{re.escape(self.id)}-\d{{4}}-\d{{2}}-\d{{2}}", tag):
-                raise ValueError(f"snapshot.release_tag {tag!r} must be data-{self.id}-YYYY-MM-DD")
+            if not re.fullmatch(snapshot_tag_pattern(self.id), tag):
+                raise ValueError(
+                    f"snapshot.release_tag {tag!r} must be data-{self.id}-YYYY-MM-DD "
+                    f"or data-{self.id}-YYYY-MM-DD.<n> (n >= 2)"
+                )
         return self
 
     @property

@@ -38,7 +38,7 @@ A snapshot is one zip archive (zip, so `.github/scripts/check-no-secret.sh` can 
 
 ### Storage
 
-- Each snapshot is the single asset of its own GitHub release. The tag is `data-<map-id>-<YYYY-MM-DD>`, using the creation date in UTC. The asset name is `mapdata-<map-id>-<YYYY-MM-DD>.zip`.
+- Each snapshot is the single asset of its own GitHub release. The tag is `data-<map-id>-<YYYY-MM-DD>`, using the creation date in UTC. The asset name is `mapdata-<map-id>-<YYYY-MM-DD>.zip`. A numeric suffix is allowed (see Amendments).
 - Data releases are created with `--latest=false` and are never marked as latest. Their tags don't match `release.yml`'s `v*` filter, and `ci.yml` ignores `data-*` tags.
 - `maps/<map-id>/map.yaml` gets an optional block:
 
@@ -52,7 +52,7 @@ A snapshot is one zip archive (zip, so `.github/scripts/check-no-secret.sh` can 
 
   `MapConfig.snapshot` (a `StrictModel`, optional) validates the block:
   - `repo` is `<owner>/<name>`.
-  - `release_tag` is `data-<this map's id>-YYYY-MM-DD` with a real calendar date.
+  - `release_tag` is `data-<this map's id>-YYYY-MM-DD` with a real calendar date, optionally followed by `.<n>` (see Amendments).
   - `asset` is a plain file name ending in `.zip`, with no `/`, `\` or `..`.
   - `sha256` is 64 lowercase hex characters.
   - No extra keys.
@@ -74,7 +74,7 @@ A snapshot is one zip archive (zip, so `.github/scripts/check-no-secret.sh` can 
 - The user runs it. Claude never runs it without asking first, and tests never call it.
 - The repository is `--repo`, else the existing `snapshot.repo`, else `gh repo view --json nameWithOwner`.
 - Runs the leak check again, then `gh release create data-<map-id>-<date> <archive> --repo <repo> --latest=false --title ... --notes ...` (the notes carry the NOTICE attributions), and checks with `gh release view` that the asset is there.
-- Fails before uploading if the tag already exists, or `gh` is missing or not logged in.
+- Fails before uploading if `gh` is missing or not logged in. An existing tag no longer fails; publish takes the first free numbered tag (see Amendments).
 - On success, writes `repo`, `release_tag`, `asset` and `sha256` into `map.yaml`'s `snapshot:` block. Only that block's text changes, so the file's comments and order are kept. The user commits the change.
 
 `uv run mapgen snapshot fetch <map-id> [--force]`
@@ -128,7 +128,7 @@ Pruning or deleting snapshots, multiple assets per release, snapshots of `debug_
 13. Without `--force`, `snapshot fetch` fails and lists local files that differ from the snapshot and extra files in the snapshot's source folders, and leaves them untouched. With `--force`, it replaces and deletes them, and keeps the orthophoto files and their manifest entries.
 14. `snapshot fetch` passes with `MML_API_KEY` unset.
 15. An archive built from the committed fixture, fetched into a fresh raw folder, builds (`--area test --release`) to the same pack manifest credits as a build from the fixture directly.
-16. No test calls `snapshot publish` or `gh`. The map.yaml block writer is tested as a pure function on text and keeps comments.
+16. No test calls `snapshot publish` or `gh` (amended: see Amendments). The map.yaml block writer is tested as a pure function on text and keeps comments.
 17. The Overpass query ends with `out body;`.
 18. `release.yml` contains no `MML_API_KEY` and no `mapgen download`, runs `mapgen snapshot fetch` per map, and keeps the export job's `check-no-secret.sh dist`. `ci.yml` has `branches: ['**']` and `tags-ignore: ['data-*']` under `push`.
 19. pytest, ruff and `/verify` pass, and CI passes on the change.
@@ -147,6 +147,13 @@ Pruning or deleting snapshots, multiple assets per release, snapshots of `debug_
 | 19 | `/verify`, CI |
 
 No `Roadman.Core`, gdUnit4, screenshot or playtest coverage, because the game doesn't change.
+
+## Amendments
+
+- 2026-10-29, decided by the user, so a second snapshot can be published on the same day:
+  - A tag may carry a numeric suffix: `data-<map-id>-<YYYY-MM-DD>.<n>`, n ≥ 2 without leading zeros. The asset follows the tag: `mapdata-<map-id>-<YYYY-MM-DD>[.<n>].zip`. `release_tag` in `map.yaml` accepts both forms, and `fetch` accepts them.
+  - `publish` lists the repository's releases (drafts included) and its matching git tags, and takes the first free tag: the plain date tag, else `.2`, `.3` and so on. It never replaces, edits, deletes or uploads to an existing data release or tag. If either listing fails, it stops before uploading and leaves `map.yaml` unchanged. A failure after the release is created names that release and leaves it as is.
+  - Criterion 16 now reads: no test starts the real `gh` or contacts GitHub; `publish` runs in tests only against a stub runner that fails on any unexpected command. The `map.yaml` block writer stays a pure function on text.
 
 ## Open questions
 

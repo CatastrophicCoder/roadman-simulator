@@ -4,8 +4,9 @@ A snapshot is one zip archive laid out like `data/raw/<map-id>/`: the files of e
 enabled, non-`debug_only` source exactly as the download manifest lists them (the OSM file
 without contributor metadata), the filtered `download-manifest.json`, `SHA256SUMS` and a
 generated `NOTICE.md`. `create` reads only the local raw folder and never contacts the
-network. `publish` uploads an archive as the single asset of its own GitHub release with
-`gh` and writes the `snapshot:` block into map.yaml; only the user runs it. `fetch`
+network. `publish` uploads an archive as the single asset of a new GitHub release with
+`gh`, under the first free tag of its date (an existing data release is never changed),
+and writes the `snapshot:` block into map.yaml; only the user runs it. `fetch`
 downloads the pinned archive with plain HTTP, treats it as untrusted, and never replaces
 local files of the snapshot's sources without `force`.
 
@@ -29,7 +30,13 @@ from typing import IO, Any
 import yaml
 
 from mapgen import __version__, manifest, paths
-from mapgen.config import REPO_PATTERN, ConfigError, MapConfig, SnapshotConfig
+from mapgen.config import (
+    REPO_PATTERN,
+    ConfigError,
+    MapConfig,
+    SnapshotConfig,
+    snapshot_tag_pattern,
+)
 from mapgen.http import HttpClient, HttpError, UrllibClient
 from mapgen.notice import LICENCE_URLS, NoticeError, licence_url
 from mapgen.sources.base import isoformat_utc, parse_isoformat, sha256_of, utc_now
@@ -66,6 +73,25 @@ def snapshot_tag(map_id: str, moment: datetime) -> str:
 
 def snapshot_asset(map_id: str, moment: datetime) -> str:
     return f"mapdata-{map_id}-{_utc_date(moment)}.zip"
+
+
+def asset_for_tag(map_id: str, tag: str) -> str:
+    """The asset of a snapshot tag: data-<id>-<date>[.<n>] -> mapdata-<id>-<date>[.<n>].zip."""
+    if not re.fullmatch(snapshot_tag_pattern(map_id), tag):
+        raise SnapshotError(f"{tag!r} is not a snapshot tag of map {map_id}")
+    return f"mapdata-{tag.removeprefix('data-')}.zip"
+
+
+def first_free_tag(map_id: str, date_text: str, taken: Iterable[str]) -> str:
+    """The plain tag data-<id>-<date> if it isn't taken, else the first free `.2`, `.3`, ..."""
+    used = set(taken)
+    base = f"data-{map_id}-{date_text}"
+    if base not in used:
+        return base
+    n = 2
+    while f"{base}.{n}" in used:
+        n += 1
+    return f"{base}.{n}"
 
 
 def _utc_date(moment: datetime) -> str:
@@ -727,6 +753,35 @@ def _gh(runner: Runner, args: Sequence[str]) -> "subprocess.CompletedProcess[str
         raise SnapshotError(f"could not run gh: {exc}") from None
 
 
+def _gh_lines(runner: Runner, args: Sequence[str], what: str) -> list[str]:
+    """The non-empty output lines of a read-only `gh` command; fails on any error."""
+    result = _gh(runner, args)
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()
+        raise SnapshotError(f"could not list the {what} ({detail}); nothing was published")
+    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+def existing_tags(runner: Runner, repo: str, prefix: str) -> set[str]:
+    """Tag names starting with `prefix` that a release or a git tag in `repo` already uses.
+
+    Lists every release (drafts included) and every git tag with the prefix. Any `gh` error
+    raises, so a publish never guesses that a tag is free.
+    """
+    releases = _gh_lines(
+        runner,
+        ["api", "--paginate", f"repos/{repo}/releases", "--jq", ".[].tag_name"],
+        f"releases of {repo}",
+    )
+    refs = _gh_lines(
+        runner,
+        ["api", "--paginate", f"repos/{repo}/git/matching-refs/tags/{prefix}", "--jq", ".[].ref"],
+        f"tags of {repo}",
+    )
+    tags = set(releases) | {ref.removeprefix("refs/tags/") for ref in refs}
+    return {tag for tag in tags if tag.startswith(prefix)}
+
+
 def default_archive(repo_root: Path, map_id: str, moment: datetime) -> Path:
     return paths.snapshots_dir(repo_root) / snapshot_asset(map_id, moment)
 
@@ -760,8 +815,11 @@ def publish_snapshot(
 ) -> PublishResult:
     """Upload a snapshot as the single asset of a new data release, then pin it in map.yaml.
 
-    The tag's date is the archive's creation date (from its name). Fails before uploading
-    if `gh` is missing or not logged in, or the tag already exists.
+    The tag's date is the archive's creation date (from its name). The tag is the first
+    free one of data-<id>-<date>, data-<id>-<date>.2, .3, ... among the repository's
+    releases and git tags, and the asset is named after it (mapdata-<id>-<date>[.<n>].zip,
+    the archive's bytes unchanged). An existing release is never changed. Fails before
+    uploading if `gh` is missing or not logged in, or the existing tags can't be listed.
     """
     path = archive or default_archive(repo_root, config.id, now())
     if not path.is_file():
@@ -769,7 +827,7 @@ def publish_snapshot(
     match = re.fullmatch(rf"mapdata-{re.escape(config.id)}-{_ASSET_DATE}\.zip", path.name)
     if not match:
         raise SnapshotError(f"{path.name} is not named mapdata-{config.id}-YYYY-MM-DD.zip")
-    tag, asset = f"data-{config.id}-{match.group(1)}", path.name
+    date_text = match.group(1)
     notice = _archive_notice(config, path)
     checksum = sha256_of(path)
 
@@ -788,6 +846,12 @@ def publish_snapshot(
     if not repo or not re.fullmatch(REPO_PATTERN, repo):
         raise SnapshotError(f"no valid repository ({repo!r}); pass --repo OWNER/NAME")
 
+    taken = existing_tags(runner, repo, f"data-{config.id}-{date_text}")
+    tag = first_free_tag(config.id, date_text, taken)
+    asset = asset_for_tag(config.id, tag)
+    if taken:
+        log(f"existing data tags of {date_text}: {', '.join(sorted(taken))}; using {tag}")
+
     block = {"repo": repo, "release_tag": tag, "asset": asset, "sha256": checksum}
     text = map_yaml.read_text(encoding="utf-8")
     new_text = set_snapshot_block(text, block)
@@ -798,7 +862,38 @@ def publish_snapshot(
     if _gh(runner, ["release", "view", tag, "--repo", repo]).returncode == 0:
         raise SnapshotError(f"release {tag} already exists in {repo}; nothing was uploaded")
     leak_check(path, repo_root, runner)
+    with tempfile.TemporaryDirectory(prefix="mapgen-publish-") as tmp:
+        upload = path
+        if asset != path.name:  # gh names the asset after the file: a copy, same bytes
+            upload = Path(tmp) / asset
+            shutil.copyfile(path, upload)
+            if sha256_of(upload) != checksum:
+                raise SnapshotError(f"the copy {upload} differs from {path}; nothing was uploaded")
+        _create_release(config, runner, repo, tag, upload, asset, checksum, notice, log)
+        try:
+            _check_release_asset(runner, repo, tag, asset, upload.stat().st_size)
+            map_yaml.write_text(new_text, encoding="utf-8")
+        except (SnapshotError, OSError) as exc:
+            raise SnapshotError(
+                f"release {tag} was created in {repo} and left as is, but {exc}; "
+                f"{map_yaml} was not updated. Check the release and decide whether to keep "
+                "it (and pin it in map.yaml) or delete it"
+            ) from exc
+    return PublishResult(repo, tag, asset, checksum, map_yaml)
 
+
+def _create_release(
+    config: MapConfig,
+    runner: Runner,
+    repo: str,
+    tag: str,
+    path: Path,
+    asset: str,
+    checksum: str,
+    notice: str,
+    log: Callable[[str], None],
+) -> None:
+    """`gh release create` for a new tag (raises if gh fails)."""
     licences = ", ".join(f"{name}: {url}" for name, url in LICENCE_URLS.items())
     notes = (
         f"Raw map data snapshot of `{config.id}` for release builds "
@@ -817,7 +912,7 @@ def publish_snapshot(
             repo,
             "--latest=false",
             "--title",
-            f"Map data {config.id} {match.group(1)}",
+            f"Map data {config.id} {tag.removeprefix(f'data-{config.id}-')}",
             "--notes",
             notes,
         ],
@@ -825,14 +920,14 @@ def publish_snapshot(
     if created.returncode != 0:
         raise SnapshotError(f"gh release create failed: {(created.stderr or '').strip()}")
 
+
+def _check_release_asset(runner: Runner, repo: str, tag: str, asset: str, size: int) -> None:
+    """Raise unless `asset` is listed on release `tag` (with `size` bytes, if gh gives one)."""
     viewed = _gh(runner, ["release", "view", tag, "--repo", repo, "--json", "assets"])
     try:
         assets = json.loads(viewed.stdout)["assets"] if viewed.returncode == 0 else []
         uploaded = {a["name"]: a.get("size") for a in assets}
     except (ValueError, KeyError, TypeError):
         uploaded = {}
-    if asset not in uploaded or uploaded[asset] not in (None, path.stat().st_size):
-        raise SnapshotError(f"release {tag} was created, but {asset} isn't listed as its asset")
-
-    map_yaml.write_text(new_text, encoding="utf-8")
-    return PublishResult(repo, tag, asset, checksum, map_yaml)
+    if asset not in uploaded or uploaded[asset] not in (None, size):
+        raise SnapshotError(f"{asset} isn't listed as its asset with {size} bytes")
