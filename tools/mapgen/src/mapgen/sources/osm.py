@@ -43,6 +43,9 @@ BUSY_STATUSES = frozenset({429, 502, 503, 504})
 # the wait, but one longer than MAX_RETRY_AFTER_S ends the retries instead.
 RETRY_BASE_S = 30.0
 MAX_RETRY_AFTER_S = 600.0
+# Contributor metadata of OSM elements. The pipeline never reads it; snapshots and the
+# test fixture remove it (`strip_metadata`), and the Overpass query no longer asks for it.
+METADATA_ATTRIBUTES = ("user", "uid", "timestamp", "changeset", "version")
 
 
 class OverpassBusyError(SourceError):
@@ -84,7 +87,7 @@ def build_query(south: float, west: float, north: float, east: float, timeout_s:
     bbox = ",".join(_num(v) for v in (south, west, north, east))
     return (
         f"[out:xml][timeout:{timeout_s}];"
-        f"(node({bbox});way({bbox}););(._;>;);(._;rel(bn);rel(bw););out meta;"
+        f"(node({bbox});way({bbox}););(._;>;);(._;rel(bn);rel(bw););out body;"
     )
 
 
@@ -101,6 +104,27 @@ def overpass_runtime_error(path: Path) -> str | None:
 
 def osm_path(raw_dir: Path, map_id: str) -> Path:
     return raw_dir / "osm" / f"{map_id}.osm"
+
+
+def strip_metadata(source: Path, dest: Path) -> int:
+    """Remove the `METADATA_ATTRIBUTES` of every element; returns how many were removed.
+
+    The root element keeps its attributes (its `version` is the API version, not an edit
+    count), and every element, including `<note>` and `<meta>`, stays. `dest` is written
+    only if something was removed; the same input always gives the same bytes.
+    """
+    tree = ET.parse(source)
+    root = tree.getroot()
+    removed = 0
+    for element in root.iter():
+        if element is not root:
+            for name in METADATA_ATTRIBUTES:
+                if element.attrib.pop(name, None) is not None:
+                    removed += 1
+    if removed:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tree.write(dest, encoding="UTF-8", xml_declaration=True)
+    return removed
 
 
 # Reading the XML.

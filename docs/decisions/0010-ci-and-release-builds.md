@@ -1,6 +1,6 @@
 # 0010: CI and release builds
 
-Status: Accepted
+Status: Accepted. Partly superseded by ADR 0011 (release data comes from pinned raw data snapshots; no `MML_API_KEY` secret).
 
 ## Context
 

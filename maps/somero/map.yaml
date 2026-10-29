@@ -83,3 +83,10 @@ sources:
     options:
       theme: maastotietokanta_kaikki
       file_format: GPKG
+
+# Pinned raw data for release builds; written by `mapgen snapshot publish`.
+snapshot:
+  repo: "CatastrophicCoder/roadman-simulator"
+  release_tag: "data-somero-2026-10-29"
+  asset: "mapdata-somero-2026-10-29.zip"
+  sha256: "88e8a62a7eba80cd10851c71dc3a0e38aec670aeb6060dfc229f3973e4eb0904"

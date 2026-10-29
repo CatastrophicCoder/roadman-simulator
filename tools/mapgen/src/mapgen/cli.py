@@ -8,7 +8,14 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from mapgen import __version__, paths
-from mapgen.config import SLUG_PATTERN, BBoxWGS84, ConfigError, load_map_config, read_yaml
+from mapgen.config import (
+    REPO_PATTERN,
+    SLUG_PATTERN,
+    BBoxWGS84,
+    ConfigError,
+    load_map_config,
+    read_yaml,
+)
 from mapgen.http import redact
 
 EXIT_OK = 0
@@ -28,6 +35,12 @@ def _non_negative_int(value: str) -> int:
     if number < 0:
         raise argparse.ArgumentTypeError(f"must be 0 or more: {number}")
     return number
+
+
+def _repo_name(value: str) -> str:
+    if not re.fullmatch(REPO_PATTERN, value):
+        raise argparse.ArgumentTypeError(f"not OWNER/NAME: {value!r}")
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -106,6 +119,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="exit non-zero if FILE lacks any credit or licence line of the packs",
     )
     notice.set_defaults(handler=cmd_notice)
+
+    snapshot = commands.add_parser(
+        "snapshot", help="create, publish or fetch a pinned raw data snapshot of a map"
+    )
+    actions = snapshot.add_subparsers(dest="snapshot_command", required=True, metavar="<action>")
+    create = actions.add_parser(
+        "create", help="zip the non-debug raw data into an archive (no network)"
+    )
+    create.add_argument("map_id", metavar="<map-id>")
+    create.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="output folder (default: tools/mapgen/build/snapshots/)",
+    )
+    create.set_defaults(handler=cmd_snapshot_create)
+    publish = actions.add_parser(
+        "publish", help="upload an archive as a GitHub data release and pin it in map.yaml"
+    )
+    publish.add_argument("map_id", metavar="<map-id>")
+    publish.add_argument(
+        "--archive",
+        type=Path,
+        default=None,
+        help="archive to publish (default: today's archive in tools/mapgen/build/snapshots/)",
+    )
+    publish.add_argument(
+        "--repo",
+        type=_repo_name,
+        default=None,
+        help="OWNER/NAME (default: snapshot.repo in map.yaml, else `gh repo view`)",
+    )
+    publish.set_defaults(handler=cmd_snapshot_publish)
+    fetch = actions.add_parser(
+        "fetch", help="download the snapshot pinned in map.yaml into the raw data folder"
+    )
+    fetch.add_argument("map_id", metavar="<map-id>")
+    fetch.add_argument(
+        "--force",
+        action="store_true",
+        help="replace differing and delete extra local files of the snapshot's sources",
+    )
+    fetch.set_defaults(handler=cmd_snapshot_fetch)
 
     # Later: `enhance <map-id>` is added here as a further subcommand.
     return parser
@@ -191,6 +247,73 @@ def cmd_notice(args: argparse.Namespace, repo_root: Path) -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text, encoding="utf-8")
     print(f"notice: {args.out} ({len(packs)} map(s))")
+    return EXIT_OK
+
+
+def cmd_snapshot_create(args: argparse.Namespace, repo_root: Path) -> int:
+    from mapgen.snapshot import SnapshotError, create_snapshot
+
+    config = load_map_config(paths.map_config_path(repo_root, args.map_id))
+    try:
+        result = create_snapshot(
+            config,
+            repo_root=repo_root,
+            raw_dir=paths.raw_dir(repo_root, args.map_id),
+            out_dir=(args.out or paths.snapshots_dir(repo_root)).resolve(),
+        )
+    except SnapshotError as exc:
+        print(f"error: {_scrub(str(exc))}", file=sys.stderr)
+        return EXIT_FAILED
+    print(f"archive: {result.path}")
+    print(f"size: {result.size:,} bytes")
+    print(f"sha256: {result.sha256}")
+    print(f"release tag: {result.tag}")
+    print("members:")
+    for name, size in result.members:
+        print(f"  {size:>12,}  {name}")
+    return EXIT_OK
+
+
+def cmd_snapshot_publish(args: argparse.Namespace, repo_root: Path) -> int:
+    from mapgen.snapshot import SnapshotError, publish_snapshot
+
+    map_yaml = paths.map_config_path(repo_root, args.map_id)
+    config = load_map_config(map_yaml)
+    try:
+        result = publish_snapshot(
+            config,
+            repo_root=repo_root,
+            map_yaml=map_yaml,
+            archive=args.archive.resolve() if args.archive else None,
+            repo=args.repo,
+        )
+    except SnapshotError as exc:
+        print(f"error: {_scrub(str(exc))}", file=sys.stderr)
+        return EXIT_FAILED
+    print(f"published {result.asset} as release {result.tag} in {result.repo}")
+    print(f"sha256: {result.sha256}")
+    print(f"updated the snapshot block in {result.map_yaml}; commit it")
+    return EXIT_OK
+
+
+def cmd_snapshot_fetch(args: argparse.Namespace, repo_root: Path) -> int:
+    from mapgen.snapshot import SnapshotError, fetch_snapshot
+
+    config = load_map_config(paths.map_config_path(repo_root, args.map_id))
+    try:
+        report = fetch_snapshot(
+            config, raw_dir=paths.raw_dir(repo_root, args.map_id), force=args.force
+        )
+    except SnapshotError as exc:
+        print(f"error: {_scrub(str(exc))}", file=sys.stderr)
+        return EXIT_FAILED
+    counts = (
+        f"{len(report.added)} added, {len(report.replaced)} replaced, "
+        f"{len(report.deleted)} deleted, {len(report.unchanged)} unchanged"
+    )
+    print(f"snapshot: {report.url}")
+    print(f"files: {counts}")
+    print(f"manifest: {report.manifest_path}")
     return EXIT_OK
 
 

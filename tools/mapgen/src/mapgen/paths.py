@@ -47,6 +47,11 @@ def work_dir(repo_root: Path, map_id: str, area: str) -> Path:
     return repo_root / WORK_DIR / map_id / area
 
 
+def snapshots_dir(repo_root: Path) -> Path:
+    """Where `mapgen snapshot create` writes archives: `tools/mapgen/build/snapshots/`."""
+    return repo_root / WORK_DIR / "snapshots"
+
+
 def pack_dir(repo_root: Path, map_id: str) -> Path:
     """The generated map pack: `game/maps/<map-id>/`."""
     return repo_root / PACKS_DIR / map_id

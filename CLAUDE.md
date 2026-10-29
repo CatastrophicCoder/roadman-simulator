@@ -27,7 +27,7 @@ Version 1 scope: one map area with no interiors, a few vehicle types, one player
 
 Build and test commands are listed in `tools/mapgen/CLAUDE.md` and `game/CLAUDE.md`. Run all checks at once with `/verify` (or `.claude/scripts/verify.sh`).
 
-CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, without screenshots, against a test-area pack built from the committed fixture. Pushing a tag `v*` runs `release.yml`, which needs the `MML_API_KEY` repository secret and publishes Windows and macOS builds with the download manifests; a tag with `-` (for example `v0.1.0-test1`) makes a pre-release. See ADR 0010.
+CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, without screenshots, against a test-area pack built from the committed fixture. Pushing a tag `v*` runs `release.yml`, which fetches each map's pinned raw data snapshot (`snapshot` in `map.yaml`), builds the packs from it with the current pipeline, and publishes Windows and macOS builds with the download manifests. It needs no secrets. A tag with `-` (for example `v0.1.0-test1`) makes a pre-release. Snapshots live on `data-<map-id>-<date>` releases, which never become the latest release and don't run CI. See ADRs 0010 and 0011.
 
 ## Definition of done
 
@@ -40,6 +40,7 @@ CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull requ
 
 - Never edit `game/maps/` by hand. Change the pipeline or `maps/<map-id>/` and regenerate.
 - Never commit raw data (`tools/mapgen/data/raw/`).
+- External data is fetched once. Builds, `/verify`, `/regen-map` and `mapgen snapshot create` use only the local data in `tools/mapgen/data/raw/<map-id>/` and never contact Overpass or MML. Never run `mapgen download` or any other external data fetch unless the user explicitly asks. `mapgen snapshot fetch` is for fresh clones and CI and never replaces local data without `--force`. Never run `mapgen snapshot publish` without asking first (ADR 0011).
 - Ask before adding any dependency (NuGet, Python package, Godot add-on, GitHub Action).
 - No other games' names or trademarks in code, assets or text.
 - Real business names and logos from OSM are replaced with fictional ones.

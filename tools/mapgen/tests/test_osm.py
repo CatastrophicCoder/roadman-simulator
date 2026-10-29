@@ -22,7 +22,7 @@ OSM_XML = b'<?xml version="1.0"?><osm version="0.6"><node id="1" lat="60.63" lon
 def test_query_text() -> None:
     assert build_query(60.62, 23.50, 60.64, 23.54, 180) == (
         "[out:xml][timeout:180];(node(60.62,23.5,60.64,23.54);way(60.62,23.5,60.64,23.54););"
-        "(._;>;);(._;rel(bn);rel(bw););out meta;"
+        "(._;>;);(._;rel(bn);rel(bw););out body;"
     )
 
 
@@ -135,7 +135,7 @@ def test_busy_server_is_retried_with_backoff(
     ]
     query = urllib.parse.parse_qs(http.calls[0].body.decode())["data"][0]
     for line in logs:
-        assert query not in line and "out meta" not in line and "<html>" not in line
+        assert query not in line and "out body" not in line and "<html>" not in line
     dest = tmp_repo.raw_dir("testtown") / "osm" / "testtown.osm"
     assert dest.read_bytes() == OSM_XML
 
@@ -232,3 +232,9 @@ def test_failed_force_run_keeps_previous_file(fixture_config: MapConfig, tmp_rep
     assert "Overpass busy" in report.failed["osm"]
     assert dest.read_bytes() == OSM_XML
     assert sorted(p.name for p in dest.parent.iterdir()) == ["testtown.osm"]
+
+
+def test_query_asks_for_no_contributor_metadata() -> None:
+    query = build_query(60.62, 23.50, 60.64, 23.54, 180)
+    assert query.endswith("out body;")
+    assert "out meta" not in query

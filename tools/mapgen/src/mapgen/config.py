@@ -1,6 +1,7 @@
 """The `maps/<map-id>/map.yaml` schema and loader."""
 
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -20,6 +21,8 @@ from pyproj.exceptions import CRSError
 from mapgen import geo
 
 SLUG_PATTERN = r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
+REPO_PATTERN = r"^[A-Za-z0-9-]+/[A-Za-z0-9_-][A-Za-z0-9._-]*$"  # <owner>/<name>, no leading .
+_TAG_DATE_RE = re.compile(r"-(\d{4}-\d{2}-\d{2})$")
 
 
 class ConfigError(ValueError):
@@ -79,6 +82,44 @@ class SourceConfig(StrictModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class SnapshotConfig(StrictModel):
+    """The pinned raw data snapshot that release builds fetch (`mapgen snapshot fetch`).
+
+    The archive is the single asset of the GitHub release `release_tag` in `repo`. That the
+    tag names this map is checked by `MapConfig`, which knows the map id.
+    """
+
+    repo: str = Field(pattern=REPO_PATTERN)
+    release_tag: str = Field(min_length=1)
+    asset: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("release_tag")
+    @classmethod
+    def _tag_has_a_real_date(cls, value: str) -> str:
+        match = _TAG_DATE_RE.search(value)
+        if not match:
+            raise ValueError(f"release_tag {value!r} must end in -YYYY-MM-DD")
+        try:
+            date.fromisoformat(match.group(1))
+        except ValueError:
+            raise ValueError(f"release_tag {value!r} has no valid date") from None
+        return value
+
+    @field_validator("asset")
+    @classmethod
+    def _asset_is_a_plain_zip_name(cls, value: str) -> str:
+        if "/" in value or "\\" in value or ".." in value:
+            raise ValueError(f"asset {value!r} must be a plain file name (no /, \\ or ..)")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.zip", value):
+            raise ValueError(f"asset {value!r} must be a .zip file name of letters, digits, ._-")
+        return value
+
+    def asset_url(self) -> str:
+        """The public download URL of the asset (no `gh`, key or login needed)."""
+        return f"https://github.com/{self.repo}/releases/download/{self.release_tag}/{self.asset}"
+
+
 class MapConfig(StrictModel):
     id: str = Field(pattern=SLUG_PATTERN)
     display_name: str = Field(min_length=1)
@@ -89,6 +130,7 @@ class MapConfig(StrictModel):
     test_area: TestArea
     style_preset: str = Field(min_length=1)
     sources: dict[str, SourceConfig] = Field(min_length=1)
+    snapshot: SnapshotConfig | None = None
 
     @field_validator("crs")
     @classmethod
@@ -123,6 +165,10 @@ class MapConfig(StrictModel):
             )
         if not bbox.contains(self.test_area_bbox):
             raise ValueError("test_area does not fit inside the bbox around the origin")
+        if self.snapshot is not None:
+            tag = self.snapshot.release_tag
+            if not re.fullmatch(rf"data-{re.escape(self.id)}-\d{{4}}-\d{{2}}-\d{{2}}", tag):
+                raise ValueError(f"snapshot.release_tag {tag!r} must be data-{self.id}-YYYY-MM-DD")
         return self
 
     @property

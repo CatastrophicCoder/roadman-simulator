@@ -3,6 +3,10 @@ name: CI
 
 on:
   push:
+    # Every branch, but not the data-* tags of map data snapshot releases (ADR 0011).
+    # tags-ignore alone would stop branch runs, so branches is needed too.
+    branches: ["**"]
+    tags-ignore: ["data-*"]
   pull_request:
 
 permissions:

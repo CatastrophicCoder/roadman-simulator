@@ -11,6 +11,8 @@ https://www.openstreetmap.org/copyright
 | --- | --- | --- |
 | OpenStreetMap data for the map bbox | Overpass API (overpass-api.de), `uv run mapgen download <map-id>` | 2026-10-27 |
 
+Release builds use the OSM file from the map's pinned data snapshot (ADR 0011), with contributor metadata removed. The snapshot's `NOTICE.md` and `download-manifest.json` give its attribution and dates.
+
 ### Maanmittauslaitos (National Land Survey of Finland)
 
 Contains data from the National Land Survey of Finland, licensed under CC BY 4.0.
@@ -25,6 +27,8 @@ Each dataset is listed with its source, name and download date, as MML's terms r
 | Orthophoto | MML file service (`ortoilmakuva_karttalehti`) or Karttapaikka. Used only for the debug orthophoto view; the textures are never exported with the game (ADR 0009) | 2026-10-27 (latest year version) |
 | Buildings 3D (not available for Somero) | MML file service (`3d-rakennukset_karttalehti`) | Not used: no coverage for Somero |
 | Topographic Database (if used) | MML file service (`maastotietokanta_bbox`) | TODO: not downloaded yet |
+
+Release builds use the MML files from the map's pinned data snapshot (ADR 0011): a GitHub release `data-<map-id>-<date>` named in `maps/<map-id>/map.yaml`. The files are as downloaded; the snapshot's `NOTICE.md` and `download-manifest.json` give the dataset names and dates. The orthophoto isn't in snapshots.
 
 Dataset names follow MML's product descriptions (https://www.maanmittauslaitos.fi/en/maps-and-spatial-data/datasets-and-interfaces/product-descriptions), checked on 2026-10-27.
 

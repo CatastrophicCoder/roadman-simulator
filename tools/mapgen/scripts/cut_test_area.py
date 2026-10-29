@@ -45,9 +45,9 @@ from mapgen.config import MapConfig, load_map_config
 from mapgen.geo import BBox
 from mapgen.manifest import MANIFEST_NAME, SCHEMA_VERSION, load_entries
 from mapgen.sources.base import parse_isoformat, sha256_of
+from mapgen.sources.osm import METADATA_ATTRIBUTES
 
 FIXTURES_DIR = paths.MAPGEN_DIR / "tests" / "fixtures" / "raw"
-METADATA_ATTRIBUTES = ("user", "uid", "timestamp", "changeset", "version")
 # Fields of a download's `result` record that the fixture keeps. Anything else (scanner,
 # flight altitude, scanning project, point cloud id, or fields MML adds later) is dropped.
 RESULT_FIELDS = (

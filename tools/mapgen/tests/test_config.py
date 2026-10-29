@@ -143,3 +143,65 @@ def test_laser_scanning_process_is_rejected_in_config(
     fixture_data["sources"]["mml_dem_2m"]["options"]["process_id"] = "laserkeilausaineisto_5p"
     with pytest.raises(ConfigError, match="laser scanning"):
         tmp_repo.load(fixture_data)
+
+
+# The optional `snapshot` block (pinned raw data for release builds)
+
+VALID_SNAPSHOT = {
+    "repo": "CatastrophicCoder/roadman-simulator",
+    "release_tag": "data-testtown-2026-10-29",
+    "asset": "mapdata-testtown-2026-10-29.zip",
+    "sha256": "0" * 64,
+}
+
+
+def test_snapshot_block_is_optional(tmp_repo: TmpRepo, fixture_data: dict[str, Any]) -> None:
+    assert "snapshot" not in fixture_data
+    assert tmp_repo.load(fixture_data).snapshot is None
+
+
+def test_valid_snapshot_block_loads(tmp_repo: TmpRepo, fixture_data: dict[str, Any]) -> None:
+    fixture_data["snapshot"] = dict(VALID_SNAPSHOT)
+    snapshot = tmp_repo.load(fixture_data).snapshot
+    assert snapshot is not None
+    assert snapshot.asset_url() == (
+        "https://github.com/CatastrophicCoder/roadman-simulator/releases/download/"
+        "data-testtown-2026-10-29/mapdata-testtown-2026-10-29.zip"
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("release_tag", "data-somero-2026-10-29", "must be data-testtown-YYYY-MM-DD"),
+        ("release_tag", "data-testtown-2026-02-30", "no valid date"),
+        ("release_tag", "data-testtown-2026-13-01", "no valid date"),
+        ("release_tag", "data-testtown", "must end in -YYYY-MM-DD"),
+        ("release_tag", "v-data-testtown-2026-10-29", "must be data-testtown-YYYY-MM-DD"),
+        ("sha256", "g" * 64, "sha256"),
+        ("sha256", "0" * 63, "sha256"),
+        ("sha256", "A" * 64, "sha256"),
+        ("asset", "dir/mapdata.zip", "plain file name"),
+        ("asset", "dir\\mapdata.zip", "plain file name"),
+        ("asset", "..mapdata.zip", "plain file name"),
+        ("asset", "mapdata.tar.gz", ".zip file name"),
+        ("repo", "no-slash", "repo"),
+        ("repo", "a/b/c", "repo"),
+        ("repo", "owner/na me", "repo"),
+        ("repo", "owner/.", "repo"),
+        ("repo", "owner/..", "repo"),
+        ("repo", "owner/.hidden", "repo"),
+    ],
+)
+def test_bad_snapshot_block_is_rejected(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any], key: str, value: str, message: str
+) -> None:
+    fixture_data["snapshot"] = {**VALID_SNAPSHOT, key: value}
+    with pytest.raises(ConfigError, match=message):
+        tmp_repo.load(fixture_data)
+
+
+def test_snapshot_block_rejects_extra_keys(tmp_repo: TmpRepo, fixture_data: dict[str, Any]) -> None:
+    fixture_data["snapshot"] = {**VALID_SNAPSHOT, "url": "https://example.invalid/x.zip"}
+    with pytest.raises(ConfigError, match="Extra inputs are not permitted"):
+        tmp_repo.load(fixture_data)

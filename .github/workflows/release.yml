@@ -1,6 +1,6 @@
-# Release builds on tags v*: download the source data, build every map in maps/,
-# export Windows and macOS builds and publish them with the download manifests.
-# MML_API_KEY reaches only the download and leak-check steps of the maps job.
+# Release builds on tags v*: fetch each map's pinned raw data snapshot (ADR 0011),
+# build every map in maps/, export Windows and macOS builds and publish them with
+# the download manifests. Uses no secrets; nothing is downloaded from Overpass or MML.
 name: Release
 
 on:
@@ -22,6 +22,8 @@ jobs:
   maps:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    outputs:
+      snapshots: ${{ steps.build.outputs.snapshots }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,23 +35,18 @@ jobs:
       - name: uv sync
         run: uv sync --project tools/mapgen --locked
 
-      # Fails on a missing key, a failed download or a source without files. A busy
-      # Overpass server is retried 3 times (30, 60, 120 s, or its Retry-After).
-      # Never echo the key or request URLs here; the pipeline redacts it from errors.
-      - name: Download source data
-        env:
-          MML_API_KEY: ${{ secrets.MML_API_KEY }}
+      # Downloads the snapshot pinned in each map.yaml from its data-* release, checks
+      # its SHA-256 and unpacks it into tools/mapgen/data/raw/<map-id>/. A map without
+      # a snapshot block fails the release.
+      - name: Fetch data snapshots
         run: |
-          if [ -z "$MML_API_KEY" ]; then
-            echo "::error::MML_API_KEY repository secret is not set"
-            exit 1
-          fi
           for config in maps/*/map.yaml; do
             map="$(basename "$(dirname "$config")")"
-            uv run --project tools/mapgen mapgen download "$map" --release --strict --force --retries 3
+            uv run --project tools/mapgen mapgen snapshot fetch "$map"
           done
 
       - name: Build map packs
+        id: build
         run: |
           mkdir -p dist/manifests
           for config in maps/*/map.yaml; do
@@ -61,11 +58,8 @@ jobs:
             maps+=("$map")
           done
           uv run --project tools/mapgen mapgen notice "${maps[@]}" --out dist/NOTICE.txt
-
-      - name: Check packs and manifests for the key
-        env:
-          MML_API_KEY: ${{ secrets.MML_API_KEY }}
-        run: .github/scripts/check-no-secret.sh game/maps dist
+          snapshots="$(uv run --project tools/mapgen python -c 'import sys; from pathlib import Path; from mapgen.config import load_map_config; print(", ".join(f"{m} {load_map_config(Path(f"maps/{m}/map.yaml")).snapshot.release_tag}" for m in sys.argv[1:]))' "${maps[@]}")"
+          echo "snapshots=$snapshots" >>"$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -175,7 +169,7 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: export
+    needs: [maps, export]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -188,10 +182,11 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          SNAPSHOTS: ${{ needs.maps.outputs.snapshots }}
         run: |
           flags=()
           case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
-            --notes "Windows (x86_64) and macOS (universal, ad-hoc signed) builds. The download-manifest-<map>.json files record the source data each map was built from. Map data © OpenStreetMap contributors (ODbL 1.0); contains data from the National Land Survey of Finland (CC BY 4.0); see NOTICE.txt in each zip." \
+            --notes "Windows (x86_64) and macOS (universal, ad-hoc signed) builds. Map data snapshots: $SNAPSHOTS. The download-manifest-<map>.json files record the source data each map was built from. Map data © OpenStreetMap contributors (ODbL 1.0); contains data from the National Land Survey of Finland (CC BY 4.0); see NOTICE.txt in each zip." \
             "${flags[@]}"

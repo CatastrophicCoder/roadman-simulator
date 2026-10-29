@@ -8,6 +8,7 @@ A Python pipeline that turns a map's raw OSM and MML data into a Godot map pack 
 - Data sources go behind adapters with one shared interface (OSM, MML, global elevation model).
 - Reproject to EPSG:3067 and subtract the map's local origin (ADR 0003).
 - Raw downloads go to `data/raw/<map-id>/`, which is git-ignored. Never commit them.
+- External data is fetched once (ADR 0011). Builds, tests, `/verify`, `/regen-map` and `snapshot create` read only `data/raw/<map-id>/` and never contact Overpass or MML. Run `mapgen download` or any other external data fetch only when the user explicitly asks. `snapshot fetch` is for fresh clones and CI and never replaces local data without `--force`. Only the user runs `snapshot publish`; never run it without asking first.
 - Write output only to `game/maps/<map-id>/`. That folder is never edited by hand.
 - Name collision meshes with Godot's glTF suffixes (`-col`, `-colonly`, `-convcolonly`).
 - Every override and data source records its licence, and the pipeline writes them into the pack's credits.
@@ -28,10 +29,10 @@ Run from `tools/mapgen/`, or from the repo root with `uv run --project tools/map
 uv sync                                   # install dependencies
 uv run pytest                             # tests
 uv run ruff check . && uv run ruff format --check .   # lint and format check
-uv run mapgen download <map-id>           # download raw data, e.g. somero
+uv run mapgen download <map-id>           # download raw data, e.g. somero (only when the user asks)
 uv run mapgen download <map-id> --only osm,mml_dem_2m --force   # some sources, replace existing files
 uv run mapgen download <map-id> --only mml_lidar   # lidar; a map with mml_lidar enabled doesn't build without it
-uv run mapgen download <map-id> --release --strict   # release: skip debug_only sources; fail if a source
+uv run mapgen download <map-id> --release --strict   # skip debug_only sources; fail if a source
                                           #   gets no files or MML_API_KEY is missing
 uv run mapgen download <map-id> --only osm --retries 3   # retry a busy Overpass (HTTP 429, 502, 503,
                                           #   504) after 30, 60, 120 s or its Retry-After; default 0
@@ -40,10 +41,14 @@ uv run mapgen build <map-id>              # build the map pack (--area test: the
 uv run mapgen build <map-id> --release    # skip debug_only sources: no debug/orthophoto/ in the pack
 uv run mapgen notice <map-id>... --out build/NOTICE.txt   # plain-text NOTICE from the packs' manifest credits
 uv run mapgen notice --check build/NOTICE.txt <map-id>... # exit 1 if any credit or licence line is missing
+uv run mapgen snapshot create <map-id>    # zip the non-debug raw data into build/snapshots/ (no network)
+uv run mapgen snapshot publish <map-id>   # USER ONLY: gh release data-<map-id>-<date>, writes map.yaml snapshot
+uv run mapgen snapshot fetch <map-id>     # download the pinned snapshot into data/raw/<map-id>/ (fresh clones, CI)
+uv run mapgen snapshot fetch <map-id> --force   # also replace differing and delete extra local files of its sources
 uv run mapgen enhance <map-id>            # TODO: merge building overrides
 ```
 
 Environment variables:
 
-- `MML_API_KEY`: MML open data API key for the MML sources. Never write it to a file. Without it, the MML sources print manual download steps and register files placed in `data/raw/<map-id>/mml/<layer>/`; with `--strict` they fail instead.
+- `MML_API_KEY`: MML open data API key for the MML sources, needed only by `download` (releases use snapshots and no key). Never write it to a file. Without it, the MML sources print manual download steps and register files placed in `data/raw/<map-id>/mml/<layer>/`; with `--strict` they fail instead.
 - `MAPGEN_CONTACT` (optional): contact appended to the User-Agent of every HTTP request (Overpass and MML).

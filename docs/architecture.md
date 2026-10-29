@@ -8,8 +8,12 @@ This file describes the systems and how they connect. Source: `docs/project-outl
   OSM (Overpass / Geofabrik)   MML (DEM 2 m, lidar 0.5 p, orthophoto, 3D buildings, topo DB)
               \                     /
                v                   v
-        tools/mapgen/data/raw/<map-id>/        (downloaded, git-ignored)
-                       |
+        tools/mapgen/data/raw/<map-id>/        (downloaded once, git-ignored)
+                       |  \
+                       |   mapgen snapshot create / publish (user only)
+                       |   -> GitHub release data-<map-id>-<date> (zip asset)
+                       |   -> mapgen snapshot fetch (fresh clones, release.yml)
+                       |      back into data/raw/<map-id>/  (ADR 0011)
   maps/<map-id>/  -->  |  map.yaml, markers.json, overrides/
                        v
         tools/mapgen   uv run mapgen build <map-id>
@@ -55,6 +59,7 @@ All map-specific input lives here, and the pipeline code contains none.
 | `style_preset` | Style preset name (placeholder for now) |
 | `sources` | Named sources, each with `adapter`, `enabled`, `debug_only` and adapter-specific `options` |
 | `sources.<name>.debug_only` | Optional, default `false`. The source feeds debug aids only (Somero: `mml_orthophoto`, ADR 0009). `download --release` and `build --release` skip it, so a release pack neither reads nor credits its files |
+| `snapshot` | Optional. The pinned raw data snapshot that releases build from (ADR 0011): `repo` (`<owner>/<name>`), `release_tag` (`data-<map id>-YYYY-MM-DD`), `asset` (a `.zip` file name) and `sha256` (64 lowercase hex). Written by `mapgen snapshot publish` |
 
 The playable boundary is the bounding box for now. TODO: a custom boundary polygon, and the `markers.json` schema.
 
@@ -81,12 +86,14 @@ Collision comes from glTF node name suffixes (`-col`, `-colonly`, `-convcolonly`
 
 Module layout (`tools/mapgen/src/mapgen/`):
 
-- `cli.py`: `mapgen download <map-id> [--only a,b] [--force] [--release] [--strict] [--retries N]`, `mapgen origin <map-id>`, `mapgen build <map-id> [--area full|test] [--out DIR] [--release]` and `mapgen notice <map-id>... (--out FILE | --check FILE)`, with `--repo-root` (found automatically by default). `enhance` will be added as a further subcommand.
+- `cli.py`: `mapgen download <map-id> [--only a,b] [--force] [--release] [--strict] [--retries N]`, `mapgen origin <map-id>`, `mapgen build <map-id> [--area full|test] [--out DIR] [--release]` and `mapgen notice <map-id>... (--out FILE | --check FILE)` and `mapgen snapshot (create [--out DIR] | publish [--archive PATH] [--repo OWNER/NAME] | fetch [--force]) <map-id>`, with `--repo-root` (found automatically by default). `enhance` will be added as a further subcommand.
   - `download --release` skips `debug_only` sources (logs `[<name>] skipped (debug only)`); naming one in `--only` together with `--release` is a usage error (exit 2).
   - `download --strict` fails (exit 1) when a selected source returned no files, or when its adapter's required environment variables are unset (the MML adapters need `MML_API_KEY`; with `--strict` they neither print manual steps nor register files already on disk). Each failed source is reported with its reason; the key is never printed. Without `--strict` nothing changes.
   - `build --release` treats `debug_only` sources as disabled, even when their raw files exist.
   - `notice` reads each built pack's `manifest.json` credits and writes a plain-text NOTICE: a heading, a sentence that the data was modified (processed into 3D map tiles), per map each credit's attribution exactly as in the manifest followed by `Licence: <name>, <url>`, and the licence URLs once each. A missing pack or manifest, an invalid manifest or a licence without a known URL fails (exit 1). `--check FILE` exits 1 and lists every attribution or licence line missing from FILE (whole lines, surrounding spaces ignored).
+  - `snapshot create` packs the manifest-listed files of the enabled, non-`debug_only` sources (OSM contributor metadata removed), the filtered download manifest, `SHA256SUMS` and a generated `NOTICE.md` into a deterministic zip in `tools/mapgen/build/snapshots/`, and runs `.github/scripts/check-no-secret.sh` on it. It reads only `data/raw/<map-id>/`. `snapshot publish` (run only by the user) uploads it with `gh` as a `data-*` release that is never latest, and writes the `snapshot` block. `snapshot fetch` downloads the pinned asset, checks its SHA-256 and members, and unpacks it into `data/raw/<map-id>/`; it fails on differing or extra local files of those sources unless `--force` (ADR 0011).
 - `notice.py`: the NOTICE text, its expected lines and the licence name to URL table.
+- `snapshot.py`: snapshot create, fetch and publish, and the `map.yaml` snapshot block writer.
 - `config.py`: the `map.yaml` model and loader. `paths.py`: repo root, `maps/<map-id>/`, `data/raw/<map-id>/`, the build work folder and the pack folder.
 - `geo.py`: WGS84 to map CRS, projected bbox, world and local coordinates, test area, geometry reprojection and offsets.
 - `tm35.py`: ETRS-TM35FIN map sheet names for a bbox (used by MML adapters).
@@ -222,4 +229,4 @@ TODO: traffic AI, pedestrian AI, police, missions, player character. Each of the
 - Core: xUnit on `Roadman.Core`.
 - Engine: gdUnit4Net, run headless.
 - Visual: screenshots from the camera presets in the map pack, taken with a short windowed run (ADR 0008).
-- CI: builds Somero plus a tiny second test area from another town. TODO: set up CI (prompt 7).
+- CI (ADR 0010): `ci.yml` builds the Somero test-area pack from the committed fixture; it ignores `data-*` tags. `release.yml` fetches each map's pinned snapshot and builds the full packs from it (ADR 0011).
