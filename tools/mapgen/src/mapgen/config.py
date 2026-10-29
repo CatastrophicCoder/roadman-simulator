@@ -120,6 +120,48 @@ class SnapshotConfig(StrictModel):
         return f"https://github.com/{self.repo}/releases/download/{self.release_tag}/{self.asset}"
 
 
+class BridgeConfig(StrictModel):
+    """Bridge deck geometry, the clearance check and the waterways that imply a bridge."""
+
+    deck_thickness_m: float = Field(gt=0)
+    railing_height_m: float = Field(gt=0)
+    railing_width_m: float = Field(gt=0)
+    min_clearance_m: float = Field(ge=0)  # deck underside above terrain; below: a warning
+    # Road side of each deck end: the surface blends from the deck end to the terrain.
+    ramp_length_m: float = Field(gt=0)
+    # `waterway` values whose lines, crossed by a way without a bridge tag, imply a bridge.
+    inferred_waterways: list[str]
+
+
+class RoadClassConfig(StrictModel):
+    """Defaults for one road class (a `highway` value, or `driveway` / `parking_aisle`)."""
+
+    width_m: float = Field(gt=0)
+    lanes: int = Field(ge=1)
+    drivable: bool
+    walkable: bool
+    speed_kmh: int | None = Field(default=None, gt=0)  # drivable only; else default_speed_kmh
+
+
+class RoadsConfig(StrictModel):
+    """The `roads` block: every road default is per map, none is in the pipeline."""
+
+    surface_offset_m: float = Field(gt=0)  # road surface height above the terrain mesh
+    default_speed_kmh: int = Field(gt=0)
+    bridge: BridgeConfig
+    classes: dict[str, RoadClassConfig]
+
+    @field_validator("classes")
+    @classmethod
+    def _class_names_are_slugs(
+        cls, value: dict[str, RoadClassConfig]
+    ) -> dict[str, RoadClassConfig]:
+        for name in value:
+            if not re.match(SLUG_PATTERN, name):
+                raise ValueError(f"road class name {name!r} must be a lowercase slug")
+        return value
+
+
 class MapConfig(StrictModel):
     id: str = Field(pattern=SLUG_PATTERN)
     display_name: str = Field(min_length=1)
@@ -131,6 +173,7 @@ class MapConfig(StrictModel):
     style_preset: str = Field(min_length=1)
     sources: dict[str, SourceConfig] = Field(min_length=1)
     snapshot: SnapshotConfig | None = None
+    roads: RoadsConfig | None = None  # without it, the map builds without roads
 
     @field_validator("crs")
     @classmethod

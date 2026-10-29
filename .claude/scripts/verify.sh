@@ -172,6 +172,21 @@ else
       *) report FAIL "screenshot $preset" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
     esac
   done <<<"$PRESETS"
+  # The road graph debug view over the overview preset (docs/specs/roads-and-road-graph.md).
+  log="$LOGS/screenshot-overview-road-graph.log"
+  if [ ! -f "$PACK/road_graph.json" ]; then
+    report N/A "screenshot road graph" "pack has no road_graph.json (run /regen-map $MAP_ID)"
+  elif ! grep -qx "overview" <<<"$PRESETS"; then
+    report N/A "screenshot road graph" "pack has no overview preset"
+  else
+    screenshot_preset "$GODOT_BIN" "$MAP_ID" overview "$SHOTS/overview-road-graph.png" "$log" --road-graph
+    case $? in
+      0) report PASS "screenshot road graph" "build/screenshots/overview-road-graph.png" ;;
+      2) report N/A "screenshot road graph" "outside built area (log: $log)" ;;
+      124) report FAIL "screenshot road graph" "timed out after ${GODOT_SCREENSHOT_TIMEOUT:-120}s (log: $log)" ;;
+      *) report FAIL "screenshot road graph" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
+    esac
+  fi
 fi
 
 echo "verify summary (logs: $LOGS)"

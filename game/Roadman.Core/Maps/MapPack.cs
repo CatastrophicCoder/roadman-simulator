@@ -10,6 +10,9 @@ public static partial class MapPack
     public const string ManifestFile = "manifest.json";
     public const string CameraPresetsFile = "camera_presets.json";
 
+    /// <summary>The road graph, next to the manifest; found by this name, not listed in the manifest.</summary>
+    public const string RoadGraphFile = "road_graph.json";
+
     /// <summary>The hint added to every pack error: the pack is generated, so the fix is to rebuild it.</summary>
     public static string RegenHint(string mapId) => $"run /regen-map {mapId} to (re)build the pack";
 

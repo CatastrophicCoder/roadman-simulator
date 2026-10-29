@@ -2,11 +2,12 @@
 
 Sources are picked by capability (`osm_vector`, `elevation`, `buildings_3d`,
 `point_cloud`, `imagery`), never by name. Footprints are kept when their centroid is
-inside the build area. Lidar points are read only around those footprints (their combined
-bounds plus `POINT_MARGIN_M`), so the test area stays fast. Imagery files are only listed
-here (those overlapping the area); the export reads them per tile for the debug textures.
-Output in `01-load/`: `footprints.geojson` (world coordinates), `dem.tif` (cropped) and
-`report.json`.
+inside the build area. Road ways and water are moved to local coordinates whole (the
+roads stage clips them); road ways keep their OSM node ids. Lidar points are read only
+around those footprints (their combined bounds plus `POINT_MARGIN_M`), so the test area
+stays fast. Imagery files are only listed here (those overlapping the area); the export
+reads them per tile for the debug textures. Output in `01-load/`: `footprints.geojson`
+(world coordinates), `dem.tif` (cropped) and `report.json`.
 """
 
 from collections import Counter
@@ -16,14 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import LineString, MultiPolygon, Polygon
 
 from mapgen.build.area import BuildArea, to_world
 from mapgen.build.heightfield import Heightfield, heightfield_from_raster
 from mapgen.build.lidar import LidarParams
 from mapgen.build.stage_io import write_geojson, write_geotiff, write_json
 from mapgen.config import MapConfig
-from mapgen.geo import BBox, offset_geometry, reproject_geometry
+from mapgen.geo import BBox, offset_geometry, reproject_geometry, reproject_xy
 from mapgen.sources.base import (
     BUILDINGS_3D,
     ELEVATION,
@@ -35,9 +36,12 @@ from mapgen.sources.base import (
     Imagery,
     LoadContext,
     PointCloud,
+    RoadWay,
     SkippedFeature,
     SourceData,
     SourceLoadError,
+    WaterArea,
+    WaterLine,
 )
 from mapgen.sources.registry import SelectedSource, enabled_sources_providing
 
@@ -59,6 +63,26 @@ class LocalFootprint:
     measured_height_m: float | None = None
 
 
+@dataclass(frozen=True)
+class LocalRoadWay:
+    """A `highway` way in local coordinates: `xy[i]` (shape (n, 2)) is node `node_ids[i]`."""
+
+    osm_id: int
+    node_ids: tuple[int, ...]
+    xy: np.ndarray
+    tags: Mapping[str, str] = field(default_factory=dict)
+    node_tags: Mapping[int, Mapping[str, str]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LocalWater:
+    """A water area or waterway line in local coordinates. `id` is e.g. "osm:way/12"."""
+
+    id: str
+    geometry: Polygon | MultiPolygon | LineString
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+
 @dataclass
 class LoadResult:
     footprints: list[LocalFootprint]  # centroid inside the area
@@ -75,6 +99,24 @@ class LoadResult:
     # Imagery files overlapping the area (debug orthophoto textures). None without a source
     # or without files; the build then writes no `debug/` folder.
     imagery: Imagery | None = None
+    # Road ways, water and the water relations left out, from the `osm_vector` source.
+    roads: list[LocalRoadWay] = field(default_factory=list)
+    roads_skipped: list[SkippedFeature] = field(default_factory=list)
+    water_areas: list[LocalWater] = field(default_factory=list)
+    water_lines: list[LocalWater] = field(default_factory=list)
+    water_skipped: list[SkippedFeature] = field(default_factory=list)
+
+
+def road_to_local(way: RoadWay, config: MapConfig) -> LocalRoadWay:
+    xy = reproject_xy(np.asarray(way.coords, dtype=float), way.crs, config.crs)
+    xy -= np.array([config.origin.x, config.origin.y])
+    return LocalRoadWay(way.osm_id, way.node_ids, xy, dict(way.tags), dict(way.node_tags))
+
+
+def water_to_local(feature: WaterArea | WaterLine, config: MapConfig) -> LocalWater:
+    world = reproject_geometry(feature.geometry, feature.crs, config.crs)
+    local = offset_geometry(world, -config.origin.x, -config.origin.y)
+    return LocalWater(feature.id, local, dict(feature.tags))
 
 
 def _one(config: MapConfig, capability: str, required: bool) -> SelectedSource | None:
@@ -162,12 +204,22 @@ def run_load(
         raise BuildError(f"elevation from {elevation_source.name!r}: {exc}") from exc
 
     all_footprints: list[LocalFootprint] = []
+    roads: list[LocalRoadWay] = []
+    roads_skipped: list[SkippedFeature] = []
+    water_areas: list[LocalWater] = []
+    water_lines: list[LocalWater] = []
+    water_skipped: list[SkippedFeature] = []
     if vector_source is not None:
         vector = load(vector_source)
         files += vector.files
         skipped += vector.skipped
         partial += vector.partial
         all_footprints = [to_local(f, config) for f in vector.footprints]
+        roads = [road_to_local(r, config) for r in vector.roads]
+        roads_skipped = list(vector.roads_skipped)
+        water_areas = [water_to_local(w, config) for w in vector.water_areas]
+        water_lines = [water_to_local(w, config) for w in vector.water_lines]
+        water_skipped = list(vector.water_skipped)
     else:
         log("no enabled source provides osm_vector; building no OSM footprints")
 
@@ -232,6 +284,12 @@ def run_load(
             "partial": len(partial),
         },
         "buildings_3d": {"in_area": len(buildings_3d)},
+        "roads": {"highway_ways": len(roads), "unreadable": len(roads_skipped)},
+        "water": {
+            "areas": len(water_areas),
+            "lines": len(water_lines),
+            "relations_left_out": len(water_skipped),
+        },
         "point_cloud": {
             "source": point_source.name if point_source else None,
             "points": len(points) if points is not None else 0,
@@ -279,6 +337,11 @@ def run_load(
         lidar_source=point_source.name if point_source else None,
         lidar_params=lidar_params,
         imagery=imagery,
+        roads=roads,
+        roads_skipped=roads_skipped,
+        water_areas=water_areas,
+        water_lines=water_lines,
+        water_skipped=water_skipped,
     )
 
 

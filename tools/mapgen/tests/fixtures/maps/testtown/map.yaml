@@ -60,3 +60,23 @@ sources:
     options:
       theme: maastotietokanta_kaikki
       file_format: GPKG
+
+# Roads: deliberately different from maps/somero/map.yaml, so a test can tell that the
+# pipeline uses this map's values and nothing hard-coded.
+roads:
+  surface_offset_m: 0.08
+  default_speed_kmh: 60
+  bridge:
+    deck_thickness_m: 0.7
+    railing_height_m: 1.2
+    railing_width_m: 0.3
+    min_clearance_m: 2.5
+    ramp_length_m: 3.5
+    inferred_waterways: [river, stream]
+  classes:
+    primary:     {width_m: 9.0, lanes: 3, drivable: true,  walkable: true, speed_kmh: 70}
+    residential: {width_m: 6.5, lanes: 1, drivable: true,  walkable: true}
+    service:     {width_m: 4.5, lanes: 1, drivable: true,  walkable: false, speed_kmh: 25}
+    driveway:    {width_m: 3.5, lanes: 1, drivable: true,  walkable: false, speed_kmh: 15}
+    cycleway:    {width_m: 2.5, lanes: 1, drivable: false, walkable: true}
+    footway:     {width_m: 1.5, lanes: 1, drivable: false, walkable: true}

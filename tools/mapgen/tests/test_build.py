@@ -22,6 +22,7 @@ from mapgen.build import BuildError, run_build
 from mapgen.build.export_glb import TERRAIN_NODE, read_glb_node_names
 from mapgen.build.pack_manifest import committed_schema, generated_schema
 from mapgen.cli import EXIT_FAILED, EXIT_OK, main
+from mapgen.config import load_map_config
 from pack_checks import check_pack
 
 
@@ -30,7 +31,8 @@ def _json(path: Path) -> Any:
 
 
 def test_pack_passes_the_shared_checks(fixture_build: FixtureBuild) -> None:
-    summary = check_pack(fixture_build.pack_dir, fixture_build.work_dir)
+    config = load_map_config(fixture_build.repo / "maps" / "testtown" / "map.yaml")
+    summary = check_pack(fixture_build.pack_dir, fixture_build.work_dir, config.roads)
     assert summary.tile_count == 4
     assert summary.building_count == FIXTURE_TEST_AREA_BUILDINGS
 

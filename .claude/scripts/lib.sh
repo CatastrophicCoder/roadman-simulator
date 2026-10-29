@@ -58,14 +58,15 @@ godot_import() {
 # Screenshot of one camera preset with a windowed (not headless) Godot run:
 # --headless disables rendering. Returns 0 (saved), 2 (preset outside the
 # built area, no PNG), 124 (timeout) or 1 (any other failure).
-# screenshot_preset <godot> <map-id> <preset> <out.png> <logfile>
+# screenshot_preset <godot> <map-id> <preset> <out.png> <logfile> [extra tool flags...]
 screenshot_preset() {
   local godot="$1" map="$2" preset="$3" out="$4" log="$5" rc
+  shift 5
   mkdir -p "$(dirname "$out")"
   rm -f "$out"
   run_with_timeout "${GODOT_SCREENSHOT_TIMEOUT:-120}" "$log" \
     "$godot" --path "$ROOT/game" --resolution "${SCREENSHOT_RESOLUTION:-1600x900}" \
-    -- --map "$map" --screenshot "$preset" "$out"
+    -- --map "$map" --screenshot "$preset" "$out" "$@"
   rc=$?
   case "$rc" in
     0)

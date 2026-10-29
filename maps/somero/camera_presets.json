@@ -12,6 +12,12 @@
       "look_at": [-6.4, 1.7, -6.1],
       "fov": 70,
       "ground_relative": true
+    },
+    "bridge-side": {
+      "position": [-43.3, 1.7, -8.1],
+      "look_at": [-15.8, 2.8, -20.1],
+      "fov": 70,
+      "ground_relative": true
     }
   }
 }

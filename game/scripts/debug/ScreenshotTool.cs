@@ -12,7 +12,7 @@ namespace Roadman.Debug;
 
 /// <summary>
 /// Renders the world from a named camera preset to a PNG and quits:
-/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto]</c>.
+/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph]</c>.
 /// <para>
 /// The image comes from its own <see cref="SubViewport"/> of <see cref="ImageSize"/>, so it doesn't depend on the
 /// window size, display scaling or where the window is. Rendering needs a real display server: the tool refuses to
@@ -54,6 +54,12 @@ public partial class ScreenshotTool : Node
     /// attribution is in the image. Null outside debug builds, where <c>--orthophoto</c> is an error.
     /// </summary>
     public OrthophotoDebugView? OrthophotoView { get; set; }
+
+    /// <summary>
+    /// The road graph view switched on for <c>--road-graph</c>; its legend is moved into the capture viewport. Null
+    /// outside debug builds, where <c>--road-graph</c> is an error.
+    /// </summary>
+    public RoadGraphDebugView? RoadGraphView { get; set; }
 
     private CameraPreset? _preset;
     private string _outputPath = "";
@@ -103,6 +109,12 @@ public partial class ScreenshotTool : Node
         if (Request.Orthophoto && OrthophotoView is null)
         {
             Finish(ScreenshotExitCode.Error, "--orthophoto needs the orthophoto debug view, which only debug builds have");
+            return;
+        }
+
+        if (Request.RoadGraph && RoadGraphView is null)
+        {
+            Finish(ScreenshotExitCode.Error, "--road-graph needs the road graph debug view, which only debug builds have");
             return;
         }
 
@@ -181,6 +193,11 @@ public partial class ScreenshotTool : Node
             return;
         }
 
+        if (Request.RoadGraph && !EnableRoadGraph())
+        {
+            return;
+        }
+
         CaptureAsync();
     }
 
@@ -198,6 +215,22 @@ public partial class ScreenshotTool : Node
         Finish(
             ScreenshotExitCode.Error,
             $"--orthophoto: no orthophoto images in {view.ResolvedTextureFolder}; {MapPack.RegenHint(Loader!.ResolvedMapId)}");
+        return false;
+    }
+
+    /// <summary>Switches the road graph view on, with its legend drawn in the capture viewport.</summary>
+    private bool EnableRoadGraph()
+    {
+        var view = RoadGraphView!;
+        view.AttachOverlayTo(_viewport!);
+        if (view.SetEnabled(true))
+        {
+            return true;
+        }
+
+        Finish(
+            ScreenshotExitCode.Error,
+            $"--road-graph: no readable road graph at {Loader!.RoadGraphPath}; {MapPack.RegenHint(Loader.ResolvedMapId)}");
         return false;
     }
 

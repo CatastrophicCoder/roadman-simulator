@@ -65,6 +65,63 @@ internal static class PackJson
         return result;
     }
 
+    public static long Long(JsonElement parent, string name, string source, string path)
+    {
+        var value = Property(parent, name, source, path);
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out var result))
+        {
+            throw Error(source, Join(path, name), "must be a whole number");
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// A key that must be present but may be <c>null</c> (the pipeline writes such keys always, for example
+    /// <c>name</c> or <c>speed_kmh</c>). Returns false for <c>null</c>; a missing key is an error.
+    /// </summary>
+    public static bool RequiredNullable(JsonElement parent, string name, string source, string path, out JsonElement value)
+    {
+        if (!parent.TryGetProperty(name, out value))
+        {
+            throw Error(source, Join(path, name), "is missing (it may be null, but the key must be there)");
+        }
+
+        return value.ValueKind != JsonValueKind.Null;
+    }
+
+    /// <summary>A required key whose value is a string or <c>null</c>.</summary>
+    public static string? NullableString(JsonElement parent, string name, string source, string path)
+    {
+        if (!RequiredNullable(parent, name, source, path, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw Error(source, Join(path, name), "must be a string or null");
+        }
+
+        return value.GetString()!;
+    }
+
+    /// <summary>A required key whose value is a whole number or <c>null</c>.</summary>
+    public static long? NullableLong(JsonElement parent, string name, string source, string path)
+    {
+        if (!RequiredNullable(parent, name, source, path, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out var result))
+        {
+            throw Error(source, Join(path, name), "must be a whole number or null");
+        }
+
+        return result;
+    }
+
     public static double Number(JsonElement parent, string name, string source, string path)
     {
         var value = Property(parent, name, source, path);

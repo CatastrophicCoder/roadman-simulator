@@ -155,14 +155,17 @@
         "url": "https://overpass-api.de/api/interpreter",
         "query": "[out:xml][timeout:180];(node(60.62,23.5,60.64,23.54);way(60.62,23.5,60.64,23.54););(._;>;);(._;rel(bn);rel(bw););out meta;",
         "test_area_cut": {
+          "contents": "building footprints whose centroid is in the test area, and highway ways and water features whose line or area meets it, with their member ways and all their nodes",
           "footprints": 60,
+          "highway_ways": 32,
+          "water_features": 0,
           "source_size": 3175738,
           "source_sha256": "d676b6a2996f2cc0ac1d5182945dcc98102eadd154641234b6ade75e3f1dae4c"
         }
       },
       "retrieved_at": "2026-10-27T14:34:18Z",
-      "size": 32365,
-      "sha256": "a4239e4e568188b08679c5be6ded2d3f40a41777da645158598edeb4f75fd0bf",
+      "size": 58730,
+      "sha256": "3e9688a1ff3168fc9c50c868a99a53abb8ca6d4780f77d022bc77e8e68e7dd07",
       "licence": "ODbL 1.0",
       "attribution": "© OpenStreetMap contributors",
       "origin": "downloaded"

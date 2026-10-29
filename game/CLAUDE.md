@@ -47,6 +47,8 @@ Building with `-c ExportRelease` or `ExportDebug` re-restores the shared `obj/` 
 - `World` adds a `MapLoader` (`scripts/world/MapLoader.cs`), which reads `res://maps/<id>/manifest.json` and instances every tile under `MapLoader/Tiles`. The id comes from `MapLoader.MapId` or the project setting `roadman/map/id` (default `somero`). Errors name the pack path and say to run `/regen-map <id>`.
 - Terrain collision bodies are in the group `map_terrain`. Use `MapLoader.TerrainHeightAt(x, z)` for ground heights; never hard-code them (Somero's terrain is about 81 to 138 m). New collision bodies are queryable only after a physics frame: await `MapLoader.WaitForTerrainCollisionAsync()` first.
 - Map materials: `MapLoader` sets `TerrainMaterial` on each tile's `terrain` mesh and `BuildingMaterial` on every `bld_` mesh. Both default to the placeholders in `materials/placeholder/` (`terrain.tres`; `building.tres` with `building.gdshader`, which colours up-facing faces as roof). Replace that folder, or set the two exports, when the art-direction palette exists. Lighting (sun energy and shadow distance, ambient energy, AgX tone mapping, exposure) is exported on `World`.
+- Roads (ADR 0012): tiles hold `road`, `path` and `bridge_osm_way_<id>[_p<n>]` meshes (imported from `-col` nodes, so each has a `StaticBody3D`). Their bodies are in the group `map_roads`, so `TerrainHeightAt` still returns bare terrain, 0.05 m (Somero's `surface_offset_m`) under the road surface. `MapLoader` sets `RoadMaterial` on `road` and bridge meshes and `PathMaterial` on `path` (placeholders `materials/placeholder/road.tres` and `path.tres`).
+- `MapLoader.RoadGraph` (`Roadman.Core.Maps.RoadGraph`) is read from `road_graph.json` after the tiles, before `MapLoaded`. A missing or invalid file pushes an error with the `/regen-map` hint and leaves it null; the tiles still load. Routing comes with the traffic AI spec.
 - `[importer_defaults]` in `project.godot` sets every scene import to name suffixes on, mesh compression off, LODs off, shadow meshes on and static light baking. A hand-made `.glb` added later gets these too; correct its import settings and commit its `.import` file.
 
 ## Orthophoto debug view
@@ -56,9 +58,16 @@ Building with `-c ExportRelease` or `ExportDebug` re-restores the shared `obj/` 
 - The images are `res://maps/<id>/debug/orthophoto/<tile_id>.jpg`, about 512x512, written by the pipeline with a `.gdignore` in `debug/`, so Godot never imports or exports them. The view reads them from disk with `Image.LoadFromFile` on the first switch-on (with mipmaps, cached until the map reloads). A tile without an image keeps the placeholder; with no images at all it shows "No orthophoto in this pack; run /regen-map <id>" and stays off.
 - Don't add an export filter that includes `maps/*/debug/`: the files are debug-only, and the `.gdignore` is what keeps them out of the import cache and exports.
 
+## Road graph debug view
+
+- G (`debug_road_graph`, physical key; F3 is Mission Control on macOS) toggles a drawing of `MapLoader.RoadGraph` above the surfaces (`scripts/debug/RoadGraphDebugView.cs`): drivable edges coloured by class, walkable-only edges in one colour, arrows on one-way edges, nodes coloured by kind, and a legend. Sizes and colours are exports.
+- Debug builds only, like the orthophoto view. Without a graph it shows "No road graph in this pack; run /regen-map <id>" and stays off. A map without roads has an empty graph (the pipeline always writes `road_graph.json`); the view then switches on with nothing drawn and a legend saying "road graph is empty".
+
 ## Screenshots
 
-`godot --path game --resolution 1600x900 -- --screenshot <preset> <out.png> [--presets <file>] [--map <map-id>] [--orthophoto]`, run from the repo root (`/verify` runs it for every preset in the pack, with `--map "$MAP_ID"`).
+`godot --path game --resolution 1600x900 -- --screenshot <preset> <out.png> [--presets <file>] [--map <map-id>] [--orthophoto] [--road-graph]`, run from the repo root (`/verify` runs it for every preset in the pack, with `--map "$MAP_ID"`, and once more for `overview` with `--road-graph`).
+
+- `--road-graph` renders with the road graph debug view on, its legend inside the capture. Exit 1 in a non-debug build or when the pack has no road graph.
 
 - `--map <map-id>` renders that pack instead of the one in the `roadman/map/id` project setting: the tool sets `MapLoader.MapId` before the map loads. The id must be a lowercase slug (the pipeline's `SLUG_PATTERN`).
 - `--orthophoto` renders with the orthophoto debug view on (see "Orthophoto debug view"). Its attribution overlay is moved into the capture `SubViewport`, so it is in the image (a `CanvasLayer` draws only in its own viewport). A pack without orthophoto images, or a build without the view (not a debug build), exits 1.

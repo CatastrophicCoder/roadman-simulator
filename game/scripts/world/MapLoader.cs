@@ -9,6 +9,8 @@ namespace Roadman.Scenes;
 /// Loads a generated map pack (<c>res://maps/&lt;id&gt;/</c>, ADR 0006): reads and checks <c>manifest.json</c>,
 /// then instances every tile under a <c>Tiles</c> child, named by tile id, at the origin (the tile meshes are
 /// already in map-local coordinates). All tiles load at once; streaming comes later.
+/// After the tiles it reads <c>road_graph.json</c> into <see cref="RoadGraph"/>; a missing or invalid graph is
+/// reported, and the tiles stay loaded.
 /// Errors are pushed with the pack path and the <c>/regen-map</c> hint; the game keeps running without a map.
 /// </summary>
 public partial class MapLoader : Node3D
@@ -23,6 +25,22 @@ public partial class MapLoader : Node3D
 
     /// <summary>Name of the terrain mesh node in each tile; the importer strips the <c>-col</c> suffix.</summary>
     public const string TerrainNodeName = "terrain";
+
+    /// <summary>
+    /// Group of the road, path and bridge collision bodies (from the <c>road-col</c>, <c>path-col</c> and
+    /// <c>bridge_osm_way_&lt;id&gt;[_p&lt;n&gt;]-col</c> glTF nodes). Not in <see cref="TerrainGroup"/>, so
+    /// <see cref="TerrainHeightAt"/> keeps returning the bare terrain.
+    /// </summary>
+    public const string RoadGroup = "map_roads";
+
+    /// <summary>Name of the drivable surface mesh in each tile (glTF node <c>road-col</c>).</summary>
+    public const string RoadNodeName = "road";
+
+    /// <summary>Name of the non-drivable path surface mesh in each tile (glTF node <c>path-col</c>).</summary>
+    public const string PathNodeName = "path";
+
+    /// <summary>Prefix of the bridge deck meshes, <c>bridge_osm_way_&lt;id&gt;</c> or <c>bridge_osm_way_&lt;id&gt;_p&lt;n&gt;</c>.</summary>
+    public const string BridgeNodePrefix = "bridge_osm_way_";
 
     private const float RayHalfLength = 10_000f;
     private const int MaxRayHits = 32;
@@ -51,10 +69,27 @@ public partial class MapLoader : Node3D
     [Export]
     public Material? BuildingMaterial { get; set; }
 
+    /// <summary>Material for the <c>road</c> surfaces and bridge decks. Null means the placeholder in <see cref="PlaceholderMaterialsPath"/>.</summary>
+    [Export]
+    public Material? RoadMaterial { get; set; }
+
+    /// <summary>Material for the <c>path</c> surfaces. Null means the placeholder in <see cref="PlaceholderMaterialsPath"/>.</summary>
+    [Export]
+    public Material? PathMaterial { get; set; }
+
     /// <summary>The parsed manifest, or null before a successful <see cref="Load"/>.</summary>
     public MapManifest? Manifest { get; private set; }
 
     public int LoadedTileCount { get; private set; }
+
+    /// <summary>
+    /// The pack's road graph, read after the tiles; null before a <see cref="Load"/> and when the pack's
+    /// <c>road_graph.json</c> is missing or invalid (an error is pushed then).
+    /// </summary>
+    public RoadGraph? RoadGraph { get; private set; }
+
+    /// <summary>Path of the road graph file in the pack.</summary>
+    public string RoadGraphPath => $"{PackPath}/{MapPack.RoadGraphFile}";
 
     /// <summary>The map id in use: <see cref="MapId"/>, or the project setting when that is empty.</summary>
     public string ResolvedMapId =>
@@ -69,11 +104,13 @@ public partial class MapLoader : Node3D
         EnsureTilesNode();
         TerrainMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/terrain.tres");
         BuildingMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/building.tres");
+        RoadMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/road.tres");
+        PathMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/path.tres");
     }
 
     /// <summary>
     /// Reads the manifest and instances every tile. Emits <see cref="SignalName.MapLoaded"/> with the number of
-    /// tiles loaded (a missing tile is reported and skipped), or <see cref="SignalName.MapLoadFailed"/> when the
+    /// tiles loaded (a missing tile is reported and skipped; <see cref="RoadGraph"/> is set before it), or <see cref="SignalName.MapLoadFailed"/> when the
     /// pack can't be used at all.
     /// </summary>
     /// <returns>True when the manifest was read and every tile loaded.</returns>
@@ -130,6 +167,7 @@ public partial class MapLoader : Node3D
         }
 
         GD.Print($"MapLoader: loaded {LoadedTileCount} of {manifest.Tiles.Count} tiles from {PackPath}");
+        RoadGraph = LoadRoadGraph(mapId);
         EmitSignal(SignalName.MapLoaded, LoadedTileCount);
         return complete;
     }
@@ -257,7 +295,42 @@ public partial class MapLoader : Node3D
         }
 
         Manifest = null;
+        RoadGraph = null;
         LoadedTileCount = 0;
+    }
+
+    /// <summary>
+    /// Reads <see cref="RoadGraphPath"/>. A missing, invalid or other map's file pushes an error and gives null; the
+    /// tiles stay loaded and <see cref="Load"/>'s result doesn't change.
+    /// </summary>
+    private RoadGraph? LoadRoadGraph(string mapId)
+    {
+        var path = RoadGraphPath;
+        if (!FileAccess.FileExists(path))
+        {
+            GD.PushError($"MapLoader: no road graph: {path} doesn't exist; {MapPack.RegenHint(mapId)}");
+            return null;
+        }
+
+        RoadGraph graph;
+        try
+        {
+            graph = RoadGraphReader.Parse(FileAccess.GetFileAsString(path), path);
+        }
+        catch (MapPackException ex)
+        {
+            GD.PushError($"MapLoader: {ex.Message}; {MapPack.RegenHint(mapId)}");
+            return null;
+        }
+
+        if (graph.MapId != mapId)
+        {
+            GD.PushError($"MapLoader: {path}: map_id is '{graph.MapId}', expected '{mapId}'; {MapPack.RegenHint(mapId)}");
+            return null;
+        }
+
+        GD.Print($"MapLoader: road graph with {graph.Nodes.Count} nodes and {graph.Edges.Count} edges from {path}");
+        return graph;
     }
 
     private bool Fail(string message)
@@ -279,8 +352,9 @@ public partial class MapLoader : Node3D
     }
 
     /// <summary>
-    /// Puts the terrain's collision bodies in <see cref="TerrainGroup"/> and sets the terrain and building
-    /// materials. The importer turns <c>terrain-col</c> into a mesh named <c>terrain</c> with a
+    /// Puts the terrain's collision bodies in <see cref="TerrainGroup"/> and the road, path and bridge ones in
+    /// <see cref="RoadGroup"/>, and sets the map materials. The importer turns <c>terrain-col</c>, <c>road-col</c>,
+    /// <c>path-col</c> and <c>bridge_osm_way_…-col</c> into meshes without the suffix, each with a
     /// <see cref="StaticBody3D"/> child; building meshes keep their <c>bld_</c> names.
     /// </summary>
     private void PrepareTile(Node tile)
@@ -290,9 +364,17 @@ public partial class MapLoader : Node3D
         while (pending.Count > 0)
         {
             var node = pending.Pop();
-            if (node is StaticBody3D body && body.GetParent() is MeshInstance3D { Name: var name } && name == TerrainNodeName)
+            if (node is StaticBody3D body && body.GetParent() is MeshInstance3D parent)
             {
-                body.AddToGroup(TerrainGroup, persistent: false);
+                var parentName = parent.Name.ToString();
+                if (parentName == TerrainNodeName)
+                {
+                    body.AddToGroup(TerrainGroup, persistent: false);
+                }
+                else if (IsRoadSurfaceName(parentName))
+                {
+                    body.AddToGroup(RoadGroup, persistent: false);
+                }
             }
             else if (node is MeshInstance3D mesh)
             {
@@ -305,6 +387,14 @@ public partial class MapLoader : Node3D
                 {
                     mesh.MaterialOverride = BuildingMaterial;
                 }
+                else if (meshName == RoadNodeName || meshName.StartsWith(BridgeNodePrefix, System.StringComparison.Ordinal))
+                {
+                    mesh.MaterialOverride = RoadMaterial;
+                }
+                else if (meshName == PathNodeName)
+                {
+                    mesh.MaterialOverride = PathMaterial;
+                }
             }
 
             foreach (var child in node.GetChildren())
@@ -313,4 +403,8 @@ public partial class MapLoader : Node3D
             }
         }
     }
+
+    /// <summary>True for the mesh names of road, path and bridge surfaces (the glTF names without <c>-col</c>).</summary>
+    public static bool IsRoadSurfaceName(string name) =>
+        name == RoadNodeName || name == PathNodeName || name.StartsWith(BridgeNodePrefix, System.StringComparison.Ordinal);
 }

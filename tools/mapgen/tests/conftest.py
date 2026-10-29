@@ -382,3 +382,42 @@ def glb_primitive(path: Path, node_name: str) -> dict[str, Any]:
     result = {name: accessor(index) for name, index in primitive["attributes"].items()}
     result["indices"] = accessor(primitive["indices"]).reshape(-1, 3)
     return result
+
+
+# The committed Somero test-area fixture, built the way CI builds the test-area pack.
+
+SOMERO_FIXTURE_RAW = Path(__file__).resolve().parent / "fixtures" / "raw" / "somero-test-area"
+
+
+@dataclass
+class SomeroArea:
+    root: Path
+    pack: Path
+    work: Path
+    config: MapConfig
+
+
+def build_somero_fixture(root: Path) -> SomeroArea:
+    """`mapgen build somero --area test` in a temporary repo, with the committed fixture
+    copied in as `data/raw/somero/` (as CI does) and a copy of `maps/somero/`."""
+    import shutil
+
+    from mapgen import paths
+    from mapgen.cli import EXIT_OK, main
+
+    map_id = SOMERO_YAML.parent.name
+    shutil.copytree(SOMERO_YAML.parent, paths.map_dir(root, map_id))
+    shutil.copytree(SOMERO_FIXTURE_RAW, paths.raw_dir(root, map_id))
+    assert main(["--repo-root", str(root), "build", map_id, "--area", "test"]) == EXIT_OK
+    return SomeroArea(
+        root,
+        paths.pack_dir(root, map_id),
+        paths.work_dir(root, map_id, "test"),
+        load_map_config(paths.map_config_path(root, map_id)),
+    )
+
+
+@pytest.fixture(scope="session")
+def somero_area(tmp_path_factory: pytest.TempPathFactory) -> SomeroArea:
+    """The Somero test area built once from the committed fixture (treat as read-only)."""
+    return build_somero_fixture(tmp_path_factory.mktemp("somero-area"))

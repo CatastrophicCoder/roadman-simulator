@@ -84,6 +84,34 @@ sources:
       theme: maastotietokanta_kaikki
       file_format: GPKG
 
+# Road defaults (Finnish practice; tweakable). Spec: docs/specs/roads-and-road-graph.md.
+# OSM tags (maxspeed, lanes, width, oneway, access) always win over these defaults.
+roads:
+  surface_offset_m: 0.05     # road surface height above the terrain mesh
+  default_speed_kmh: 50      # built-up area; used by drivable classes without their own speed_kmh
+  bridge:
+    deck_thickness_m: 0.5
+    railing_height_m: 1.0
+    railing_width_m: 0.2
+    min_clearance_m: 1.0     # deck underside above terrain; below this: warning in the report
+    ramp_length_m: 5.0       # road side of each deck end: surface blends from deck end to terrain
+    inferred_waterways: [river, stream, canal, ditch, drain, flowline]  # crossing these without a bridge tag: inferred bridge
+  classes:
+    primary:       {width_m: 8.0, lanes: 2, drivable: true,  walkable: false}
+    secondary:     {width_m: 7.5, lanes: 2, drivable: true,  walkable: false}
+    tertiary:      {width_m: 7.0, lanes: 2, drivable: true,  walkable: false}
+    unclassified:  {width_m: 6.0, lanes: 2, drivable: true,  walkable: true}
+    residential:   {width_m: 5.5, lanes: 2, drivable: true,  walkable: true, speed_kmh: 40}
+    living_street: {width_m: 5.0, lanes: 1, drivable: true,  walkable: true, speed_kmh: 20}
+    service:       {width_m: 4.0, lanes: 1, drivable: true,  walkable: true, speed_kmh: 20}
+    driveway:      {width_m: 3.0, lanes: 1, drivable: true,  walkable: true, speed_kmh: 20}
+    parking_aisle: {width_m: 5.0, lanes: 1, drivable: true,  walkable: true, speed_kmh: 20}
+    track:         {width_m: 3.0, lanes: 1, drivable: true,  walkable: true}
+    cycleway:      {width_m: 3.0, lanes: 1, drivable: false, walkable: true}  # combined cycle and foot path
+    footway:       {width_m: 2.0, lanes: 1, drivable: false, walkable: true}
+    path:          {width_m: 2.0, lanes: 1, drivable: false, walkable: true}
+    pedestrian:    {width_m: 5.0, lanes: 1, drivable: false, walkable: true}
+
 # Pinned raw data for release builds; written by `mapgen snapshot publish`.
 snapshot:
   repo: "CatastrophicCoder/roadman-simulator"

@@ -206,8 +206,9 @@ def test_buildings_have_no_uvs_and_node_names_survive(ortho_build: Built) -> Non
             attributes = gltf["meshes"][node["mesh"]]["primitives"][0]["attributes"]
             if node["name"] == TERRAIN_NODE:
                 assert "TEXCOORD_0" in attributes and "NORMAL" in attributes
-            else:
-                assert node["name"].startswith("bld_")
+            else:  # buildings, road and path surfaces and bridge decks have no UVs
+                name = node["name"]
+                assert name.startswith(("bld_", "bridge_osm_")) or name in ("road-col", "path-col")
                 assert "TEXCOORD_0" not in attributes
 
 

@@ -115,6 +115,46 @@ public class ScreenshotArgsTests
         Assert.Contains("[--orthophoto]", ex.Message);
     }
 
+    [Fact]
+    public void Parse_RoadGraph_InAnyPosition()
+    {
+        var after = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--road-graph"]);
+        var before = ScreenshotArgs.Parse(["--road-graph", "--map", "x", "--screenshot", "a", "a.png"]);
+        var both = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--road-graph", "--orthophoto"]);
+
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, null, RoadGraph: true), after);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, "x", RoadGraph: true), before);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, null, Orthophoto: true, RoadGraph: true), both);
+    }
+
+    [Fact]
+    public void Parse_WithoutRoadGraph_LeavesItOff()
+    {
+        Assert.False(ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--orthophoto"])!.RoadGraph);
+    }
+
+    [Fact]
+    public void Parse_WithoutScreenshotFlag_IgnoresRoadGraph()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--road-graph"]));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--road-graph", "--road-graph")]
+    [InlineData("--screenshot", "a", "--road-graph")]
+    [InlineData("--screenshot", "a", "a.png", "--road-graph", "yes")]
+    public void Parse_RoadGraphRepeatedOrMisplaced_Throws(params string[] args)
+    {
+        Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+    }
+
+    [Fact]
+    public void Parse_UnknownArgument_ListsRoadGraphInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--roads"]));
+        Assert.Contains("[--road-graph]", ex.Message);
+    }
+
     [Theory]
     [InlineData(3, 3, null)]
     [InlineData(2, 3, ScreenshotExitCode.Error)]

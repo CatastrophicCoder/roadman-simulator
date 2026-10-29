@@ -153,6 +153,15 @@ def reproject_geometry[G: BaseGeometry](geometry: G, src_crs: str, dst_crs: str)
     return shapely.transform(geometry, apply)
 
 
+def reproject_xy(coords: np.ndarray, src_crs: str, dst_crs: str) -> np.ndarray:
+    """(n, 2) points transformed from `src_crs` to `dst_crs` (a float64 copy)."""
+    points = np.asarray(coords, dtype=float).reshape(-1, 2)
+    if same_crs(src_crs, dst_crs):
+        return points.copy()
+    x, y = _transformer(src_crs, dst_crs).transform(points[:, 0], points[:, 1])
+    return np.column_stack([np.asarray(x, dtype=float), np.asarray(y, dtype=float)])
+
+
 def offset_geometry[G: BaseGeometry](geometry: G, dx: float, dy: float) -> G:
     """`geometry` moved by (dx, dy), e.g. minus the origin to get local coordinates."""
     shift = np.array([dx, dy])

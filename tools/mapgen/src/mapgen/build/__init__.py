@@ -9,6 +9,9 @@ With an imagery source and its files, the pack also gets `debug/orthophoto/<tile
 per tile (plus `debug/.gdignore`); the terrain's UVs map each tile onto its texture.
 A release build (`release=True`) skips the sources marked `debug_only` in map.yaml, so
 the pack neither reads nor credits their files (no `debug/orthophoto/` for Somero).
+With a `roads` block in map.yaml, the roads stage (stages 4 and 7) adds `road-col`,
+`path-col` and bridge deck nodes to the tiles and fills `road_graph.json`; without it,
+the map has no road meshes and an empty (valid) `road_graph.json`.
 """
 
 import shutil
@@ -39,6 +42,7 @@ from mapgen.build.orthophoto import (
     terrain_uv,
     write_debug_textures,
 )
+from mapgen.build.pack_checks import PackCheckError, check_pack
 from mapgen.build.pack_io import PackFolderError, check_pack_target, staging_dir, swap_in
 from mapgen.build.pack_manifest import (
     BUILDINGS_NAME,
@@ -52,6 +56,9 @@ from mapgen.build.pack_manifest import (
     validate_manifest_document,
     validate_manifest_file,
 )
+from mapgen.build.roads import RoadsResult, build_roads
+from mapgen.build.roads.model import ROAD_GRAPH_NAME, RoadGraphError, empty_graph_document
+from mapgen.build.roads.model import validate_file as validate_road_graph_file
 from mapgen.build.stage1_load import BuildError, run_load
 from mapgen.build.stage_io import write_geojson, write_json
 from mapgen.build.terrain import MeshTerrainBuilder, TerrainBuilder, TerrainChunk
@@ -62,7 +69,7 @@ from mapgen.sources.base import isoformat_utc, utc_now
 
 __all__ = ["BuildError", "BuildReport", "run_build"]
 
-STAGE_DIRS = ("01-load", "02-terrain", "03-buildings")
+STAGE_DIRS = ("01-load", "02-terrain", "03-buildings", "04-roads", "07-road-graph")
 
 
 @dataclass
@@ -77,6 +84,12 @@ class BuildReport:
     skipped: list[dict[str, str]] = field(default_factory=list)
     timings_s: dict[str, float] = field(default_factory=dict)
     debug_textures: int = 0  # debug orthophoto JPEGs written (0: no `debug/` folder)
+    roads: bool = False  # the map has a `roads` block (else no road_graph.json)
+    road_edges: int = 0
+    road_nodes: int = 0
+    suspected_missing_bridges: int = 0
+    clearance_warnings: int = 0
+    drivable_share: float | None = None  # largest weakly connected drivable component
 
 
 def _clear(folder: Path) -> None:
@@ -175,6 +188,34 @@ def run_build(
     report.building_count = building_report["building_count"]
     report.height_source_counts = building_report["height_source_counts"]
 
+    roads: RoadsResult | None = None
+    road_graph = empty_graph_document(config.id, area_name)
+    if config.roads is None:
+        log("[build] map.yaml has no roads block: no road meshes, road_graph.json is empty")
+    else:
+        with stage("roads"):
+            try:
+                roads = build_roads(
+                    config,
+                    config.roads,
+                    area,
+                    tiles,
+                    chunks,
+                    loaded.heightfield,
+                    loaded,
+                    work_dir,
+                    log=log,
+                )
+            except RoadGraphError as exc:
+                raise BuildError(str(exc)) from exc
+        road_graph = roads.document
+        report.roads = True
+        report.road_edges = roads.edge_count
+        report.road_nodes = roads.node_count
+        report.suspected_missing_bridges = len(roads.report["suspected_missing_bridges"])
+        report.clearance_warnings = len(roads.report["clearance_warnings"])
+        report.drivable_share = roads.graph_report["weak_components"]["largest_share"]
+
     with stage("export"), ExitStack() as resources:
         by_tile = buildings.by_tile()
         unknown = set(by_tile) - {t.id for t in tiles}
@@ -235,6 +276,8 @@ def run_build(
                     nodes.append(MeshNode(building.node, *building.visual_mesh()))
                     for name, vertices, faces in building.collision_meshes():
                         nodes.append(MeshNode(name, vertices, faces))
+                if roads is not None:
+                    nodes += roads.tile_nodes.get(tile.id, [])
                 export_glb(staging / TILES_DIR / f"{tile.id}.glb", nodes)
             write_json(
                 staging / BUILDINGS_NAME,
@@ -248,11 +291,19 @@ def run_build(
                 written = write_debug_textures(mosaic, plans, staging)
                 report.debug_textures = len(written)
                 log(f"[build] {len(written)} debug orthophoto textures in {ORTHOPHOTO_DIR}/")
+            validate_road_graph_file(write_json(staging / ROAD_GRAPH_NAME, road_graph))
             if presets_bytes is not None:
                 (staging / PRESETS_NAME).write_bytes(presets_bytes)  # unchanged
             validate_manifest_file(write_json(staging / MANIFEST_NAME, document))
+            # Every check on the staged pack; a failure leaves the previous pack untouched.
+            start = time.perf_counter()
+            check_pack(staging, work_dir, config.roads)
+            report.timings_s["pack_checks"] = round(time.perf_counter() - start, 3)
+            log(f"[build] pack checks: {report.timings_s['pack_checks']:.2f} s")
             swap_in(staging, out_dir)
-        except (ManifestError, PackFolderError, OrthophotoError) as exc:
+        except PackCheckError as exc:
+            raise BuildError(f"pack check failed: {exc}") from exc
+        except (ManifestError, PackFolderError, OrthophotoError, RoadGraphError) as exc:
             raise BuildError(str(exc)) from exc
         finally:
             shutil.rmtree(staging, ignore_errors=True)

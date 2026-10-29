@@ -60,6 +60,7 @@ All map-specific input lives here, and the pipeline code contains none.
 | `sources` | Named sources, each with `adapter`, `enabled`, `debug_only` and adapter-specific `options` |
 | `sources.<name>.debug_only` | Optional, default `false`. The source feeds debug aids only (Somero: `mml_orthophoto`, ADR 0009). `download --release` and `build --release` skip it, so a release pack neither reads nor credits its files |
 | `snapshot` | Optional. The pinned raw data snapshot that releases build from (ADR 0011): `repo` (`<owner>/<name>`), `release_tag` (`data-<map id>-YYYY-MM-DD`), `asset` (a `.zip` file name) and `sha256` (64 lowercase hex). Written by `mapgen snapshot publish` |
+| `roads` | Optional (ADR 0012). `surface_offset_m`, `default_speed_kmh`, `bridge` (`deck_thickness_m`, `railing_height_m`, `railing_width_m`, `min_clearance_m`, `inferred_waterways`, `ramp_length_m`) and `classes`: per road class `width_m`, `lanes`, `drivable`, `walkable` and optional `speed_kmh`. Without it the map builds without road meshes and with an empty `road_graph.json` |
 
 The playable boundary is the bounding box for now. TODO: a custom boundary polygon, and the `markers.json` schema.
 
@@ -72,10 +73,10 @@ Stages, each with output that can be inspected:
 1. Load and project to EPSG:3067, then subtract the local origin (ADR 0003).
 2. Terrain: behind a `TerrainBuilder` interface. Mesh terrain is the interim implementation; ADR 0004 (mesh or Terrain3D heightmap) is still open.
 3. Buildings: extruded footprints, with attributes resolved by the enhancement layer.
-4. Roads: buffered and triangulated, draped on the terrain, with bridges and layers.
+4. Roads: buffered, merged, cut along the terrain mesh triangles and laid `surface_offset_m` above them; bridge decks and inferred bridges (ADR 0012).
 5. Water and land use.
 6. Vegetation: positions only.
-7. Road graph: intersections and edges with class, lanes, speed limit and one-way flag.
+7. Road graph: nodes at OSM nodes, edges with class, drivable and walkable flags, lanes, speed limit, width, one-way flag and names. Built in the same `roads` stage as 4, because the graph's heights and the inferred bridges depend on the surface.
 8. Gameplay markers.
 9. Tiling (256 m to start) and export: `.glb` per tile, JSON files, minimap PNG.
 10. World edge: roadblocks, land and water fences, cliff edge, void trigger, written to `boundary.json`.
@@ -103,7 +104,7 @@ Module layout (`tools/mapgen/src/mapgen/`):
 
 Adapter interface: a source's `adapter` value selects a `SourceAdapter` class, whose options model validates the source's `options`. `download(ctx)` gets the map config, the raw folder, the `--force` flag and an injected HTTP client, and returns one `DownloadedFile` record per file. Each adapter also declares what it can load in `provides` (`osm_vector`, `elevation`, `point_cloud`, `buildings_3d`, `imagery`), and `load(ctx)` reads its raw files for a build and returns a `SourceData` (footprints, an elevation raster, a point cloud, imagery files, skipped features, and the files it read). The build picks enabled sources by capability, never by source name, and allows at most one source per capability.
 
-- `osm_overpass` loads building footprints from the `.osm` XML (standard library `iterparse`): closed ways and `type=multipolygon` relations, with rings joined from member ways and both outer and inner rings repaired with `make_valid`. Unclosed rings are dropped. Features that can't be built (no closed outer ring, geometry errors, duplicates of a relation's outer way) are skipped with a reason; relations built despite missing member ways or unclosed rings are listed as partial (ADR 0005).
+- `osm_overpass` loads building footprints from the `.osm` XML (standard library `iterparse`): closed ways and `type=multipolygon` relations, with rings joined from member ways and both outer and inner rings repaired with `make_valid`. Unclosed rings are dropped. Features that can't be built (no closed outer ring, geometry errors, duplicates of a relation's outer way) are skipped with a reason; relations built despite missing member ways or unclosed rings are listed as partial (ADR 0005). From the same parse it also loads the `highway` ways (with node ids and tags) and water: water areas (`natural=water`, `waterway=riverbank`; a relation with a missing member or an open ring is left out and reported) and waterway lines.
 - `mml_dem_2m` loads its GeoTIFFs, mosaics them with `rasterio.merge`, and crops to the area plus a 10 m margin. A file is warped only when its CRS isn't equivalent to the map CRS (compared semantically, not as text); warped CRSs are listed in the load report. Nodata becomes NaN.
 - `mml_lidar` downloads MML's laser scanning data 0.5 p as LAZ on TM35 1:5 000 sheets (`sheet_scale`, `dataset` options; `Uusin` is the latest). Only the process `laserkeilausaineisto_05_karttalehti` is allowed; the 5 p data is refused (ADR 0005 amendment). `load` reads the files with laspy and lazrs in chunks, keeps the points inside the requested bounds and drops classes 2 (ground), 7 (low noise) and 18 (high noise). Its options also hold the height thresholds used by stage 3.
 - `mml_orthophoto` provides `imagery`: `load` lists the JPEG 2000 (or GeoTIFF) files that overlap the area, without reading pixels; the build reads them per tile for the debug textures. Missing files aren't an error: the build then logs it and writes no `debug/` folder. Its option `debug_texture_m_per_px` (default 0.5, 0.5–1.0) sets the texture resolution.
@@ -118,7 +119,9 @@ Build stages (`build/`; ADR 0006):
 - `build/terrain/`: the `TerrainBuilder` protocol (`build_tile(heightfield, tile) -> TerrainChunk`) and `MeshTerrainBuilder`, a regular grid at DEM resolution cut to the tile. Vertex normals come from the heightfield gradient (central differences of `Heightfield.sample`), so neighbouring tiles have identical edge vertices and normals.
 - `build/lidar.py`: the building height from the point cloud (buffer ladder, tree check, limits; see "Building heights" below).
 - `build/buildings.py`: height resolution, base height, flat-roof extrusion (holes supported) and collision boxes: one minimum rotated rectangle per footprint part. Courtyards and concave corners are filled in the collision box.
-- `build/export_glb.py`: one `.glb` per tile with trimesh, checking the node names after export.
+- `build/roads/` (ADR 0012, spec `docs/specs/roads-and-road-graph.md`): `tags.py` (class, flags, value parsing, name fields), `graph.py` (clipping, nodes, edges, ids, connected components), `bridges.py` (spans, straight decks, railings, inferred bridges, clearance), `ramps.py` (road-side ramps at deck ends), `surface.py` (buffering, merging, draping on each tile's terrain chunk triangles, tile-edge points), `model.py` and `build/schemas/road-graph-v1.schema.json` (the `road_graph.json` model and its committed JSON Schema).
+- `build/export_glb.py`: one `.glb` per tile with trimesh, checking the node names after export and reading back every mesh's positions and indices.
+- `build/pack_checks.py`: the pack checks (tiles, buildings, road and path surfaces including ramps, deck straightness, deck-end steps, edge ends at their nodes, terrain under decks). `run_build` runs them on the staged pack in every build, including `--release`; a failed check fails the build and leaves the previous pack. The tests call the same checks.
 - `build/pack_manifest.py` and `build/schemas/manifest-v1.schema.json`: the manifest model, the committed JSON Schema, and the credits.
 - `build/camera_presets.py` and `build/schemas/camera-presets-v1.schema.json`: the optional camera presets model and its committed JSON Schema. `run_build` validates `maps/<map-id>/camera_presets.json` before the load stage and copies it into the pack.
 - `build/orthophoto.py`: terrain UVs (`terrain_uv`) and the debug orthophoto textures. It opens the imagery files as one mosaic, fails the build if they don't cover every tile completely, and writes one JPEG per tile resampled (average) to exactly the tile's bounds, plus `debug/.gdignore`.
@@ -129,6 +132,8 @@ Intermediate output goes to `tools/mapgen/build/<map-id>/<area>/` (git-ignored).
 - `01-load/`: `footprints.geojson`, `dem.tif` (cropped), `report.json` (counts, skipped and partial features with reasons, DEM statistics including filled nodata cells and any warped CRSs).
 - `02-terrain/`: `<tile>.glb` (terrain only) and `stats.json`.
 - `03-buildings/`: `buildings.geojson` (resolved attributes and their sources) and `report.json` (count per height source, lidar rejections per reason, buildings per lidar buffer, buildings using single returns, ignored tags).
+- `04-roads/`: `roads.geojson` (merged surfaces and bridge outlines) and `report.json` (skipped ways with reasons, defaults used, clearance warnings, `suspected_missing_bridges` with OSM id and local, map CRS and WGS84 positions, excluded crossings, water relations left out, `ramps`, `terrain_above_deck`).
+- `07-road-graph/`: `graph.geojson` (nodes and edges for QGIS) and `report.json` (per-class counts, weakly and strongly connected components, the largest drivable component's share and, in full builds, the 95% check).
 - `timings.json`: seconds per stage.
 
 Building heights, first valid value wins (spec: `docs/specs/building-heights.md`):
@@ -149,7 +154,7 @@ Data only: meshes, scenes and JSON, with no code (ADR 0002). Planned contents: t
 Contents so far:
 
 - `manifest.json` (schema version 1).
-- `tiles/tile_x{i}_y{j}.glb`: one file per tile. Tile (i, j) covers local [i·T, (i+1)·T) × [j·T, (j+1)·T), clipped to the area, where T is `tile_size_m`. Each file holds the terrain and the buildings whose footprint centroid is in the tile. Buildings are never split. The terrain has TEXCOORD_0 mapping the tile's `bounds_local` onto [0, 1] × [0, 1], with v = 0 at the north edge (u = (east − min_x) / width, v = (max_y − north) / height), so the tile's debug texture covers it exactly. Buildings have no UVs.
+- `tiles/tile_x{i}_y{j}.glb`: one file per tile. Tile (i, j) covers local [i·T, (i+1)·T) × [j·T, (j+1)·T), clipped to the area, where T is `tile_size_m`. Each file holds the terrain, the buildings whose footprint centroid is in the tile, and the tile's part of the road and path surfaces and bridge decks. Buildings are never split; roads and decks are split at tile edges with identical vertices on both sides (ADR 0012). The terrain has TEXCOORD_0 mapping the tile's `bounds_local` onto [0, 1] × [0, 1], with v = 0 at the north edge (u = (east − min_x) / width, v = (max_y − north) / height), so the tile's debug texture covers it exactly. Buildings have no UVs.
 - `buildings.json`: `schema_version`, `map_id` and `buildings`, one provenance entry per building: `id` (e.g. `osm:way/123`), `tile`, `node`, `collision_nodes` (a list, one per footprint part), `height_m`, `height_source` (`mml_lidar`, `mml_3d`, `osm_height`, `osm_levels` or `default`), `base_z`, `base_source` (`dem`), `roof_shape` (`flat`) and `roof_shape_source` (`default`). Lidar buildings add `lidar_points`, `lidar_buffer_m`, `lidar_returns` (`all` or `single`), `roof_z_median` and `roof_z_p90` (absolute elevations; p90 is kept for pitched roofs later). A building whose lidar value was rejected adds `lidar_rejected` with the reason.
 - `debug/` (optional, ADR 0006 amendment): written only when an `imagery` source is enabled and its files are present. `debug/.gdignore` (empty) keeps Godot from importing or exporting the folder; the game loads the files from disk at runtime, in debug runs only. Not listed in the manifest.
   - `debug/orthophoto/<tile_id>.jpg`: the orthophoto resampled to exactly the tile's bounds, round(width / r) × round(height / r) pixels at r = `debug_texture_m_per_px`, JPEG quality 85, top row north.
@@ -163,10 +168,13 @@ Contents so far:
   | `ground_relative` | Default false. When true, `position[1]` and `look_at[1]` are heights above the terrain at that point's x/z |
 
   Unknown keys are errors. JSON Schema: `tools/mapgen/src/mapgen/build/schemas/camera-presets-v1.schema.json`.
+- `road_graph.json` (ADR 0012): always written; empty `nodes` and `edges` when `map.yaml` has no `roads` block. Not listed in the manifest. JSON Schema: `tools/mapgen/src/mapgen/build/schemas/road-graph-v1.schema.json`. Coordinates are Godot local metres. Fields: `schema_version` (`1`), `map_id`, `area`, `nodes` and `edges`.
+  - Node: `id` (`osm:node/<id>` or `cut:way/<id>:<n>`), `kind` (`junction`, `joint`, `dead_end`, `area_edge`), `position` `[x, y, z]`, `osm_node` (or `null`).
+  - Edge: `id` (`osm:way/<id>#<n>`), `from`, `to`, `class`, `drivable`, `walkable`, `lanes`, `speed_kmh` (`null` when not drivable), `width_m`, each of these five with a `*_source` (`osm` or `default`); `oneway` (`from` → `to` is the allowed driving direction), `bridge`, `bridge_source` (`osm`, `inferred` or `null`), `tunnel`, `layer`, `length_m`, `osm_way`, the name fields `name`, `name_sv` and `ref` (string or `null`), and `points` (at least 2 `[x, y, z]`).
 
 Axes: glTF is Y-up. Local east is +X, up is +Y, and north is −Z. Units are metres from the map origin.
 
-glTF node names: `terrain-col` (visual mesh plus collision), `bld_<source>_<type>_<id>` (building visual, e.g. `bld_osm_way_123`) and `bld_<source>_<type>_<id>-colonly` (collision box only). A building with several footprint parts gets one box per part: `bld_<...>_c0-colonly`, `bld_<...>_c1-colonly`, and so on.
+glTF node names: `terrain-col` (visual mesh plus collision), `bld_<source>_<type>_<id>` (building visual, e.g. `bld_osm_way_123`) and `bld_<source>_<type>_<id>-colonly` (collision box only). A building with several footprint parts gets one box per part: `bld_<...>_c0-colonly`, `bld_<...>_c1-colonly`, and so on. Roads: `road-col` (drivable surfaces) and `path-col` (the others), one each per tile, and `bridge_osm_way_<id>-col` per bridge deck with its railings (`bridge_osm_way_<id>_p<n>-col` when a deck is split across tiles), all with collision.
 
 Manifest v1 fields, validated against the committed JSON Schema `tools/mapgen/src/mapgen/build/schemas/manifest-v1.schema.json` after every build:
 
@@ -184,11 +192,13 @@ Manifest v1 fields, validated against the committed JSON Schema `tools/mapgen/sr
 | `generated_at` | UTC time of the build |
 | `tool` | `{name, version}` of the pipeline |
 
-TODO: the JSON formats of the road graph, markers, vegetation and boundary. TODO: shipping packs as runtime-loaded `.pck` files.
+TODO: the JSON formats of markers, vegetation and boundary. TODO: shipping packs as runtime-loaded `.pck` files.
 
 ### MapLoader (Godot)
 
 A node in the `World` scene. It reads the map id from settings or a menu, checks the manifest's schema version, and instances tiles. It loads all tiles at first and adds streaming near the camera later. It also places barrier scenes from `boundary.json`.
+
+After the tiles it reads `road_graph.json` into `MapLoader.RoadGraph` (null, with an error naming `/regen-map`, when the file is missing or invalid; the tiles still load). Road, path and bridge collision bodies are in the group `map_roads`, terrain bodies in `map_terrain`.
 
 Tile `.glb` files import with the project-wide `[importer_defaults]` (ADR 0008). The screenshot tool renders the pack's camera presets for visual checks (ADR 0008, `game/CLAUDE.md`).
 
@@ -211,12 +221,14 @@ Projects (all `net10.0`, ADR 0007):
 - Death clears all money and gear, and resets the wanted level to 0.
 - `MoneyChanged`, `GearChanged` and `WantedLevelChanged` fire only when the value actually changes; `Died` fires on every death.
 
-TODO: road graph types and routing, mission state, and the respawn state machine.
+**`RoadGraph`** (`Maps/RoadGraph.cs`, read by `RoadGraphReader`, ADR 0012) holds the pack's nodes and edges. The reader rejects another schema version, unknown keys, unknown node kinds, duplicate ids, dangling edges, edges with fewer than 2 points, edges neither drivable nor walkable, drivable edges without a speed and non-finite numbers. Lookups: `DrivableEdgesFrom(node)` (one-way edges only in their allowed direction), `WalkableEdgesAt(node)`, `NearestNode(position, filter)`.
+
+TODO: routing (with the traffic AI spec), mission state, and the respawn state machine.
 
 ### Gameplay (Godot C#)
 
 - Autoloads: `Events` (global signal bus) and `GameState` (player, wanted level, settings). Both stay small.
-- `World` scene: MapLoader, WorldEnvironment, sun, debug camera.
+- `World` scene: MapLoader, WorldEnvironment, sun, debug camera. In debug builds also the orthophoto view (F2) and the road graph view (G).
 - Vehicle (`VehicleBody3D`), chase camera, HUD with minimap, input map.
 - World edge: barrier scenes, the void `Area3D` and its death sequence, space backdrop.
 - Missions refer to marker ids in the pack, never to raw coordinates.
@@ -225,7 +237,7 @@ TODO: traffic AI, pedestrian AI, police, missions, player character. Each of the
 
 ## Testing
 
-- Pipeline: pytest, using a fixed small test area. `tools/mapgen/tests/fixtures/raw/somero-test-area/` holds the Somero test area's raw data (OSM without contributor metadata, DEM, lidar and orthophoto cuts, download manifest, attribution in `NOTICE.md`), laid out like `data/raw/<map-id>/`, so tests and CI can build the test-area pack offline. `tools/mapgen/scripts/cut_test_area.py` recreates it.
+- Pipeline: pytest, using a fixed small test area. `tools/mapgen/tests/fixtures/raw/somero-test-area/` holds the Somero test area's raw data (OSM buildings and highway ways touching the area, without contributor metadata, DEM, lidar and orthophoto cuts, download manifest, attribution in `NOTICE.md`), laid out like `data/raw/<map-id>/`, so tests and CI can build the test-area pack offline. `tools/mapgen/scripts/cut_test_area.py` recreates it.
 - Core: xUnit on `Roadman.Core`.
 - Engine: gdUnit4Net, run headless.
 - Visual: screenshots from the camera presets in the map pack, taken with a short windowed run (ADR 0008).

@@ -8,8 +8,10 @@ copy of every raw file it read, cut to what that test-area load needs, into
 copied in as the raw folder):
 
 - `.osm`: the footprints whose centroid is in the test area, with their member ways and
-  nodes. Contributor metadata (`user`, `uid`, `timestamp`, `changeset`, `version`) is
-  removed; the ODbL `<note>` stays.
+  nodes, and every `highway` way and water feature (water area or waterway line) whose
+  line or area meets the test area, with all of its nodes (the build cuts roads at the
+  test-area edge, not this script). Contributor metadata (`user`, `uid`, `timestamp`,
+  `changeset`, `version`) is removed; the ODbL `<note>` stays.
 - GeoTIFF: the test area plus stage 1's DEM margin, rounded outward to the cell grid,
   deflate-compressed.
 - LAS/LAZ: every point (all classes) inside the bounds stage 1 requests for the points.
@@ -34,12 +36,15 @@ from typing import Any
 import laspy
 import numpy as np
 import rasterio
+import shapely
 from rasterio.io import DatasetReader
 from rasterio.windows import Window, from_bounds
 from rasterio.windows import bounds as window_bounds
+from shapely.geometry import LineString
+from shapely.geometry.base import BaseGeometry
 
 from mapgen import paths
-from mapgen.build.area import build_area, to_world
+from mapgen.build.area import BuildArea, build_area, to_world
 from mapgen.build.stage1_load import DEM_MARGIN_M, LoadResult, run_load
 from mapgen.config import MapConfig, load_map_config
 from mapgen.geo import BBox
@@ -79,12 +84,18 @@ JP2_SUFFIXES = {".jp2"}
 JP2_QUALITY = 15  # GDAL JP2OpenJPEG QUALITY: compressed size as % of uncompressed
 
 
-def cut_osm(source: Path, dest: Path, footprint_ids: set[str]) -> None:
-    """Keep the footprint ways and relations, their member ways and all their nodes."""
+OSM_CONTENTS = (
+    "building footprints whose centroid is in the test area, and highway ways and water "
+    "features whose line or area meets it, with their member ways and all their nodes"
+)
+
+
+def cut_osm(source: Path, dest: Path, feature_ids: set[str]) -> None:
+    """Keep the given ways and relations ("osm:way/1"), their member ways and all nodes."""
     tree = ET.parse(source)
     root = tree.getroot()
-    ways = {int(i.split("/")[1]) for i in footprint_ids if i.startswith("osm:way/")}
-    relations = {int(i.split("/")[1]) for i in footprint_ids if i.startswith("osm:relation/")}
+    ways = {int(i.split("/")[1]) for i in feature_ids if i.startswith("osm:way/")}
+    relations = {int(i.split("/")[1]) for i in feature_ids if i.startswith("osm:relation/")}
     for element in root.iter("relation"):
         if int(element.attrib["id"]) in relations:
             ways |= {
@@ -109,6 +120,11 @@ def cut_osm(source: Path, dest: Path, footprint_ids: set[str]) -> None:
     tree.write(dest, encoding="UTF-8", xml_declaration=True)
     with dest.open("a", encoding="utf-8") as handle:
         handle.write("\n")
+
+
+def _intersects(geometry: BaseGeometry, area: BuildArea) -> bool:
+    """Whether the geometry (a line or an area) meets the closed area box."""
+    return bool(shapely.intersects(geometry, shapely.box(*area.bounds.as_list())))
 
 
 def snapped_window(src: DatasetReader, bounds: BBox) -> Window:
@@ -259,10 +275,12 @@ def _notice(map_id: str, entries: list[dict[str, Any]]) -> str:
         "",
         f"`uv run python scripts/cut_test_area.py {map_id}` (in `tools/mapgen/`) cut the "
         "downloaded files listed in `download-manifest.json` to what a test-area build reads: "
-        "OSM building footprints whose centroid is in the test area with their ways and nodes "
-        "(contributor metadata removed), the elevation model around the test area, and the "
-        "laser scanning points around those footprints, and the orthophoto over the test "
-        "area (re-encoded lossy to keep it small). Each manifest entry records the "
+        "OSM building footprints whose centroid is in the test area with their ways and nodes, "
+        "and the OSM road ways (`highway`) and water features whose line or area meets the "
+        "test area with all their nodes (contributor metadata removed), the elevation model "
+        "around the test area, the laser scanning points around those footprints, and the "
+        "orthophoto over the test area (re-encoded lossy to keep it small). Each manifest "
+        "entry records the "
         "cut bounds and the checksum of the original file.",
         "",
     ]
@@ -280,6 +298,10 @@ def cut_test_area(config: MapConfig, raw_dir: Path, out_dir: Path) -> dict[str, 
     point_bounds_list = loaded.report["point_cloud"]["bounds_world"]
     point_bounds = BBox(*point_bounds_list) if point_bounds_list else None
     footprint_ids = {f.id for f in loaded.footprints}
+    road_ids = {f"osm:way/{w.osm_id}" for w in loaded.roads if _intersects(LineString(w.xy), area)}
+    water_ids = {
+        w.id for w in loaded.water_areas + loaded.water_lines if _intersects(w.geometry, area)
+    }
 
     if out_dir.exists() and any(out_dir.iterdir()):
         if not (out_dir / MANIFEST_NAME).is_file():
@@ -295,8 +317,13 @@ def cut_test_area(config: MapConfig, raw_dir: Path, out_dir: Path) -> dict[str, 
         dest = out_dir / rel
         suffix = source.suffix.lower()
         if suffix == ".osm":
-            cut_osm(source, dest, footprint_ids)
-            cut: dict[str, Any] = {"footprints": len(footprint_ids)}
+            cut_osm(source, dest, footprint_ids | road_ids | water_ids)
+            cut: dict[str, Any] = {
+                "contents": OSM_CONTENTS,
+                "footprints": len(footprint_ids),
+                "highway_ways": len(road_ids),
+                "water_features": len(water_ids),
+            }
         elif suffix in TIFF_SUFFIXES:
             cut_geotiff(source, dest, dem_bounds)
             cut = {"bounds": dem_bounds.as_list()}

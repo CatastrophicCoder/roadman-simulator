@@ -1,7 +1,9 @@
 """OpenStreetMap through the Overpass API: one request for the whole map bbox.
 
-`load` reads the saved `.osm` XML with the standard library and returns building
-footprints in WGS84 (lon, lat). Ids look like "osm:way/123" and "osm:relation/45".
+`load` reads the saved `.osm` XML once with the standard library and returns, in WGS84
+(lon, lat): building footprints, `highway` ways with their node ids, and water (areas
+and waterway lines, used to find road crossings). Ids look like "osm:way/123" and
+"osm:relation/45".
 """
 
 import email.utils
@@ -15,7 +17,7 @@ from pathlib import Path
 from pydantic import Field
 from shapely import make_valid
 from shapely.errors import GEOSException
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import LineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
@@ -28,11 +30,14 @@ from mapgen.sources.base import (
     DownloadedFile,
     Footprint,
     LoadContext,
+    RoadWay,
     SkippedFeature,
     SourceAdapter,
     SourceData,
     SourceError,
     SourceLoadError,
+    WaterArea,
+    WaterLine,
 )
 
 DEFAULT_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -162,17 +167,30 @@ def _tags(element: ET.Element) -> dict[str, str]:
     return {t.attrib["k"]: t.attrib["v"] for t in element.iter("tag") if "k" in t.attrib}
 
 
-def _parse(path: Path) -> tuple[dict[int, Coord], dict[int, _Way], dict[int, _Relation]]:
+@dataclass
+class OsmData:
+    """One parse of an `.osm` file. `node_tags` only has the nodes that carry tags."""
+
+    nodes: dict[int, Coord]
+    node_tags: dict[int, dict[str, str]]
+    ways: dict[int, _Way]
+    relations: dict[int, _Relation]
+
+
+def parse_osm(path: Path) -> OsmData:
+    """Read every node, way and relation of an `.osm` file (contributor metadata ignored)."""
     nodes: dict[int, Coord] = {}
+    node_tags: dict[int, dict[str, str]] = {}
     ways: dict[int, _Way] = {}
     relations: dict[int, _Relation] = {}
     for _, element in ET.iterparse(path, events=("end",)):
         tag = element.tag
         if tag == "node":
-            nodes[int(element.attrib["id"])] = (
-                float(element.attrib["lon"]),
-                float(element.attrib["lat"]),
-            )
+            node_id = int(element.attrib["id"])
+            nodes[node_id] = (float(element.attrib["lon"]), float(element.attrib["lat"]))
+            tags = _tags(element)
+            if tags:
+                node_tags[node_id] = tags
         elif tag == "way":
             refs = [int(nd.attrib["ref"]) for nd in element.iter("nd")]
             ways[int(element.attrib["id"])] = _Way(refs, _tags(element))
@@ -185,7 +203,7 @@ def _parse(path: Path) -> tuple[dict[int, Coord], dict[int, _Way], dict[int, _Re
         else:
             continue
         element.clear()
-    return nodes, ways, relations
+    return OsmData(nodes, node_tags, ways, relations)
 
 
 def _coords(refs: list[int], nodes: dict[int, Coord]) -> list[Coord] | None:
@@ -294,6 +312,11 @@ def _relation_geometry(
 
 
 def read_osm_buildings(path: Path) -> OsmBuildings:
+    """Building footprints of an `.osm` file (see `osm_buildings`)."""
+    return osm_buildings(parse_osm(path))
+
+
+def osm_buildings(data: OsmData) -> OsmBuildings:
     """Building footprints from closed ways and `type=multipolygon` building relations.
 
     Relations can arrive incomplete (ADR 0005): unclosed rings are dropped, and a relation
@@ -302,7 +325,7 @@ def read_osm_buildings(path: Path) -> OsmBuildings:
     Ways that are the outer ring of a building relation that was built are skipped as
     duplicates.
     """
-    nodes, ways, relations = _parse(path)
+    nodes, ways, relations = data.nodes, data.ways, data.relations
     result = OsmBuildings()
     used_outer_ways: dict[int, int] = {}
 
@@ -359,6 +382,123 @@ def read_osm_buildings(path: Path) -> OsmBuildings:
     return result
 
 
+@dataclass
+class OsmRoads:
+    """`highway` ways in WGS84 (lon, lat), and the ones that could not be read."""
+
+    ways: list[RoadWay] = field(default_factory=list)
+    skipped: list[SkippedFeature] = field(default_factory=list)
+
+
+def read_osm_roads(path: Path) -> OsmRoads:
+    """The `highway` ways of an `.osm` file (see `osm_roads`)."""
+    return osm_roads(parse_osm(path))
+
+
+def osm_roads(data: OsmData) -> OsmRoads:
+    """Every way with a `highway` tag, with its node ids and the tags of its tagged nodes.
+
+    Which ways become roads (class, area, access) is decided by the build from the map's
+    `roads` config. A way with fewer than 2 nodes or with nodes missing from the file is
+    skipped here with a reason.
+    """
+    result = OsmRoads()
+    for way_id, way in sorted(data.ways.items()):
+        if "highway" not in way.tags:
+            continue
+        fid = f"osm:way/{way_id}"
+        coords = _coords(way.refs, data.nodes)
+        if coords is None:
+            result.skipped.append(SkippedFeature(fid, "missing_nodes"))
+            continue
+        if len(way.refs) < 2:
+            result.skipped.append(SkippedFeature(fid, "too_few_nodes"))
+            continue
+        node_tags = {ref: data.node_tags[ref] for ref in way.refs if ref in data.node_tags}
+        result.ways.append(
+            RoadWay(way_id, tuple(way.refs), tuple(coords), WGS84, dict(way.tags), node_tags)
+        )
+    return result
+
+
+@dataclass
+class OsmWater:
+    """Water areas and waterway lines in WGS84, and the water relations left out."""
+
+    areas: list[WaterArea] = field(default_factory=list)
+    lines: list[WaterLine] = field(default_factory=list)
+    skipped: list[SkippedFeature] = field(default_factory=list)
+
+
+def is_water_area(tags: dict[str, str]) -> bool:
+    return tags.get("natural") == "water" or tags.get("waterway") == "riverbank"
+
+
+def read_osm_water(path: Path) -> OsmWater:
+    """The water of an `.osm` file (see `osm_water`)."""
+    return osm_water(parse_osm(path))
+
+
+def osm_water(data: OsmData) -> OsmWater:
+    """Water areas and waterway lines, used to find roads that cross water.
+
+    Areas are closed ways and `type=multipolygon` relations with `natural=water` or
+    `waterway=riverbank`, with rings joined and repaired as for buildings. A relation that
+    can't be closed completely (missing member ways or open rings, typically cut at the
+    bbox edge; ADR 0005) is left out and listed in `skipped`: with a ring missing, an
+    island could look like water. Lines are the other ways with a `waterway` tag, whatever
+    its value; the build picks the values that imply a bridge.
+    """
+    nodes, ways = data.nodes, data.ways
+    result = OsmWater()
+    member_ways: set[int] = set()
+    for rel_id, relation in sorted(data.relations.items()):
+        if not is_water_area(relation.tags):
+            continue
+        fid = f"osm:relation/{rel_id}"
+        if relation.tags.get("type") != "multipolygon":
+            kind = relation.tags.get("type", "")
+            result.skipped.append(SkippedFeature(fid, f"unsupported relation type {kind!r}"))
+            continue
+        try:
+            built = _relation_geometry(relation, ways, nodes)
+        except (GEOSException, ValueError) as exc:
+            result.skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+            continue
+        if built.geometry is None:
+            result.skipped.append(SkippedFeature(fid, built.reason))
+            continue
+        if built.partial:
+            reason = "incomplete multipolygon: " + ", ".join(built.partial)
+            result.skipped.append(SkippedFeature(fid, reason))
+            continue
+        result.areas.append(WaterArea(fid, built.geometry, WGS84, dict(relation.tags)))
+        member_ways |= {ref for kind, ref, _ in relation.members if kind == "way"}
+
+    for way_id, way in sorted(ways.items()):
+        tags = way.tags
+        fid = f"osm:way/{way_id}"
+        if is_water_area(tags):
+            if way_id in member_ways:
+                continue  # a ring of a water relation that was built: already covered
+            closed = len(way.refs) >= 4 and way.refs[0] == way.refs[-1]
+            coords = _coords(way.refs, nodes)
+            if not closed or coords is None:
+                continue
+            try:
+                area = _valid_area(Polygon(coords))
+            except (GEOSException, ValueError):
+                continue
+            if area is not None:
+                result.areas.append(WaterArea(fid, area, WGS84, dict(tags)))
+        elif "waterway" in tags:
+            coords = _coords(way.refs, nodes)
+            if coords is None or len(coords) < 2:
+                continue
+            result.lines.append(WaterLine(fid, LineString(coords), WGS84, dict(tags)))
+    return result
+
+
 class OverpassAdapter(SourceAdapter):
     name = "osm_overpass"
     licence = "ODbL 1.0"
@@ -373,7 +513,10 @@ class OverpassAdapter(SourceAdapter):
                 f"{ctx.map_config.id} --only {ctx.source_name}`"
             )
         try:
-            buildings = read_osm_buildings(path)
+            data = parse_osm(path)  # parsed once for buildings, roads and water
+            buildings = osm_buildings(data)
+            roads = osm_roads(data)
+            water = osm_water(data)
         except (ET.ParseError, KeyError, ValueError) as exc:
             raise SourceLoadError(f"[{ctx.source_name}] cannot read {path}: {exc}") from exc
         return SourceData(
@@ -381,6 +524,11 @@ class OverpassAdapter(SourceAdapter):
             footprints=buildings.footprints,
             skipped=buildings.skipped,
             partial=buildings.partial,
+            roads=roads.ways,
+            roads_skipped=roads.skipped,
+            water_areas=water.areas,
+            water_lines=water.lines,
+            water_skipped=water.skipped,
         )
 
     def attribution(self, retrieved_at: datetime) -> str:

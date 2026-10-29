@@ -2,6 +2,129 @@
 <osm version="0.6" generator="Overpass API 0.7.62.11 87bfad18">
   <note>The data included in this document is from www.openstreetmap.org. The data is made available under ODbL.</note>
   <meta osm_base="2026-10-27T14:32:56Z" />
+  <node id="36688233" lat="60.6316395" lon="23.5182282" />
+  <node id="36688234" lat="60.6283712" lon="23.5214885" />
+  <node id="36688235" lat="60.6278371" lon="23.5218894" />
+  <node id="36688236" lat="60.6268333" lon="23.5217701" />
+  <node id="114778523" lat="60.6302809" lon="23.5143368" />
+  <node id="114778527" lat="60.6305096" lon="23.5157435" />
+  <node id="114778528" lat="60.6309813" lon="23.5182244" />
+  <node id="114778529" lat="60.6313081" lon="23.5197787">
+    <tag k="crossing" v="marked" />
+    <tag k="crossing:island" v="no" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="114778530" lat="60.6319822" lon="23.5221068" />
+  <node id="114779847" lat="60.6310797" lon="23.5187352" />
+  <node id="114805737" lat="60.6287934" lon="23.5144270" />
+  <node id="114806494" lat="60.6301427" lon="23.5133942" />
+  <node id="252479899" lat="60.6249883" lon="23.5193068">
+    <tag k="crossing" v="marked" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="333558768" lat="60.6271430" lon="23.5219244" />
+  <node id="333558770" lat="60.6270549" lon="23.5197273" />
+  <node id="428023075" lat="60.6258339" lon="23.5178636" />
+  <node id="489245325" lat="60.6326088" lon="23.5244298" />
+  <node id="522424588" lat="60.6247149" lon="23.5192460" />
+  <node id="635488817" lat="60.6263288" lon="23.5211988" />
+  <node id="635488819" lat="60.6267123" lon="23.5216601" />
+  <node id="635488820" lat="60.6274174" lon="23.5219726" />
+  <node id="635488822" lat="60.6275496" lon="23.5219686" />
+  <node id="875267112" lat="60.6294316" lon="23.5168978" />
+  <node id="875322318" lat="60.6279701" lon="23.5186345" />
+  <node id="875322336" lat="60.6264551" lon="23.5201575" />
+  <node id="886367197" lat="60.6323859" lon="23.5279797" />
+  <node id="886367204" lat="60.6285376" lon="23.5198487" />
+  <node id="886367206" lat="60.6282183" lon="23.5183530" />
+  <node id="886367209" lat="60.6316200" lon="23.5165513" />
+  <node id="886367264" lat="60.6298114" lon="23.5183275" />
+  <node id="886367265" lat="60.6279476" lon="23.5205502" />
+  <node id="1023172057" lat="60.6302715" lon="23.5195184" />
+  <node id="1023172059" lat="60.6300252" lon="23.5197706" />
+  <node id="1023172083" lat="60.6299825" lon="23.5188953" />
+  <node id="1023172085" lat="60.6300877" lon="23.5193674" />
+  <node id="1023172087" lat="60.6302364" lon="23.5199306" />
+  <node id="1023172090" lat="60.6302936" lon="23.5201185" />
+  <node id="1023172101" lat="60.6311191" lon="23.5232512" />
+  <node id="1023172137" lat="60.6291474" lon="23.5158208" />
+  <node id="1023274193" lat="60.6313449" lon="23.5199846" />
+  <node id="1023274197" lat="60.6306343" lon="23.5207776" />
+  <node id="1023274201" lat="60.6305209" lon="23.5209563" />
+  <node id="1023274203" lat="60.6301305" lon="23.5215928" />
+  <node id="1023274219" lat="60.6291280" lon="23.5237250" />
+  <node id="1081546757" lat="60.6307878" lon="23.5172108" />
+  <node id="1118972296" lat="60.6307900" lon="23.5241997" />
+  <node id="1118972303" lat="60.6309141" lon="23.5224676" />
+  <node id="1118972305" lat="60.6302470" lon="23.5226807" />
+  <node id="1118972306" lat="60.6309069" lon="23.5246462" />
+  <node id="1118972307" lat="60.6299470" lon="23.5219968" />
+  <node id="1118972308" lat="60.6300022" lon="23.5222980" />
+  <node id="1118972310" lat="60.6300813" lon="23.5225705" />
+  <node id="1296278308" lat="60.6318154" lon="23.5257784" />
+  <node id="2631527203" lat="60.6223067" lon="23.5200653" />
+  <node id="2631527220" lat="60.6226955" lon="23.5198954" />
+  <node id="2631527279" lat="60.6232627" lon="23.5197471" />
+  <node id="2631527309" lat="60.6236638" lon="23.5196140" />
+  <node id="2631527372" lat="60.6244194" lon="23.5192945" />
+  <node id="2631527417" lat="60.6248131" lon="23.5192260" />
+  <node id="2631527479" lat="60.6252067" lon="23.5194314" />
+  <node id="2631527503" lat="60.6255164" lon="23.5196634" />
+  <node id="2631527514" lat="60.6257235" lon="23.5199106" />
+  <node id="2631527551" lat="60.6263039" lon="23.5208280" />
+  <node id="2631527597" lat="60.6266619" lon="23.5213103" />
+  <node id="2631527618" lat="60.6269026" lon="23.5215765" />
+  <node id="2631527630" lat="60.6271408" lon="23.5217056">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="crossing:island" v="yes" />
+    <tag k="crossing:markings" v="yes" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="2631527646" lat="60.6274100" lon="23.5217591" />
+  <node id="2631527660" lat="60.6276096" lon="23.5217401" />
+  <node id="2631527683" lat="60.6278465" lon="23.5216868" />
+  <node id="2631527704" lat="60.6281804" lon="23.5214472" />
+  <node id="2631527715" lat="60.6289751" lon="23.5206599" />
+  <node id="2631527717" lat="60.6290712" lon="23.5155319" />
+  <node id="2631527742" lat="60.6300959" lon="23.5136639" />
+  <node id="2631527744" lat="60.6301047" lon="23.5194466" />
+  <node id="2631527748" lat="60.6302609" lon="23.5146273" />
+  <node id="2631527749" lat="60.6304515" lon="23.5157909" />
+  <node id="2631527754" lat="60.6305662" lon="23.5160574" />
+  <node id="2631527759" lat="60.6307049" lon="23.5169952" />
+  <node id="2631527764" lat="60.6309688" lon="23.5183523" />
+  <node id="2631527766" lat="60.6309585" lon="23.5186398" />
+  <node id="2631527778" lat="60.6310444" lon="23.5185508">
+    <tag k="crossing" v="marked" />
+    <tag k="crossing:island" v="yes" />
+    <tag k="crossing:markings" v="yes" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="2631527815" lat="60.6323159" lon="23.5174080" />
+  <node id="2631527850" lat="60.6330116" lon="23.5167881" />
+  <node id="2631527885" lat="60.6334443" lon="23.5164077" />
+  <node id="2631527886" lat="60.6334984" lon="23.5163393" />
+  <node id="3547594081" lat="60.6301848" lon="23.5131346" />
+  <node id="3547594082" lat="60.6302244" lon="23.5133443">
+    <tag k="crossing" v="marked" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="3547594084" lat="60.6302906" lon="23.5137065" />
+  <node id="3547594096" lat="60.6305447" lon="23.5155419" />
+  <node id="3547594098" lat="60.6306169" lon="23.5160251" />
+  <node id="3547594106" lat="60.6308452" lon="23.5171635" />
+  <node id="3547594110" lat="60.6310647" lon="23.5182429" />
+  <node id="3547594113" lat="60.6311417" lon="23.5184692" />
+  <node id="3550952612" lat="60.6291465" lon="23.5221080">
+    <tag k="highway" v="turning_circle" />
+  </node>
+  <node id="3550952617" lat="60.6293882" lon="23.5231534" />
+  <node id="4597367932" lat="60.6286761" lon="23.5204371" />
+  <node id="4597367933" lat="60.6295561" lon="23.5185287" />
+  <node id="4597367934" lat="60.6305033" lon="23.5176274" />
+  <node id="4597367936" lat="60.6274819" lon="23.5191855" />
+  <node id="4597367975" lat="60.6288902" lon="23.5148460" />
+  <node id="4597368469" lat="60.6265928" lon="23.5202124" />
   <node id="4597368486" lat="60.6287504" lon="23.5189598" />
   <node id="4597368487" lat="60.6286353" lon="23.5191006" />
   <node id="4597368488" lat="60.6286629" lon="23.5191945" />
@@ -226,12 +349,152 @@
   <node id="4597370169" lat="60.6311826" lon="23.5220951" />
   <node id="4597370170" lat="60.6312797" lon="23.5220023" />
   <node id="4597370171" lat="60.6311810" lon="23.5215731" />
+  <node id="5331218229" lat="60.6302625" lon="23.5135567" />
+  <node id="5331218230" lat="60.6301706" lon="23.5136054">
+    <tag k="crossing" v="marked" />
+    <tag k="crossing:markings" v="yes" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="5331218237" lat="60.6258590" lon="23.5179628">
+    <tag k="crossing" v="marked" />
+    <tag k="crossing:island" v="no" />
+    <tag k="highway" v="crossing" />
+    <tag k="kerb" v="lowered" />
+  </node>
+  <node id="5331218244" lat="60.6251376" lon="23.5193920" />
+  <node id="6232457057" lat="60.6225440" lon="23.5199946" />
+  <node id="6232457058" lat="60.6243548" lon="23.5193218">
+    <tag k="bus" v="yes" />
+    <tag k="highway" v="bus_stop" />
+    <tag k="name" v="Antintie E" />
+    <tag k="public_transport" v="platform" />
+    <tag k="ref:findr" v="231591" />
+  </node>
+  <node id="6232457073" lat="60.6288386" lon="23.5146225">
+    <tag k="crossing" v="marked" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="6232457420" lat="60.6311775" lon="23.5186451">
+    <tag k="crossing" v="marked" />
+    <tag k="crossing:island" v="yes" />
+    <tag k="crossing:markings" v="yes" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="6232457421" lat="60.6313113" lon="23.5193654" />
+  <node id="6232457422" lat="60.6313295" lon="23.5195883" />
+  <node id="6232457423" lat="60.6313599" lon="23.5197281" />
+  <node id="6232457424" lat="60.6303109" lon="23.5212294" />
+  <node id="6232571688" lat="60.6265167" lon="23.5202461" />
+  <node id="6232571707" lat="60.6283929" lon="23.5349551">
+    <tag k="crossing" v="marked" />
+    <tag k="crossing:markings" v="yes" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="6259565610" lat="60.6319256" lon="23.5284869">
+    <tag k="bus" v="yes" />
+    <tag k="direction" v="323" />
+    <tag k="fixme" v="Position_estimated" />
+    <tag k="highway" v="bus_stop" />
+    <tag k="name" v="Joensuun koulu" />
+    <tag k="name:fi" v="Joensuun koulu" />
+    <tag k="note" v="Virtuaalipysäkki, pysäkkiä ei merkitty maastoon" />
+    <tag k="pole" v="no" />
+    <tag k="public_transport" v="platform" />
+    <tag k="ref:findr" v="310954" />
+    <tag k="source" v="Digiroad.fi" />
+  </node>
+  <node id="7597708528" lat="60.6265439" lon="23.5214777" />
+  <node id="7597708529" lat="60.6269754" lon="23.5218519" />
+  <node id="7597708530" lat="60.6272780" lon="23.5219605" />
+  <node id="7597708531" lat="60.6277082" lon="23.5219324" />
+  <node id="7597708532" lat="60.6279884" lon="23.5217983" />
+  <node id="7597708533" lat="60.6281351" lon="23.5216977" />
+  <node id="7597708534" lat="60.6300512" lon="23.5198825" />
+  <node id="7597708535" lat="60.6302996" lon="23.5196539" />
+  <node id="7597708536" lat="60.6320828" lon="23.5178111" />
+  <node id="7597708537" lat="60.6321091" lon="23.5179694" />
+  <node id="7597708538" lat="60.6312088" lon="23.5188214">
+    <tag k="crossing" v="marked" />
+    <tag k="crossing:island" v="yes" />
+    <tag k="crossing:markings" v="yes" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="7597708542" lat="60.6326366" lon="23.5175128" />
+  <node id="7597708543" lat="60.6311166" lon="23.5189019" />
+  <node id="7597708544" lat="60.6298939" lon="23.5200273" />
+  <node id="7597708545" lat="60.6296808" lon="23.5201782" />
+  <node id="7597708546" lat="60.6298650" lon="23.5199355" />
+  <node id="7597708547" lat="60.6311535" lon="23.5191134" />
+  <node id="7597708548" lat="60.6309200" lon="23.5188827" />
   <node id="9523461051" lat="60.6311800" lon="23.5197951" />
   <node id="9523461052" lat="60.6310482" lon="23.5194133" />
   <node id="9523461053" lat="60.6309667" lon="23.5197681" />
   <node id="9523461054" lat="60.6308925" lon="23.5196817" />
   <node id="9523461055" lat="60.6309219" lon="23.5197800" />
   <node id="9523461056" lat="60.6309241" lon="23.5197116" />
+  <node id="11097480487" lat="60.6261031" lon="23.5188614" />
+  <node id="11097480491" lat="60.6269278" lon="23.5198444" />
+  <node id="11097480493" lat="60.6266388" lon="23.5201579" />
+  <node id="11097480495" lat="60.6267983" lon="23.5199867" />
+  <node id="11495455691" lat="60.6284201" lon="23.5348946" />
+  <node id="11495455692" lat="60.6284591" lon="23.5348867" />
+  <node id="11495455693" lat="60.6284890" lon="23.5348655" />
+  <node id="11495455694" lat="60.6298146" lon="23.5323295" />
+  <node id="11495455695" lat="60.6304021" lon="23.5312563" />
+  <node id="11495455696" lat="60.6317407" lon="23.5288793" />
+  <node id="11495455697" lat="60.6319720" lon="23.5284076" />
+  <node id="11495455698" lat="60.6320812" lon="23.5282989" />
+  <node id="11495455699" lat="60.6322968" lon="23.5280079" />
+  <node id="11495455700" lat="60.6323269" lon="23.5279334" />
+  <node id="11495455701" lat="60.6323190" lon="23.5278137" />
+  <node id="11495455702" lat="60.6310675" lon="23.5231111" />
+  <node id="11495455703" lat="60.6310424" lon="23.5230454" />
+  <node id="11495455704" lat="60.6310087" lon="23.5230278" />
+  <node id="11495455705" lat="60.6308555" lon="23.5231636" />
+  <node id="11495455706" lat="60.6306937" lon="23.5233344" />
+  <node id="11495455707" lat="60.6306565" lon="23.5233359" />
+  <node id="11495455708" lat="60.6303887" lon="23.5231738" />
+  <node id="11495455709" lat="60.6305579" lon="23.5232763">
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="11495455710" lat="60.6305059" lon="23.5310154">
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="11495455711" lat="60.6298725" lon="23.5322237">
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="11495455712" lat="60.6293119" lon="23.5332911">
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="11495455713" lat="60.6304862" lon="23.5229910" />
+  <node id="11495455714" lat="60.6301333" lon="23.5226422" />
+  <node id="12609573478" lat="60.6298863" lon="23.5218243" />
+  <node id="12609573479" lat="60.6298383" lon="23.5216566" />
+  <node id="12609573480" lat="60.6297538" lon="23.5212887" />
+  <node id="12609573481" lat="60.6303865" lon="23.5225156" />
+  <node id="12609573482" lat="60.6304202" lon="23.5224994" />
+  <node id="12609573483" lat="60.6305987" lon="23.5226167" />
+  <node id="12609573484" lat="60.6306363" lon="23.5226046" />
+  <node id="12609573485" lat="60.6308806" lon="23.5223390" />
+  <node id="12609573486" lat="60.6307216" lon="23.5225119" />
+  <node id="12609573487" lat="60.6308790" lon="23.5231428" />
+  <node id="12609573488" lat="60.6307581" lon="23.5226584">
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="12802550119" lat="60.6305788" lon="23.5309118" />
+  <node id="12802550125" lat="60.6294996" lon="23.5329321" />
+  <node id="13536408806" lat="60.6318640" lon="23.5180170" />
+  <node id="13536731878" lat="60.6316279" lon="23.5209270" />
+  <node id="13697462645" lat="60.6304795" lon="23.5159243" />
+  <node id="13697462646" lat="60.6305897" lon="23.5158431" />
+  <node id="13697462647" lat="60.6305349" lon="23.5158835">
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="13697462648" lat="60.6304217" lon="23.5156091" />
+  <node id="13697462649" lat="60.6304824" lon="23.5155760">
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="13697462652" lat="60.6304603" lon="23.5149347" />
   <node id="14153286609" lat="60.6290841" lon="23.5180626" />
   <node id="14153286610" lat="60.6291023" lon="23.5181341" />
   <node id="14153286611" lat="60.6291508" lon="23.5180830" />
@@ -248,6 +511,259 @@
   <node id="14153286787" lat="60.6290977" lon="23.5213481" />
   <node id="14153286788" lat="60.6291233" lon="23.5213261" />
   <node id="14153286789" lat="60.6291099" lon="23.5212612" />
+  <way id="12581592">
+    <nd ref="114806494" />
+    <nd ref="5331218230" />
+    <nd ref="114778523" />
+    <nd ref="13697462649" />
+    <nd ref="114778527" />
+    <nd ref="13697462647" />
+    <nd ref="2631527754" />
+    <nd ref="1081546757" />
+    <nd ref="114778528" />
+    <nd ref="2631527778" />
+    <nd ref="114779847" />
+    <tag k="highway" v="tertiary" />
+    <tag k="maxspeed" v="40" />
+    <tag k="name" v="Hämeentie" />
+    <tag k="name:fi" v="Hämeentie" />
+  </way>
+  <way id="12581701">
+    <nd ref="114779847" />
+    <nd ref="7597708543" />
+    <nd ref="7597708547" />
+    <nd ref="114778529" />
+    <nd ref="1023274193" />
+    <nd ref="13536731878" />
+    <nd ref="114778530" />
+    <nd ref="489245325" />
+    <tag k="highway" v="tertiary" />
+    <tag k="lanes" v="2" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Hämeen härkätie" />
+    <tag k="name:fi" v="Hämeen härkätie" />
+    <tag k="ref" v="2802" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="73975182">
+    <nd ref="428023075" />
+    <nd ref="5331218237" />
+    <nd ref="11097480487" />
+    <nd ref="875322336" />
+    <nd ref="6232571688" />
+    <nd ref="4597368469" />
+    <nd ref="11097480493" />
+    <nd ref="11097480495" />
+    <nd ref="11097480491" />
+    <nd ref="333558770" />
+    <nd ref="4597367936" />
+    <nd ref="875322318" />
+    <nd ref="886367206" />
+    <nd ref="875267112" />
+    <nd ref="2631527749" />
+    <nd ref="114778527" />
+    <tag k="highway" v="residential" />
+    <tag k="lane_markings" v="no" />
+    <tag k="lit" v="yes" />
+    <tag k="maxspeed" v="40" />
+    <tag k="name" v="Urheilutie" />
+    <tag k="name:fi" v="Urheilutie" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="75101399">
+    <nd ref="114805737" />
+    <nd ref="6232457073" />
+    <nd ref="4597367975" />
+    <nd ref="2631527717" />
+    <nd ref="1023172137" />
+    <nd ref="875267112" />
+    <nd ref="886367264" />
+    <nd ref="1023172083" />
+    <tag k="highway" v="residential" />
+    <tag k="maxspeed" v="40" />
+    <tag k="name" v="Heikintie" />
+    <tag k="name:fi" v="Heikintie" />
+  </way>
+  <way id="75101402">
+    <nd ref="4597367932" />
+    <nd ref="886367204" />
+    <nd ref="886367206" />
+    <tag k="highway" v="residential" />
+    <tag k="maxspeed" v="40" />
+    <tag k="name" v="Oikotie" />
+    <tag k="name:fi" v="Oikotie" />
+  </way>
+  <way id="75101407">
+    <nd ref="1081546757" />
+    <nd ref="3547594106" />
+    <nd ref="886367209" />
+    <tag k="highway" v="service" />
+  </way>
+  <way id="75101443">
+    <nd ref="886367265" />
+    <nd ref="886367204" />
+    <nd ref="4597367933" />
+    <nd ref="886367264" />
+    <nd ref="4597367934" />
+    <tag k="highway" v="residential" />
+    <tag k="maxspeed" v="40" />
+    <tag k="name" v="Peltotie" />
+    <tag k="name:fi" v="Peltotie" />
+  </way>
+  <way id="88027326">
+    <nd ref="1023172057" />
+    <nd ref="1023172059" />
+    <tag k="bridge" v="yes" />
+    <tag k="highway" v="primary" />
+    <tag k="lanes" v="1" />
+    <tag k="layer" v="1" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="oneway" v="yes" />
+    <tag k="ref" v="52" />
+  </way>
+  <way id="88027328">
+    <nd ref="7597708545" />
+    <nd ref="36688234" />
+    <nd ref="7597708533" />
+    <nd ref="7597708532" />
+    <nd ref="36688235" />
+    <nd ref="7597708531" />
+    <nd ref="635488822" />
+    <nd ref="635488820" />
+    <nd ref="7597708530" />
+    <nd ref="333558768" />
+    <nd ref="7597708529" />
+    <nd ref="36688236" />
+    <nd ref="635488819" />
+    <nd ref="7597708528" />
+    <nd ref="635488817" />
+    <tag k="highway" v="primary" />
+    <tag k="lanes" v="2" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="ref" v="52" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="88027331">
+    <nd ref="1023172083" />
+    <nd ref="1023172085" />
+    <nd ref="2631527744" />
+    <nd ref="1023172087" />
+    <nd ref="1023172090" />
+    <tag k="highway" v="cycleway" />
+    <tag k="name" v="Heikintie" />
+    <tag k="name:fi" v="Heikintie" />
+  </way>
+  <way id="88027332">
+    <nd ref="1023274201" />
+    <nd ref="12609573485" />
+    <nd ref="1118972303" />
+    <nd ref="1023172101" />
+    <nd ref="1296278308" />
+    <nd ref="886367197" />
+    <tag k="highway" v="residential" />
+    <tag k="maxspeed" v="30" />
+    <tag k="name" v="Heikintie" />
+    <tag k="name:fi" v="Heikintie" />
+  </way>
+  <way id="88040777">
+    <nd ref="1023274201" />
+    <nd ref="6232457424" />
+    <nd ref="1023274203" />
+    <nd ref="1118972307" />
+    <nd ref="3550952617" />
+    <nd ref="1023274219" />
+    <tag k="highway" v="residential" />
+    <tag k="maxspeed" v="30" />
+    <tag k="name" v="Rengastie" />
+    <tag k="name:fi" v="Rengastie" />
+  </way>
+  <way id="96601186">
+    <nd ref="1118972303" />
+    <nd ref="12609573488" />
+    <nd ref="11495455713" />
+    <nd ref="11495455709" />
+    <nd ref="1118972296" />
+    <nd ref="1118972306" />
+    <tag k="highway" v="service" />
+  </way>
+  <way id="96601191">
+    <nd ref="1118972307" />
+    <nd ref="1118972308" />
+    <nd ref="1118972310" />
+    <nd ref="11495455714" />
+    <nd ref="1118972305" />
+    <tag k="highway" v="cycleway" />
+  </way>
+  <way id="257670710">
+    <nd ref="2631527203" />
+    <nd ref="6232457057" />
+    <nd ref="2631527220" />
+    <nd ref="2631527279" />
+    <nd ref="2631527309" />
+    <nd ref="6232457058" />
+    <nd ref="2631527372" />
+    <nd ref="522424588" />
+    <nd ref="2631527417" />
+    <nd ref="252479899" />
+    <nd ref="5331218244" />
+    <nd ref="2631527479" />
+    <nd ref="2631527503" />
+    <nd ref="2631527514" />
+    <nd ref="2631527551" />
+    <nd ref="2631527597" />
+    <nd ref="2631527618" />
+    <nd ref="2631527630" />
+    <nd ref="2631527646" />
+    <nd ref="2631527660" />
+    <nd ref="2631527683" />
+    <nd ref="2631527704" />
+    <nd ref="2631527715" />
+    <nd ref="2631527744" />
+    <nd ref="2631527766" />
+    <nd ref="2631527778" />
+    <nd ref="3547594113" />
+    <nd ref="2631527815" />
+    <nd ref="2631527850" />
+    <nd ref="2631527885" />
+    <nd ref="2631527886" />
+    <tag k="bicycle" v="designated" />
+    <tag k="foot" v="designated" />
+    <tag k="highway" v="cycleway" />
+    <tag k="segregated" v="no" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="257670721">
+    <nd ref="2631527742" />
+    <nd ref="2631527748" />
+    <nd ref="13697462648" />
+    <nd ref="2631527749" />
+    <nd ref="13697462645" />
+    <nd ref="2631527759" />
+    <nd ref="2631527764" />
+    <nd ref="2631527766" />
+    <tag k="foot" v="yes" />
+    <tag k="highway" v="cycleway" />
+  </way>
+  <way id="348710029">
+    <nd ref="114778529" />
+    <nd ref="6232457423" />
+    <tag k="foot" v="yes" />
+    <tag k="highway" v="cycleway" />
+    <tag k="segregated" v="no" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="349173727">
+    <nd ref="3550952612" />
+    <nd ref="3550952617" />
+    <tag k="highway" v="residential" />
+    <tag k="maxspeed" v="30" />
+    <tag k="name" v="Rengastie" />
+    <tag k="name:fi" v="Rengastie" />
+  </way>
   <way id="464652823">
     <nd ref="4597368489" />
     <nd ref="4597368488" />
@@ -821,6 +1337,197 @@
     <tag k="addr:street" v="Heikintie" />
     <tag k="building" v="yes" />
     <tag k="source" v="MML2017" />
+  </way>
+  <way id="665791672">
+    <nd ref="6232457423" />
+    <nd ref="6232457422" />
+    <nd ref="6232457421" />
+    <nd ref="7597708538" />
+    <nd ref="6232457420" />
+    <nd ref="3547594113" />
+    <nd ref="3547594110" />
+    <nd ref="3547594106" />
+    <nd ref="3547594098" />
+    <nd ref="13697462646" />
+    <nd ref="3547594096" />
+    <nd ref="13697462652" />
+    <nd ref="3547594084" />
+    <nd ref="5331218229" />
+    <nd ref="3547594082" />
+    <nd ref="3547594081" />
+    <tag k="foot" v="yes" />
+    <tag k="highway" v="cycleway" />
+  </way>
+  <way id="813370683">
+    <nd ref="7597708534" />
+    <nd ref="7597708535" />
+    <tag k="bridge" v="yes" />
+    <tag k="highway" v="primary" />
+    <tag k="lanes" v="1" />
+    <tag k="layer" v="1" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="oneway" v="yes" />
+    <tag k="ref" v="52" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="813370684">
+    <nd ref="1023172059" />
+    <nd ref="7597708546" />
+    <nd ref="7597708545" />
+    <tag k="highway" v="primary" />
+    <tag k="lanes" v="1" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="oneway" v="yes" />
+    <tag k="ref" v="52" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="813370685">
+    <nd ref="7597708543" />
+    <nd ref="7597708538" />
+    <nd ref="7597708537" />
+    <nd ref="7597708542" />
+    <tag k="highway" v="primary" />
+    <tag k="lanes" v="1" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="oneway" v="yes" />
+    <tag k="ref" v="52" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="813370686">
+    <nd ref="7597708536" />
+    <nd ref="13536408806" />
+    <nd ref="36688233" />
+    <nd ref="6232457420" />
+    <nd ref="114779847" />
+    <tag k="highway" v="primary" />
+    <tag k="lanes" v="2" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="oneway" v="yes" />
+    <tag k="placement" v="middle_of:2" />
+    <tag k="ref" v="52" />
+    <tag k="surface" v="asphalt" />
+    <tag k="turn:lanes" v="left|through;right" />
+  </way>
+  <way id="813373047">
+    <nd ref="7597708545" />
+    <nd ref="7597708544" />
+    <nd ref="7597708534" />
+    <tag k="highway" v="primary" />
+    <tag k="lanes" v="1" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="oneway" v="yes" />
+    <tag k="ref" v="52" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="813373048">
+    <nd ref="114779847" />
+    <nd ref="7597708548" />
+    <nd ref="1023172057" />
+    <tag k="highway" v="primary" />
+    <tag k="lanes" v="1" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="oneway" v="yes" />
+    <tag k="ref" v="52" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="813373049">
+    <nd ref="7597708535" />
+    <nd ref="7597708543" />
+    <tag k="highway" v="primary" />
+    <tag k="maxspeed" v="50" />
+    <tag k="name" v="Jokioistentie" />
+    <tag k="name:fi" v="Jokioistentie" />
+    <tag k="oneway" v="yes" />
+    <tag k="placement" v="middle_of:2" />
+    <tag k="ref" v="52" />
+    <tag k="turn:lanes" v="left|through;right" />
+  </way>
+  <way id="1237618447">
+    <nd ref="6232571707" />
+    <nd ref="11495455691" />
+    <nd ref="11495455692" />
+    <nd ref="11495455693" />
+    <nd ref="11495455712" />
+    <nd ref="12802550125" />
+    <nd ref="11495455694" />
+    <nd ref="11495455711" />
+    <nd ref="11495455695" />
+    <nd ref="11495455710" />
+    <nd ref="12802550119" />
+    <nd ref="11495455696" />
+    <nd ref="6259565610" />
+    <nd ref="11495455697" />
+    <nd ref="11495455698" />
+    <nd ref="11495455699" />
+    <nd ref="11495455700" />
+    <nd ref="11495455701" />
+    <nd ref="11495455702" />
+    <nd ref="11495455703" />
+    <nd ref="11495455704" />
+    <nd ref="12609573487" />
+    <nd ref="11495455705" />
+    <nd ref="11495455706" />
+    <nd ref="11495455707" />
+    <nd ref="11495455709" />
+    <nd ref="11495455708" />
+    <nd ref="1118972305" />
+    <tag k="bicycle" v="designated" />
+    <tag k="foot" v="designated" />
+    <tag k="highway" v="cycleway" />
+  </way>
+  <way id="1361934294">
+    <nd ref="1118972307" />
+    <nd ref="12609573478" />
+    <nd ref="12609573479" />
+    <nd ref="12609573480" />
+    <tag k="highway" v="service" />
+    <tag k="maxspeed" v="20" />
+    <tag k="service" v="driveway" />
+  </way>
+  <way id="1361934295">
+    <nd ref="1118972305" />
+    <nd ref="12609573481" />
+    <nd ref="12609573482" />
+    <nd ref="12609573483" />
+    <nd ref="12609573484" />
+    <nd ref="12609573486" />
+    <nd ref="12609573485" />
+    <tag k="highway" v="footway" />
+  </way>
+  <way id="1361934296">
+    <nd ref="12609573486" />
+    <nd ref="12609573488" />
+    <nd ref="12609573487" />
+    <tag k="highway" v="footway" />
+  </way>
+  <way id="1447365981">
+    <nd ref="1023172090" />
+    <nd ref="1023274201" />
+    <tag k="highway" v="residential" />
+    <tag k="maxspeed" v="30" />
+    <tag k="name" v="Heikintie" />
+    <tag k="name:fi" v="Heikintie" />
+  </way>
+  <way id="1447365982">
+    <nd ref="1023274193" />
+    <nd ref="1023274197" />
+    <nd ref="1023274201" />
+    <tag k="highway" v="residential" />
+    <tag k="maxspeed" v="30" />
+    <tag k="name" v="Rengastie" />
+    <tag k="name:fi" v="Rengastie" />
   </way>
   <way id="1555933364">
     <nd ref="14153286612" />

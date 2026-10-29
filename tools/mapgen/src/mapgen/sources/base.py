@@ -12,7 +12,7 @@ from typing import Any, ClassVar, Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 from rasterio.transform import Affine
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import LineString, MultiPolygon, Polygon
 
 from mapgen.config import MapConfig, SourceConfig
 from mapgen.geo import BBox
@@ -21,7 +21,7 @@ from mapgen.http import HttpClient
 FileOrigin = Literal["downloaded", "manual"]
 
 # What a source can load. The build picks enabled sources by capability, never by name.
-OSM_VECTOR = "osm_vector"  # OpenStreetMap-style vector features (building footprints for now)
+OSM_VECTOR = "osm_vector"  # OpenStreetMap-style vector features (buildings, roads, water)
 ELEVATION = "elevation"  # a terrain elevation raster
 BUILDINGS_3D = "buildings_3d"  # building footprints with measured heights
 POINT_CLOUD = "point_cloud"  # classified lidar points (building heights)
@@ -198,6 +198,45 @@ class Footprint:
 
 
 @dataclass(frozen=True)
+class RoadWay:
+    """A `highway` way in `crs` coordinates, with its OSM node ids.
+
+    `coords[i]` is the position of node `node_ids[i]`. `node_tags` holds the tags of those
+    of its nodes that have any (e.g. `ford=yes`).
+    """
+
+    osm_id: int
+    node_ids: tuple[int, ...]
+    coords: tuple[tuple[float, float], ...]
+    crs: str
+    tags: Mapping[str, str] = field(default_factory=dict)
+    node_tags: Mapping[int, Mapping[str, str]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WaterArea:
+    """A water area (`natural=water`, `waterway=riverbank`): a closed way or a multipolygon.
+
+    `id` is "osm:way/<n>" or "osm:relation/<n>".
+    """
+
+    id: str
+    geometry: Polygon | MultiPolygon
+    crs: str
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WaterLine:
+    """A way with a `waterway` tag that isn't an area (a river, stream, ditch, ...)."""
+
+    id: str
+    geometry: LineString
+    crs: str
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SkippedFeature:
     """A feature that was not loaded, and why."""
 
@@ -317,6 +356,12 @@ class SourceData:
     imagery: Imagery | None = None
     skipped: list[SkippedFeature] = field(default_factory=list)
     partial: list[SkippedFeature] = field(default_factory=list)  # built, but incomplete
+    roads: list[RoadWay] = field(default_factory=list)
+    roads_skipped: list[SkippedFeature] = field(default_factory=list)  # e.g. missing nodes
+    water_areas: list[WaterArea] = field(default_factory=list)
+    water_lines: list[WaterLine] = field(default_factory=list)
+    # Water relations left out (no closed rings, missing members; ADR 0005), with reasons.
+    water_skipped: list[SkippedFeature] = field(default_factory=list)
 
 
 @dataclass

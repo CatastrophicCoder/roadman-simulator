@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "road-graph-v1.schema.json",
+  "$defs": {
+    "RoadEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "osm:way/<id>#<n>, n = the edge's index along the way",
+          "title": "Id",
+          "type": "string"
+        },
+        "from": {
+          "title": "From",
+          "type": "string"
+        },
+        "to": {
+          "title": "To",
+          "type": "string"
+        },
+        "class": {
+          "title": "Class",
+          "type": "string"
+        },
+        "drivable": {
+          "title": "Drivable",
+          "type": "boolean"
+        },
+        "drivable_source": {
+          "enum": [
+            "osm",
+            "default"
+          ],
+          "title": "Drivable Source",
+          "type": "string"
+        },
+        "walkable": {
+          "title": "Walkable",
+          "type": "boolean"
+        },
+        "walkable_source": {
+          "enum": [
+            "osm",
+            "default"
+          ],
+          "title": "Walkable Source",
+          "type": "string"
+        },
+        "lanes": {
+          "minimum": 1,
+          "title": "Lanes",
+          "type": "integer"
+        },
+        "lanes_source": {
+          "enum": [
+            "osm",
+            "default"
+          ],
+          "title": "Lanes Source",
+          "type": "string"
+        },
+        "speed_kmh": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "null iff not drivable",
+          "title": "Speed Kmh"
+        },
+        "speed_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "osm",
+                "default"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Speed Source"
+        },
+        "width_m": {
+          "exclusiveMinimum": 0,
+          "title": "Width M",
+          "type": "number"
+        },
+        "width_source": {
+          "enum": [
+            "osm",
+            "default"
+          ],
+          "title": "Width Source",
+          "type": "string"
+        },
+        "oneway": {
+          "description": "true: only from -> to is allowed for driving",
+          "title": "Oneway",
+          "type": "boolean"
+        },
+        "bridge": {
+          "title": "Bridge",
+          "type": "boolean"
+        },
+        "bridge_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "osm",
+                "inferred"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Bridge Source"
+        },
+        "tunnel": {
+          "title": "Tunnel",
+          "type": "boolean"
+        },
+        "layer": {
+          "title": "Layer",
+          "type": "integer"
+        },
+        "length_m": {
+          "description": "3D length of the polyline",
+          "minimum": 0,
+          "title": "Length M",
+          "type": "number"
+        },
+        "osm_way": {
+          "title": "Osm Way",
+          "type": "integer"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        },
+        "name_sv": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name Sv"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ref"
+        },
+        "points": {
+          "items": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 2,
+          "title": "Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "from",
+        "to",
+        "class",
+        "drivable",
+        "drivable_source",
+        "walkable",
+        "walkable_source",
+        "lanes",
+        "lanes_source",
+        "speed_kmh",
+        "speed_source",
+        "width_m",
+        "width_source",
+        "oneway",
+        "bridge",
+        "bridge_source",
+        "tunnel",
+        "layer",
+        "length_m",
+        "osm_way",
+        "name",
+        "name_sv",
+        "ref",
+        "points"
+      ],
+      "title": "RoadEdge",
+      "type": "object"
+    },
+    "RoadNode": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "osm:node/<id>, or cut:way/<id>:<n> for an area_edge cut",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "junction",
+            "joint",
+            "dead_end",
+            "area_edge"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "position": {
+          "description": "[x, y, z] in Godot local metres",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Position",
+          "type": "array"
+        },
+        "osm_node": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Osm Node"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "position",
+        "osm_node"
+      ],
+      "title": "RoadNode",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "map_id": {
+      "title": "Map Id",
+      "type": "string"
+    },
+    "area": {
+      "enum": [
+        "full",
+        "test"
+      ],
+      "title": "Area",
+      "type": "string"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/RoadNode"
+      },
+      "title": "Nodes",
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/RoadEdge"
+      },
+      "title": "Edges",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "map_id",
+    "area",
+    "nodes",
+    "edges"
+  ],
+  "title": "RoadGraphDocument",
+  "type": "object"
+}

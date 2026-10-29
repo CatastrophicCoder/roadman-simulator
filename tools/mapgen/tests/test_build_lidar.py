@@ -282,7 +282,7 @@ def test_loader_drops_ground_points(lidar_build: LidarBuild) -> None:
 
 
 def test_lidar_build_passes_the_shared_pack_checks(lidar_build: LidarBuild) -> None:
-    summary = check_pack(lidar_build.pack, lidar_build.work)
+    summary = check_pack(lidar_build.pack, lidar_build.work, lidar_build.config.roads)
     assert summary.tile_count == 4
 
 
@@ -535,9 +535,10 @@ def test_ac2_fixture_report_lists_sources_and_every_reason(
 
 
 def test_ac12_fixture_pack_passes_checks_and_credits_lidar(
-    somero_fixture_build: SomeroBuild,
+    somero_fixture_build: SomeroBuild, tmp_path: Path
 ) -> None:
-    check_pack(somero_fixture_build.pack, somero_fixture_build.work)
+    roads = TmpRepo(tmp_path).load(_fixture_data()).roads  # built as testtown
+    check_pack(somero_fixture_build.pack, somero_fixture_build.work, roads)
     validate_manifest_file(somero_fixture_build.pack / "manifest.json")
     datasets = {c["dataset"] for c in _credits(somero_fixture_build.pack)}
     assert datasets == {"Elevation model 2 m", LIDAR_DATASET, "OpenStreetMap", "Orthophoto"}
