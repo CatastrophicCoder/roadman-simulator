@@ -50,14 +50,14 @@ CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull requ
 
 ## Working with Claude Code
 
-Each feature goes through the loop in `docs/project-outline.md` ("Claude Code workflow per feature"): spec, plan, implement, verify, playtest, review and commit.
+Each feature goes through the loop in `docs/project-outline.md` ("Claude Code workflow per feature"): spec, plan, implement, verify, review and commit, then playtest.
 
 **Slash commands** (`.claude/commands/`)
 
 | Command | What it does |
 | --- | --- |
 | `/spec <feature>` | Drafts `docs/specs/<feature>.md` (goal, behaviour, acceptance criteria, test ideas, open questions). No code. Status stays `Draft` until the user approves it. |
-| `/implement <spec>` | Implements an `Approved` spec with tests: plan, subagents, `/verify`, reviewer. Doesn't commit. |
+| `/implement <spec>` | Implements an `Approved` spec with tests: plan, subagents, `/verify`, reviewer, then commits (no push). |
 | `/verify` | Runs `.claude/scripts/verify.sh`: dotnet build, test and format check, pytest and ruff, headless Godot import, gdUnit4, an exported Windows build check, screenshots. Reports PASS, FAIL or N/A (not yet available) per step. |
 | `/regen-map <map-id>` | Runs `.claude/scripts/regen-map.sh`: `uv run mapgen build <map-id>`, then the headless Godot import. |
 

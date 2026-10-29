@@ -411,14 +411,14 @@ For itch.io hobby releases, unsigned builds with install instructions on the gam
 
 ## Claude Code workflow per feature
 
-Each feature goes through the same loop: spec, plan, implement, verify, playtest, commit. You decide at the spec and playtest steps; Claude Code does the rest.
+Each feature goes through the same loop: spec, plan, implement, verify, review and commit, playtest. You decide at the spec and playtest steps; Claude Code does the rest.
 
 1. **Spec:** `/spec traffic-lights` drafts `docs/specs/traffic-lights.md` with goal, behaviour, acceptance criteria and test ideas. You edit and approve it.
 2. **Plan:** Claude Code proposes the change in plan mode (files, scenes, signals, tests). Check it against `docs/architecture.md` before approving.
 3. **Implement:** the relevant subagent writes code and tests. Keep tasks to something one session can finish and verify.
 4. **Verify:** `/verify` runs tests, lint, a headless run and screenshots. Claude Code fixes failures before reporting done.
-5. **Playtest:** you play the feature and give concrete feedback ("brakes lock too easily above 60 km/h").
-6. **Review and commit:** the `reviewer` subagent checks the diff against conventions, then commit with a message referencing the spec.
+5. **Review and commit:** the `reviewer` subagent checks the diff against conventions, Claude Code fixes its findings and commits with a message referencing the spec.
+6. **Playtest:** you play the feature and give concrete feedback ("brakes lock too easily above 60 km/h"); fixes go into follow-up commits.
 
 **Practical tips for Godot with Claude Code**
 

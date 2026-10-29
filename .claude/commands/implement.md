@@ -11,4 +11,5 @@ Implement the spec `docs/specs/$ARGUMENTS.md` (add `.md` if missing).
 3. **Implement.** Delegate to the matching subagent: `godot-dev` for `game/`, `mapgen` for `tools/mapgen/` and `maps/`, and `tester` for tests. Keep the work to what one session can finish and verify. Ask before adding any dependency.
 4. **Verify.** Run `/verify`. Fix every FAIL before going on. N/A steps are fine but list them.
 5. **Review.** Have the `reviewer` subagent check the diff against the CLAUDE.md conventions, and fix what it finds.
-6. **Report.** List the acceptance criteria and how each is covered, the verify summary, and what the user should playtest. Don't commit; the user commits after playtesting.
+6. **Commit.** Once `/verify` passes and the review findings are fixed, commit the change on the current branch with a message that describes the change and references the spec. Follow the commit rules in `CLAUDE.md`. Don't push.
+7. **Report.** List the acceptance criteria and how each is covered, the verify summary, the commit, and what the user should playtest. Playtest feedback goes into follow-up commits.
