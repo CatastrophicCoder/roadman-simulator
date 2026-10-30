@@ -207,7 +207,7 @@ Maps are data, not code: a new town is a new config folder, and building appeara
 
 **Building enhancement layer**
 
-Each building attribute comes from the first source that has a value:
+Each building attribute comes from the first source that has a value, in this order for heights and appearance (building category has its own order, see Place information):
 
 1. Manual override in `maps/<map-id>/overrides/`, keyed by OSM or MML building id: height, roof shape and colour, facade style, texture set, or a hand-made replacement model (.glb).
 2. Enhancement data gathered for the map, for appearance (sources below).
@@ -356,11 +356,11 @@ The Godot project should load the generated map and let Claude Code verify it wi
 
 **Done when:** the free camera flies over a recognisable Somero centre, and `/verify` imports, tests and screenshots without errors.
 
-## Phase 5: First playable — driving through Somero
+## Phase 5: Vehicles — cars, mopeds and bicycles
 
-One car you can drive around the real streets is the first point where it feels like a game. It also tests the map's collisions and scale.
+Vehicles come after the player on foot, which is the first playable. Start with one car, then add mopeds and bicycles. Driving tests the map's collisions and scale at speed.
 
-1. **Vehicle scene:** `VehicleBody3D` with four `VehicleWheel3D` nodes, a placeholder box body, and tunable exported parameters (engine force, brake, steering, suspension).
+1. **Vehicle scene:** `VehicleBody3D` with four `VehicleWheel3D` nodes, a placeholder box body, and tunable exported parameters (engine force, brake, steering, suspension). Mopeds and bicycles need their own handling: Godot's VehicleBody3D doesn't balance a two-wheeler by itself, so they use an arcade model that keeps them upright and leans them into turns, decided in their own spec.
 2. **Input map:** accelerate, brake/reverse, steer, handbrake, reset vehicle, camera toggle. Support keyboard and gamepad from the start.
 3. **Chase camera:** spring arm with smoothing, avoiding clipping through buildings.
 4. **HUD:** speedometer and the minimap PNG with a player marker.
@@ -375,7 +375,38 @@ Claude Code can verify that the car spawns, moves under scripted input and stays
 
 &#91;embedded content: gameplay roadmap · 7 milestones\]
 
-Milestones 1 and 2 are Phases 2–5 above. Milestones 3–7 each start with a spec in `docs/specs/`, approved by you before Claude Code implements it.
+Milestone 1 is Phases 2–4 above. The player on foot (milestone 2) is the first playable; vehicles (milestone 3) are Phase 5. Milestones 3–7 each start with a spec in `docs/specs/`, approved by you before Claude Code implements it.
+
+## Game features
+
+Features that run across the milestones. Each one gets its own spec when its turn comes in the feature order.
+
+**Camera**
+
+- Third-person view by default, both on foot and in vehicles (a chase camera when driving or riding). Other views, such as first person, can be added later as options.
+
+**Main menu, settings and save/load**
+
+- A main menu like other games of this type: new game, continue, load, settings, quit.
+- Settings: display (resolution, window mode, quality), audio volumes, controls, and gameplay options such as the minimap's corner. Stored per player, outside the map packs.
+- Save and load with several save slots: player position, money, inventory, wanted level and quest progress. The save format has a version number, and the state logic lives in `Roadman.Core` with tests.
+
+**Inventory**
+
+- The player's gear: weapons, clothing and other items, defined as item types with ids. Gear can be equipped in slots, for example one weapon and one outfit.
+- An inventory screen to view and manage gear.
+- Saved with the game. Death clears it, under the existing death rule.
+
+**Minimap**
+
+- A classic open-world minimap: centred on the player, rotating with the player's heading, showing roads from the road graph, street names and points of interest. Mission and quest markers come later.
+- Its position is set in the settings: any of the four screen corners.
+
+**Tutorial questline**
+
+- A quest system: a quest is an ordered list of steps, and each step must be completed before the next. Step types include visiting a place or point of interest, interacting with an item, equipping gear, and getting into or driving a vehicle.
+- The current objective shows in the HUD and on the minimap. Progress is saved with the game.
+- The tutorial questline teaches item and vehicle basics. The same quest system later carries the missions (milestone 6).
 
 ## Testing, CI and builds
 
@@ -411,14 +442,14 @@ For itch.io hobby releases, unsigned builds with install instructions on the gam
 
 ## Claude Code workflow per feature
 
-Each feature goes through the same loop: spec, plan, implement, verify, review and commit, playtest. You decide at the spec and playtest steps; Claude Code does the rest.
+Each feature goes through the same loop: spec, plan, implement, verify, playtest, commit. You decide at the spec and playtest steps; Claude Code does the rest.
 
 1. **Spec:** `/spec traffic-lights` drafts `docs/specs/traffic-lights.md` with goal, behaviour, acceptance criteria and test ideas. You edit and approve it.
 2. **Plan:** Claude Code proposes the change in plan mode (files, scenes, signals, tests). Check it against `docs/architecture.md` before approving.
 3. **Implement:** the relevant subagent writes code and tests. Keep tasks to something one session can finish and verify.
 4. **Verify:** `/verify` runs tests, lint, a headless run and screenshots. Claude Code fixes failures before reporting done.
-5. **Review and commit:** the `reviewer` subagent checks the diff against conventions, Claude Code fixes its findings and commits with a message referencing the spec.
-6. **Playtest:** you play the feature and give concrete feedback ("brakes lock too easily above 60 km/h"); fixes go into follow-up commits.
+5. **Playtest:** you play the feature and give concrete feedback ("brakes lock too easily above 60 km/h").
+6. **Review and commit:** the `reviewer` subagent checks the diff against conventions, then commit with a message referencing the spec.
 
 **Practical tips for Godot with Claude Code**
 
