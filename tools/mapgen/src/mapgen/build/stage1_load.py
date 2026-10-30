@@ -5,15 +5,18 @@ Sources are picked by capability (`osm_vector`, `elevation`, `buildings_3d`,
 centroid is inside the build area. Points of interest, land use areas and building-use
 records (e.g. MML Topographic Database buildings) are kept when they intersect it. Road
 ways and water are moved to local coordinates whole (the roads stage clips them); road
-ways keep their OSM node ids. Lidar points are read only
-around those footprints (their combined bounds plus `POINT_MARGIN_M`), so the test area
-stays fast. Imagery files are only listed here (those overlapping the area); the export
-reads them per tile for the debug textures. Output in `01-load/`: `footprints.geojson`
-(world coordinates), `dem.tif` (cropped) and `report.json`.
+ways keep their OSM node ids. Lidar points are read only around those footprints and
+the in-area building-use records (their combined bounds plus `POINT_MARGIN_M`), so the
+test area stays fast. With a building-use source, the ground points (class 2) around the
+in-area records are read too, for the MML-only buildings' lidar contradiction check
+(docs/specs/mml-only-buildings.md). Imagery files are only listed here (those overlapping
+the area); the export reads them per tile for the debug textures. Output in `01-load/`:
+`footprints.geojson` (world coordinates), `dem.tif` (cropped) and `report.json`.
 """
 
+import time
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -54,6 +57,7 @@ from mapgen.sources.registry import SelectedSource, enabled_sources_providing
 
 DEM_MARGIN_M = 10.0  # elevation read around the area, so edge samples have neighbours
 POINT_MARGIN_M = 2.0  # lidar points read around the in-area footprints' combined bounds
+GROUND_CLASS = 2  # ASPRS ground: read apart for the MML-only buildings' ground check
 
 
 class BuildError(Exception):
@@ -157,6 +161,11 @@ class LoadResult:
     building_use_skipped: list[SkippedFeature] = field(default_factory=list)
     building_use_skipped_unlocated: list[SkippedFeature] = field(default_factory=list)
     building_use_source: str | None = None
+    # Ground (class 2) lidar points around the in-area building-use records, local
+    # coordinates. None without both a point cloud and a building-use source.
+    ground_points: PointCloud | None = None
+    # Seconds spent in parts of the load (e.g. "load_ground_points"); never in a pack file.
+    timings_s: dict[str, float] = field(default_factory=dict)
 
 
 def _geometry_to_local(geometry: BaseGeometry, crs: str, config: MapConfig) -> Any:
@@ -363,10 +372,13 @@ def run_load(
     point_bounds: BBox | None = None
     deck_points: PointCloud | None = None
     deck_window: BBox | None = None
+    ground_points: PointCloud | None = None
+    ground_bounds: BBox | None = None
+    timings: dict[str, float] = {}
     if point_source is not None:
         lidar_params = LidarParams.from_options(point_source.options)
         points = PointCloud.empty(config.crs)
-        point_bounds = points_read_bounds(in_area, config)
+        point_bounds = points_read_bounds([*in_area, *(building_use or [])], config)
         if point_bounds is not None:
             data_points = load_bounded(point_source, point_bounds)
             files += data_points.files
@@ -374,6 +386,24 @@ def run_load(
                 raise BuildError(f"source {point_source.name!r} returned no point cloud")
             points = data_points.points.offset(-config.origin.x, -config.origin.y)
         log(f"[{point_source.name}] {len(points)} lidar points around {len(in_area)} footprints")
+        if building_use is not None:
+            # Ground points for the MML-only buildings' lidar contradiction check.
+            start = time.perf_counter()
+            ground_points = PointCloud.empty(config.crs)
+            ground_bounds = points_read_bounds(building_use, config)
+            if ground_bounds is not None:
+                data_ground_use = load_bounded(point_source, ground_bounds, (GROUND_CLASS,))
+                files += [f for f in data_ground_use.files if f not in files]
+                if data_ground_use.points is not None:
+                    ground_points = data_ground_use.points.offset(
+                        -config.origin.x, -config.origin.y
+                    )
+            seconds = time.perf_counter() - start
+            timings["load_ground_points"] = round(seconds, 3)
+            log(
+                f"[{point_source.name}] {len(ground_points)} ground points around "
+                f"{len(building_use)} building-use records ({seconds:.2f} s)"
+            )
         deck_window = deck_points_bounds(roads, water_areas + water_lines, config, read_bounds)
         if config.roads is not None and deck_window is not None:
             # Deck surfaces are ground points in the lidar (the DEM has them removed): the
@@ -439,6 +469,8 @@ def run_load(
             "source": point_source.name if point_source else None,
             "points": len(points) if points is not None else 0,
             "deck_points": len(deck_points) if deck_points is not None else 0,
+            "ground_points": len(ground_points) if ground_points is not None else 0,
+            "ground_points_bounds_world": ground_bounds.as_list() if ground_bounds else None,
             "deck_points_bounds_world": deck_window.as_list() if deck_window else None,
             "bounds_world": point_bounds.as_list() if point_bounds else None,
             "params": lidar_params.as_dict() if lidar_params else None,
@@ -498,6 +530,8 @@ def run_load(
         building_use_skipped=building_use_skipped,
         building_use_skipped_unlocated=building_use_unlocated,
         building_use_source=building_use_source.name if building_use_source else None,
+        ground_points=ground_points,
+        timings_s=timings,
     )
 
 
@@ -542,9 +576,12 @@ def deck_points_bounds(
 
 
 def points_read_bounds(
-    footprints: list[LocalFootprint], config: MapConfig, margin_m: float = POINT_MARGIN_M
+    footprints: Sequence[LocalFootprint | LocalBuildingUse],
+    config: MapConfig,
+    margin_m: float = POINT_MARGIN_M,
 ) -> BBox | None:
-    """World bounds to read lidar points for `footprints`: their combined bounds plus a margin.
+    """World bounds to read lidar points for `footprints` (footprints or building-use
+    records): their combined bounds plus a margin.
 
     None when there are no footprints (then no point files are read).
     """

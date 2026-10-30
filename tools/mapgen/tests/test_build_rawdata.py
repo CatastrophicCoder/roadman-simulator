@@ -243,28 +243,29 @@ def test_ac19_fixture_has_every_highway_way_touching_the_test_area(tmp_path: Pat
 
 # The full build's counts as the implementation reported them (place-information spec,
 # criterion 5; compared there with the "Expected categories" preview).
-FULL_MATCHED = 1795
+FULL_MATCHED = 1795  # OSM buildings matched to an MML record
+# All buildings, the 140 MML-only ones included (docs/specs/mml-only-buildings.md).
 FULL_CATEGORY_COUNTS = {
-    "residential": 1416,
-    "garage_or_shed": 243,
-    "industrial": 76,
-    "unknown": 43,
-    "commercial": 26,
+    "residential": 1501,
+    "garage_or_shed": 279,
+    "industrial": 80,
+    "unknown": 54,
+    "commercial": 29,
     "retail": 22,
     "agricultural": 5,
     "public": 4,
-    "religious": 3,
+    "religious": 4,
     "education": 3,
     "other": 0,
 }
 FULL_SOURCE_COUNTS = {
-    "mml_use_class": 1155,
-    "osm_landuse": 587,
+    "mml_use_class": 1252,
+    "osm_landuse": 618,
     "osm_building": 41,
     "osm_poi": 15,
-    "osm_poi_area": 0,
+    "osm_poi_area": 1,
     "override": 0,
-    "none": 43,
+    "none": 54,
 }
 
 
@@ -281,5 +282,53 @@ def test_ac5_full_build_reports_its_mml_matches_and_category_counts(
     assert report["category_counts"] == FULL_CATEGORY_COUNTS
     assert report["category_source_counts"] == FULL_SOURCE_COUNTS
     buildings = json.loads((full_build.pack / "buildings.json").read_text("utf-8"))["buildings"]
-    assert sum(1 for b in buildings if b["mml_building"] is not None) == FULL_MATCHED
+    osm = [b for b in buildings if b["id"].startswith("osm:")]
+    assert sum(1 for b in osm if b["mml_building"] is not None) == FULL_MATCHED
     assert sum(FULL_CATEGORY_COUNTS.values()) == len(buildings)
+
+
+# docs/specs/mml-only-buildings.md
+
+# Criterion 13: "The rules applied to Somero" (computed with the inward-shrink sliver test;
+# the spec asks the implementation report to explain any difference with the opening rule).
+FULL_MML_ONLY = {
+    "added": 140,
+    "added_whole": 120,
+    "added_cut": 20,
+    "not_added": {"outside": 0, "too_small": 4, "slivers": 23, "lidar_contradicts": 1},
+}
+FULL_MML_ONLY_LIDAR = {"mml_lidar": 133, "few_points": 5, "tree_cover": 2}
+
+
+def test_mml_only_ac13_full_build_reports_the_spec_counts(
+    request: pytest.FixtureRequest,
+) -> None:
+    """MML-only buildings, criterion 13 on the whole map (local raw data only)."""
+    if not list((RAW / "mml" / "topographic").glob("*.gpkg")):
+        pytest.skip(f"Topographic Database for {MAP_ID} not downloaded")
+    full_build: FullBuild = request.getfixturevalue("full_build")
+    report = json.loads((full_build.work / "03-buildings" / "report.json").read_text("utf-8"))
+    block = report["mml_only"]
+    print(
+        f"\n{MAP_ID} full mml_only: added {block['added']} ({block['added_whole']} whole, "
+        f"{block['added_cut']} cut), not added {block['not_added']}, "
+        f"heights {block['added_by_height_source']}, rejected {block['added_lidar_rejected']}"
+    )
+    for entry in block["cut"][:10]:
+        print(
+            f"  {entry['id']}: {entry['record_area_m2']} -> {entry['kept_area_m2']} m² "
+            f"{entry['osm_buildings']}"
+        )
+    assert block["not_added_ids"]["lidar_contradicts"] == ["mml:rakennus/3000145173"]
+    buildings = json.loads((full_build.pack / "buildings.json").read_text("utf-8"))["buildings"]
+    ids = {b["id"] for b in buildings}
+    assert "mml:rakennus/339041253" in ids
+    assert "mml:rakennus/3000145173" not in ids
+    assert sum(1 for i in ids if i.startswith("mml:")) == block["added"]
+    assert {k: block[k] for k in FULL_MML_ONLY} == FULL_MML_ONLY
+    assert block["added_by_height_source"]["mml_lidar"] == FULL_MML_ONLY_LIDAR["mml_lidar"]
+    rejected = block["added_lidar_rejected"]
+    assert (rejected["few_points"], rejected["tree_cover"]) == (
+        FULL_MML_ONLY_LIDAR["few_points"],
+        FULL_MML_ONLY_LIDAR["tree_cover"],
+    )

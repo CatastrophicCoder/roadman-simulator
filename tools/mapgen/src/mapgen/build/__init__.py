@@ -12,6 +12,11 @@ the pack neither reads nor credits their files (no `debug/orthophoto/` for Somer
 An optional `maps/<map-id>/overrides/buildings.json` (category and name overrides) is
 validated before the load stage. The places stage resolves each building's category,
 names, address and POI links (`buildings.json` schema version 2) and writes `pois.json`.
+With a `building_use` source, the buildings stage also adds the records no OSM building
+matched, with the parts overlapping OSM buildings cut away (`mml_only`,
+docs/specs/mml-only-buildings.md). `03-buildings/report.json` is written after the places
+stage (with an empty `mml_only.road_overlaps`), so a failing roads stage still leaves it,
+and rewritten after the roads stage with the added buildings standing on a road.
 With a `roads` block in map.yaml, the roads stage (stages 4 and 7) adds `road-col`,
 `path-col` and bridge deck nodes to the tiles and fills `road_graph.json`; without it,
 the map has no road meshes and an empty (valid) `road_graph.json`.
@@ -19,7 +24,7 @@ the map has no road meshes and an empty (valid) `road_graph.json`.
 
 import shutil
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -35,6 +40,12 @@ from mapgen.build.camera_presets import (
     read_camera_presets,
 )
 from mapgen.build.export_glb import AXES, TERRAIN_NODE, MeshNode, export_glb
+from mapgen.build.mml_only import (
+    MmlOnlySelection,
+    mml_only_report,
+    road_overlaps,
+    select_mml_only,
+)
 from mapgen.build.orthophoto import (
     ORTHOPHOTO_DIR,
     OrthophotoError,
@@ -60,6 +71,7 @@ from mapgen.build.pack_manifest import (
 )
 from mapgen.build.pack_manifest import SCHEMA_VERSION as MANIFEST_SCHEMA_VERSION
 from mapgen.build.places import PlacesResult, build_places
+from mapgen.build.places.matching import UseMatch, match_building_use
 from mapgen.build.places.model import (
     BUILDINGS_SCHEMA,
     BUILDINGS_SCHEMA_VERSION,
@@ -109,6 +121,7 @@ class BuildReport:
     category_counts: dict[str, int] = field(default_factory=dict)
     category_source_counts: dict[str, int] = field(default_factory=dict)
     poi_count: int = 0
+    mml_only_added: int = 0  # buildings from building-use records no OSM building matched
 
 
 def _clear(folder: Path) -> None:
@@ -186,6 +199,7 @@ def run_build(
     with stage("load"):
         loaded = run_load(config, area, raw_dir, work_dir / "01-load", log=log)
     report.skipped = list(loaded.report["skipped"])
+    report.timings_s.update(loaded.timings_s)
 
     with stage("terrain"):
         chunks: dict[str, TerrainChunk] = {}
@@ -201,8 +215,35 @@ def run_build(
 
     with stage("buildings"):
         measured = match_measured_heights(loaded.footprints, loaded.buildings_3d)
-        buildings = resolve_buildings(
+        matches: dict[str, UseMatch] = (
+            match_building_use(loaded.footprints, loaded.building_use)
+            if loaded.building_use is not None
+            else {}
+        )
+        selection = select_mml_only(
+            loaded.building_use,
+            matches,
             loaded.footprints,
+            area,
+            loaded.heightfield,
+            points=loaded.points,
+            ground_points=loaded.ground_points,
+            source=loaded.building_use_source,
+        )
+        if loaded.building_use is None:
+            log(
+                "[buildings] no enabled source provides building_use: no MML-only "
+                "buildings are added"
+            )
+        else:
+            log(
+                f"[buildings] {len(selection.added)} MML-only buildings added from "
+                f"{len(selection.records)} unmatched building-use records"
+            )
+        added_footprints = selection.footprints()
+        report.mml_only_added = len(added_footprints)
+        buildings = resolve_buildings(
+            [*loaded.footprints, *added_footprints],
             loaded.heightfield,
             area,
             measured,
@@ -214,16 +255,19 @@ def run_build(
         places = build_places(
             config.id,
             area,
-            loaded.footprints,
+            [*loaded.footprints, *added_footprints],
             loaded,
             loaded.heightfield,
             overrides,
             _display(overrides_file, map_dir) if overrides is not None else None,
+            matches=matches,
+            mml_only=selection.records_by_id(),
         )
         buildings = BuildingsResult(
             [replace(b, place=places.building_fields[b.id]) for b in buildings.buildings]
         )
-        _write_buildings_stage(work_dir / "03-buildings", buildings, config.crs, origin, places)
+        _write_buildings_geojson(work_dir / "03-buildings", buildings, config.crs, origin)
+        _write_buildings_report(work_dir / "03-buildings", buildings, places, selection, [])
         _write_places_stage(work_dir / "08-places", places, config.crs, origin)
     building_report = buildings.report()
     report.building_count = building_report["building_count"]
@@ -259,6 +303,14 @@ def run_build(
         report.suspected_missing_bridges = len(roads.report["suspected_missing_bridges"])
         report.clearance_warnings = len(roads.report["clearance_warnings"])
         report.drivable_share = roads.graph_report["weak_components"]["largest_share"]
+
+    if roads is not None:
+        added_ids = set(selection.records_by_id())
+        overlaps = road_overlaps(
+            ((b.id, b.footprint) for b in buildings.buildings if b.id in added_ids),
+            roads.surface_footprints,
+        )
+        _write_buildings_report(work_dir / "03-buildings", buildings, places, selection, overlaps)
 
     with stage("export"), ExitStack() as resources:
         by_tile = buildings.by_tile()
@@ -392,12 +444,29 @@ def _write_places_stage(
     write_json(folder / "report.json", places.places_report)
 
 
-def _write_buildings_stage(
+def _write_buildings_report(
+    folder: Path,
+    buildings: BuildingsResult,
+    places: PlacesResult,
+    selection: MmlOnlySelection,
+    overlaps: Sequence[str],
+) -> None:
+    """`03-buildings/report.json`: heights, place statistics and the `mml_only` block."""
+    write_json(
+        folder / "report.json",
+        {
+            **buildings.report(),
+            **places.building_report,
+            "mml_only": mml_only_report(selection, buildings.buildings, overlaps),
+        },
+    )
+
+
+def _write_buildings_geojson(
     folder: Path,
     buildings: BuildingsResult,
     crs: str,
     origin: tuple[float, float],
-    places: PlacesResult,
 ) -> None:
     write_geojson(
         folder / "buildings.geojson",
@@ -416,4 +485,3 @@ def _write_buildings_stage(
         crs,
         origin,
     )
-    write_json(folder / "report.json", {**buildings.report(), **places.building_report})

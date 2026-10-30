@@ -562,6 +562,58 @@ public class PlaceInformationTest
         AssertThat(text).Contains($"building_id: \"{ShopBuilding}\"");
     }
 
+    // ----- MML-only buildings (docs/specs/mml-only-buildings.md, criterion 15) -----
+
+    /// <summary>
+    /// The building made from MML record 339002621 (cut where it overlaps an OSM building; in the test area and the
+    /// full map): its bodies are in <see cref="MapLoader.BuildingGroup"/>, <see cref="MapLoader.BuildingOf"/> returns
+    /// its entry, and an inspector ray at its roof shows its id and <c>category_source</c>.
+    /// </summary>
+    [TestCase]
+    public async Task MmlOnlyAc15_CutMmlBuilding_IsAMapBuildingAndShowsInTheInspector()
+    {
+        const string mmlBuilding = "mml:rakennus/339002621";
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(WorldScenePath, true);
+        var world = await LoadWorld(runner);
+        var loader = world.MapLoader;
+        var inspector = world.Inspector!;
+        var places = loader.Places!;
+
+        AssertBool(places.TryGetBuilding(mmlBuilding, out var building))
+            .OverrideFailureMessage($"{mmlBuilding} is not in buildings.json; {MapPack.RegenHint(MapId)}")
+            .IsTrue();
+        AssertThat(building.Node).IsEqual("bld_mml_rakennus_339002621");
+        AssertThat(building.MmlBuilding).IsEqual(mmlBuilding);
+        AssertThat(building.CategorySource).IsNotNull();
+
+        var tile = loader.Tiles.GetNodeOrNull(building.Tile);
+        AssertThat(tile).OverrideFailureMessage($"tile {building.Tile} of {mmlBuilding} is not loaded").IsNotNull();
+        AssertInt(building.CollisionNodes.Count).IsGreater(0);
+        foreach (var nodeName in building.CollisionNodes)
+        {
+            var body = tile!.GetNodeOrNull<StaticBody3D>(nodeName);
+            AssertThat(body).OverrideFailureMessage($"no body {building.Tile}/{nodeName}").IsNotNull();
+            AssertBool(body!.IsInGroup(MapLoader.BuildingGroup))
+                .OverrideFailureMessage($"{nodeName} is not in {MapLoader.BuildingGroup}")
+                .IsTrue();
+            AssertThat(loader.BuildingOf(body)).IsSame(building);
+            AssertThat(loader.BuildingIdOf(body)).IsEqual(mmlBuilding);
+        }
+
+        var ray = RoofRay(loader, building);
+        AssertThat(ray).OverrideFailureMessage($"no ray from above reaches {mmlBuilding}'s roof first").IsNotNull();
+        AssertBool(inspector.SetEnabled(true)).IsTrue();
+        var text = inspector.InspectRay(ray!.Value.From, ray.Value.To);
+
+        AssertThat(inspector.SelectedBuilding).IsSame(building);
+        AssertThat(inspector.SelectionId).IsEqual(mmlBuilding);
+        AssertThat(text)
+            .Contains(mmlBuilding)
+            .Contains($"category_source: {PlaceText.WireName(building.CategorySource!.Value)}");
+        AssertThat(text).IsEqual(PlaceText.Describe(building, places));
+    }
+
     // ----- Helpers -----
 
     /// <summary>Loads the World scene and waits for terrain collision and the camera's start placement.</summary>

@@ -31,6 +31,10 @@ stage output in the work folder, so they test what the game will load.
   valid values; each `category_source` has its raw value; POI and building links exist and
   point back; POI positions and outline points are finite and inside the area; outline
   rings are closed with at least 4 points.
+- MML-only buildings (docs/specs/mml-only-buildings.md, `check_mml_only`): every building
+  with an `mml:` id has `mml_building` equal to its id and `mml_overlap` 1.0, and no
+  `mml:` footprint overlaps an `osm:` footprint by `OVERLAP_M2` or more (footprints from
+  `03-buildings/buildings.geojson`).
 
 Heights are sampled on the actual triangles (the tiles' terrain meshes), not a grid.
 """
@@ -60,7 +64,9 @@ MM = 1e-3  # criteria 8, 9, 10, 11: 1 mm
 UM = 1e-6  # road_graph.json coordinates are rounded to 1 µm
 FLOAT32_SLACK = 1e-5  # criterion 11: 0.01 mm, float32 rounding at ~100 m is under 0.008 mm
 DECK_RISE = 0.05  # criterion 11: the driving surface is at most 0.05 m above the line
-OVERLAP_M2 = 0.01  # criterion 10: road and path intersection area per tile
+OVERLAP_M2 = 0.01  # criterion 10: road and path intersection area per tile; MML-only buildings
+MML_ID_PREFIX = "mml:"  # buildings made from building-use records no OSM building matched
+OSM_ID_PREFIX = "osm:"
 MAX_STEP_M = 0.02  # ramps: vertical gap between a deck end edge and the ramp surface
 GRADE_SPACING_M = 0.25  # graded ramps: samples along the path
 # Graded ramps: along a straight path the descent is linear, so the meshes reproduce it
@@ -317,10 +323,13 @@ def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None)
             base = np.array([by_node[n]["base_z"] for n in names])[owner]
             low = ~np.isnan(z) & (z < base - 1e-3)
             _require(not low.any(), f"{names[int(owner[low][0])] if low.any() else ''} floats")
+    mml_only = sum(1 for b in buildings if b["id"].startswith(MML_ID_PREFIX))
     _require(
-        load_report["footprints"]["in_area"] == glb_buildings == len(buildings),
-        "building counts differ between the load report, the tiles and buildings.json",
+        load_report["footprints"]["in_area"] + mml_only == glb_buildings == len(buildings),
+        "building counts differ between the load report (plus the MML-only buildings), "
+        "the tiles and buildings.json",
     )
+    check_mml_only(buildings, geometries)
     bounds = (
         min(t["bounds_local"][0] for t in manifest["tiles"]),
         min(t["bounds_local"][1] for t in manifest["tiles"]),
@@ -338,6 +347,39 @@ def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None)
             extra = [n for n in meshes.nodes if n in ROAD_SURFACES or BRIDGE_NODE.match(n)]
             _require(not extra, f"no roads block, but {tid} has {extra}")
     return PackSummary(len(manifest["tiles"]), glb_buildings, road_summary, poi_count)
+
+
+def check_mml_only(buildings: Sequence[dict[str, Any]], geometries: dict[str, BaseGeometry]) -> int:
+    """The MML-only building checks; returns the number of `mml:` buildings.
+
+    `geometries` are the footprints by building id (any common coordinates, e.g. the map
+    CRS of `03-buildings/buildings.geojson`).
+    """
+    mml = [b for b in buildings if b["id"].startswith(MML_ID_PREFIX)]
+    for building in mml:
+        bid = building["id"]
+        _require(
+            building["mml_building"] == bid,
+            f"{bid}: mml_building {building['mml_building']} isn't the building's own id",
+        )
+        _require(building["mml_overlap"] == 1.0, f"{bid}: mml_overlap isn't 1.0")
+    osm_ids = sorted(b["id"] for b in buildings if b["id"].startswith(OSM_ID_PREFIX))
+    osm = [geometries[i] for i in osm_ids if i in geometries]
+    osm_ids = [i for i in osm_ids if i in geometries]
+    if not mml or not osm:
+        return len(mml)
+    tree = shapely.STRtree(osm)
+    for building in mml:
+        bid = building["id"]
+        _require(bid in geometries, f"{bid}: no footprint in 03-buildings/buildings.geojson")
+        footprint = geometries[bid]
+        for index in sorted(int(i) for i in tree.query(footprint, predicate="intersects")):
+            shared = footprint.intersection(osm[index]).area
+            _require(
+                shared < OVERLAP_M2,
+                f"{bid} overlaps {osm_ids[index]} by {shared:.3f} m² (limit {OVERLAP_M2} m²)",
+            )
+    return len(mml)
 
 
 # Places.

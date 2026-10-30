@@ -360,7 +360,12 @@ class PlaceBuild:
         return json.loads((base / rel).read_text(encoding="utf-8"))
 
     def buildings(self) -> dict[int, dict[str, Any]]:
-        return {int(b["id"].rsplit("/", 1)[1]): b for b in self.json("buildings.json")["buildings"]}
+        """The OSM buildings by way id (MML-only buildings have `mml:` ids)."""
+        return {
+            int(b["id"].rsplit("/", 1)[1]): b
+            for b in self.json("buildings.json")["buildings"]
+            if b["id"].startswith("osm:")
+        }
 
     def pois(self) -> dict[str, dict[str, Any]]:
         return {p["id"]: p for p in self.json("pois.json")["pois"]}
@@ -440,7 +445,8 @@ def no_topographic(tmp_path_factory: pytest.TempPathFactory) -> PlaceBuild:
 
 def test_snippet_pack_passes_the_pack_checks_and_its_schemas(places: PlaceBuild) -> None:
     summary = check_pack(places.pack, places.work, None)
-    assert summary.building_count == len(BUILDINGS)
+    # Plus the part of record 1037 outside OSM way 1037 (docs/specs/mml-only-buildings.md).
+    assert summary.building_count == len(BUILDINGS) + 1
     BUILDINGS_SCHEMA.validate_file(places.pack / "buildings.json")
     POIS_SCHEMA.validate_file(places.pack / "pois.json")
     jsonschema.validate(places.json("buildings.json"), BUILDINGS_SCHEMA.committed())
@@ -496,7 +502,7 @@ def test_ac3_counts_per_category_and_source_match_the_buildings(places: PlaceBui
     from collections import Counter
 
     report = places.json("03-buildings/report.json")
-    buildings = places.buildings().values()
+    buildings = places.json("buildings.json")["buildings"]  # MML-only ones included
     categories = Counter(b["category"] for b in buildings)
     assert {k: v for k, v in report["category_counts"].items() if v} == dict(categories)
     sources = Counter(b["category_source"] or "none" for b in buildings)

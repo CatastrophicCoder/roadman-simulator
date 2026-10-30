@@ -6,10 +6,15 @@ building's category, names and address (`resolve`), applies the override file
 (`overrides`) and builds `pois.json` (`pois`). The fields it returns per building go into
 `buildings.json` (schema version 2, `model`). Output in `08-places/`: `pois.geojson` (map
 CRS) and `report.json`; its building statistics go into `03-buildings/report.json`.
+
+Buildings made from building-use records no OSM building matched (MML-only buildings,
+docs/specs/mml-only-buildings.md) are passed in `mml_only`: each takes its own record as
+its match (`mml_overlap` 1.0). The building-use matching statistics in the report count
+OSM buildings only.
 """
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,7 +37,7 @@ from mapgen.build.places.resolve import (
     resolve_category,
     resolve_names,
 )
-from mapgen.build.stage1_load import LoadResult, LocalFootprint, LocalLandUse
+from mapgen.build.stage1_load import LoadResult, LocalBuildingUse, LocalFootprint, LocalLandUse
 
 __all__ = ["PlacesResult", "build_places"]
 
@@ -77,10 +82,20 @@ def build_places(
     heightfield: Heightfield,
     overrides: BuildingOverrides | None = None,
     overrides_file: str | None = None,
+    *,
+    matches: Mapping[str, UseMatch] | None = None,
+    mml_only: Mapping[str, LocalBuildingUse] | None = None,
 ) -> PlacesResult:
-    """Resolve the place fields of every footprint (the buildings) and the pack's POIs."""
+    """Resolve the place fields of every footprint (the buildings) and the pack's POIs.
+
+    `matches` are the OSM footprints' building-use matches (computed here when None).
+    `mml_only` maps the id of each building made from an unmatched building-use record to
+    that record; such a building isn't matched again and gets its record with overlap 1.0.
+    """
     footprints = sorted(footprints, key=lambda f: f.id)
     by_id = {f.id: f for f in footprints}
+    own_records = dict(mml_only or {})
+    osm_footprints = [f for f in footprints if f.id not in own_records]
 
     # POIs inside the area, with their positions and clipped outlines.
     kept: list[PlacePoi] = []
@@ -105,11 +120,18 @@ def build_places(
             kept.append(placed)
     pois_by_id = {p.id: p for p in kept}
 
-    matches: dict[str, UseMatch] = (
-        match_building_use(footprints, loaded.building_use)
-        if loaded.building_use is not None
-        else {}
-    )
+    if matches is None:
+        matches = (
+            match_building_use(osm_footprints, loaded.building_use)
+            if loaded.building_use is not None
+            else {}
+        )
+    else:
+        matches = {k: v for k, v in matches.items() if k in by_id and k not in own_records}
+    all_matches: dict[str, UseMatch] = {
+        **matches,
+        **{bid: UseMatch(record, 1.0) for bid, record in own_records.items()},
+    }
     links: PoiLinks = link_pois(
         footprints, [LinkPoi(p.id, p.geometry, p.position, p.is_building) for p in kept]
     )
@@ -126,9 +148,10 @@ def build_places(
     building_addresses: dict[str, tuple[dict[str, str | None], str | None]] = {}
     for footprint in footprints:
         bid = footprint.id
-        match = matches.get(bid)
+        match = all_matches.get(bid)
         use_id = match.record.id if match is not None else None
-        override = resolve_override(overrides, bid, use_id)
+        # An MML-only building's id is its record's id: one key, looked up once.
+        override = resolve_override(overrides, bid, use_id if use_id != bid else None)
         poi_ids = links.pois_of_building.get(bid, [])
         area_ids = links.areas_of_building.get(bid, [])
         inside = [pois_by_id[p] for p in poi_ids if p != bid]
@@ -236,7 +259,7 @@ def build_places(
     }
 
     building_report = _building_report(
-        footprints=footprints,
+        footprints=osm_footprints,
         fields=fields,
         matches=matches,
         loaded=loaded,

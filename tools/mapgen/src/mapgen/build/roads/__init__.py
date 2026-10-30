@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import shapely
 from shapely.geometry import LineString, Point
+from shapely.geometry.base import BaseGeometry
 
 from mapgen.build.area import BuildArea, Tile, tile_id
 from mapgen.build.export_glb import MeshNode
@@ -72,6 +73,9 @@ class RoadsResult:
     tile_nodes: dict[str, list[MeshNode]] = field(default_factory=dict)
     report: dict[str, Any] = field(default_factory=dict)  # 04-roads/report.json
     graph_report: dict[str, Any] = field(default_factory=dict)  # 07-road-graph/report.json
+    # 2D road and path surfaces and bridge deck footprints (local coordinates), e.g. to
+    # list the buildings standing on a road.
+    surface_footprints: list[BaseGeometry] = field(default_factory=list)
 
     @property
     def edge_count(self) -> int:
@@ -378,7 +382,9 @@ def build_roads(
         log(
             f"[roads] warning: the largest drivable component is under {CONNECTIVITY_THRESHOLD:.0%}"
         )
-    return RoadsResult(document, tile_nodes, report, graph_report)
+    surface_footprints = [g for g in (road, path) if not g.is_empty]
+    surface_footprints += [deck_footprint(span) for span in bridges]
+    return RoadsResult(document, tile_nodes, report, graph_report, surface_footprints)
 
 
 _GRADED_KEYS = ("length_m", "nominal_length_m", "height_difference_m")

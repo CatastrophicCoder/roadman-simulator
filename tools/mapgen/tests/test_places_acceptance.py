@@ -126,13 +126,18 @@ def test_ac8_test_area_counts_from_the_fixture(somero_area: SomeroArea) -> None:
     """Spec "Test area": every footprint is a building; one POI; MML matches reported."""
     load = _json(somero_area.work / "01-load" / "report.json")
     buildings = _json(somero_area.pack / "buildings.json")["buildings"]
-    assert len(buildings) == load["footprints"]["in_area"]
+    osm = [b for b in buildings if b["id"].startswith("osm:")]
+    assert len(osm) == load["footprints"]["in_area"]
+    # The one MML-only building of the test area (docs/specs/mml-only-buildings.md).
+    assert [b["id"] for b in buildings if not b["id"].startswith("osm:")] == [
+        "mml:rakennus/339002621"
+    ]
     pois = _json(somero_area.pack / "pois.json")["pois"]
     assert [p["id"] for p in pois] == [SHOP]
     report = _json(somero_area.work / "03-buildings" / "report.json")
-    matched = sum(1 for b in buildings if b["mml_building"] is not None)
+    matched = sum(1 for b in osm if b["mml_building"] is not None)
     assert report["building_use"]["matched_buildings"] == matched
-    assert report["building_use"]["unmatched_buildings"] == len(buildings) - matched
+    assert report["building_use"]["unmatched_buildings"] == len(osm) - matched
     assert sum(report["category_counts"].values()) == len(buildings)
 
 
@@ -344,6 +349,13 @@ def test_ac12_two_builds_write_byte_identical_place_files(
         assert (somero_area.pack / name).read_bytes() == (again.pack / name).read_bytes(), name
     for name in ("03-buildings/report.json", "08-places/report.json"):
         assert (somero_area.work / name).read_bytes() == (again.work / name).read_bytes(), name
+    # docs/specs/mml-only-buildings.md, criterion 11: the tiles too (with the MML-only
+    # building of the test area in them).
+    tiles = sorted(p.name for p in (somero_area.pack / "tiles").iterdir())
+    assert tiles == sorted(p.name for p in (again.pack / "tiles").iterdir())
+    for name in tiles:
+        first = (somero_area.pack / "tiles" / name).read_bytes()
+        assert first == (again.pack / "tiles" / name).read_bytes(), name
 
 
 def test_ac12_place_files_are_utf8_with_unescaped_names(somero_area: SomeroArea) -> None:
