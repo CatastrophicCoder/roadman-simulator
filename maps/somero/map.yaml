@@ -126,6 +126,6 @@ roads:
 # Pinned raw data for release builds; written by `mapgen snapshot publish`.
 snapshot:
   repo: "CatastrophicCoder/roadman-simulator"
-  release_tag: "data-somero-2026-10-29"
-  asset: "mapdata-somero-2026-10-29.zip"
-  sha256: "88e8a62a7eba80cd10851c71dc3a0e38aec670aeb6060dfc229f3973e4eb0904"
+  release_tag: "data-somero-2026-10-30"
+  asset: "mapdata-somero-2026-10-30.zip"
+  sha256: "1bddd22bbfef31753d34ec0d587b0d2119a9c7243c6c472eec2f7f6f2a3ad481"
