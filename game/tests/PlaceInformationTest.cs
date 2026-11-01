@@ -562,6 +562,34 @@ public class PlaceInformationTest
         AssertThat(text).Contains($"building_id: \"{ShopBuilding}\"");
     }
 
+    /// <summary>
+    /// <see cref="PlaceInspector.LastRayHit"/> tells a ray that left the built area (the screenshot tool's N/A for
+    /// <c>--inspect</c>) from one that hit something other than a building (an error there): a ray from above the
+    /// shop's building hits, one from beyond the map pointing away from it hits nothing.
+    /// </summary>
+    [TestCase]
+    public async Task Ac17_LastRayHit_TellsARayLeavingTheBuiltAreaFromAHit()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(WorldScenePath, true);
+        var world = await LoadWorld(runner);
+        var loader = world.MapLoader;
+        var inspector = world.Inspector!;
+        AssertBool(loader.Places!.TryGetBuilding(ShopBuilding, out var building)).IsTrue();
+
+        var ray = RoofRay(loader, building);
+        AssertThat(ray).OverrideFailureMessage($"no ray from above reaches {ShopBuilding}'s roof first").IsNotNull();
+        inspector.InspectRay(ray!.Value.From, ray.Value.To);
+        AssertBool(inspector.LastRayHit).IsTrue();
+
+        var maxX = (float)loader.Manifest!.Tiles.Max(t => t.Bounds.MaxX);
+        var from = new Vector3(maxX + 100f, 200f, 0f);
+        var text = inspector.InspectRay(from, from + new Vector3(inspector.RayLength, 0f, 0f));
+        AssertBool(inspector.LastRayHit).IsFalse();
+        AssertThat(inspector.SelectionId).IsNull();
+        AssertThat(text).IsEqual(PlaceText.NothingHere);
+    }
+
     // ----- MML-only buildings (docs/specs/mml-only-buildings.md, criterion 15) -----
 
     /// <summary>

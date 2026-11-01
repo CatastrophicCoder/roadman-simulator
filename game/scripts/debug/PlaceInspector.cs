@@ -82,6 +82,9 @@ public partial class PlaceInspector : Node
     /// <summary>The id of <see cref="SelectedBuilding"/> or <see cref="SelectedPoi"/>; null when nothing is selected.</summary>
     public string? SelectionId => SelectedBuilding?.Id ?? SelectedPoi?.Id;
 
+    /// <summary>Whether the last inspected ray hit any collision body (a building, terrain, a road or anything else).</summary>
+    public bool LastRayHit { get; private set; }
+
     /// <summary>The panel's text after the last inspection.</summary>
     public string PanelText => PanelLabel.Text;
 
@@ -184,6 +187,7 @@ public partial class PlaceInspector : Node
         var camera = ResolvedCamera();
         if (camera is null || !camera.IsInsideTree())
         {
+            LastRayHit = false;
             return Select(null, null, PlaceText.NothingHere);
         }
 
@@ -217,6 +221,7 @@ public partial class PlaceInspector : Node
     /// </summary>
     public string InspectHit(Node? collider, Vector3? position)
     {
+        LastRayHit = collider is not null || position is not null;
         var places = Loader?.Places;
         if (places is null)
         {

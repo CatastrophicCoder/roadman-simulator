@@ -325,8 +325,16 @@ public partial class ScreenshotTool : Node
         }
 
         // Spec criterion 18: the --inspect image must show the panel on a building. The inspector casts its ray each
-        // physics frame, so after the settle frames its selection is the building at the screen centre, if any.
-        if (Request!.Inspect && Inspector!.SelectedBuilding is null)
+        // physics frame, so after the settle frames its selection is the building at the screen centre, if any. With
+        // the whole map loaded, a centre ray that hits nothing has left the built area: N/A, like a preset outside it.
+        if (Request!.Inspect && Inspector!.SelectedBuilding is null && !Inspector.LastRayHit)
+        {
+            GD.Print($"N/A: outside built area (the centre ray of preset '{preset.Name}' leaves the built area without hitting a building)");
+            Finish(ScreenshotExitCode.OutsideBuiltArea, null);
+            return;
+        }
+
+        if (Request.Inspect && Inspector.SelectedBuilding is null)
         {
             Finish(
                 ScreenshotExitCode.Error,
