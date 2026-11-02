@@ -20,6 +20,21 @@ public readonly record struct PresetResolution(bool IsOutsideBuiltArea, LocalPoi
 }
 
 /// <summary>
+/// The result of checking a preset's look-at point (<see cref="PresetPlacement.CheckLookAt"/>).
+/// </summary>
+public enum LookAtCheck
+{
+    /// <summary>A downward ray at the look-at x/z hits the terrain or the world-edge cliff.</summary>
+    Inside,
+
+    /// <summary>The collision is queryable, but the ray hits nothing: outside the built area (N/A).</summary>
+    OutsideBuiltArea,
+
+    /// <summary>The terrain collision never became queryable: the map or its collision didn't load (an error).</summary>
+    CollisionNotReady,
+}
+
+/// <summary>
 /// Resolves ground-relative heights. The engine side supplies the terrain hit (a downward raycast); the rules
 /// for what a hit or a miss means live here.
 /// </summary>
@@ -52,6 +67,27 @@ public static class PresetPlacement
         ArgumentNullException.ThrowIfNull(preset);
         ArgumentNullException.ThrowIfNull(groundOrEdgeHitAt);
         return IsInsideMap(groundOrEdgeHitAt(preset.LookAt.X, preset.LookAt.Z));
+    }
+
+    /// <summary>
+    /// Checks a preset's look-at point once the map has loaded. When the terrain collision never became queryable
+    /// (<paramref name="collisionReady"/> false), the map or its collision didn't load: that is
+    /// <see cref="LookAtCheck.CollisionNotReady"/>, an error for every preset, ground-relative or absolute, and the
+    /// look-at isn't probed. Otherwise <see cref="LooksAtMap"/> decides between inside and outside the built area.
+    /// </summary>
+    /// <param name="preset">The preset.</param>
+    /// <param name="collisionReady">Whether the terrain collision became queryable in time.</param>
+    /// <param name="groundOrEdgeHitAt">As for <see cref="LooksAtMap"/>.</param>
+    public static LookAtCheck CheckLookAt(CameraPreset preset, bool collisionReady, Func<double, double, double?> groundOrEdgeHitAt)
+    {
+        ArgumentNullException.ThrowIfNull(preset);
+        ArgumentNullException.ThrowIfNull(groundOrEdgeHitAt);
+        if (!collisionReady)
+        {
+            return LookAtCheck.CollisionNotReady;
+        }
+
+        return LooksAtMap(preset, groundOrEdgeHitAt) ? LookAtCheck.Inside : LookAtCheck.OutsideBuiltArea;
     }
 
     /// <summary>

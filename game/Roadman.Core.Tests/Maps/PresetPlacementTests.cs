@@ -91,6 +91,35 @@ public class PresetPlacementTests
         Assert.False(PresetPlacement.LooksAtMap(preset, Hit));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CheckLookAt_CollisionNotReady_IsAnErrorForEveryPresetAndDoesNotProbe(bool groundRelative)
+    {
+        // A collision timeout means the map didn't load: never N/A, also for an absolute preset.
+        var preset = new CameraPreset("p", new LocalPoint(1, 2, 3), new LocalPoint(4, 5, 6), 70, groundRelative);
+        var probed = false;
+
+        var check = PresetPlacement.CheckLookAt(preset, collisionReady: false, (_, _) =>
+        {
+            probed = true;
+            return null;
+        });
+
+        Assert.Equal(LookAtCheck.CollisionNotReady, check);
+        Assert.False(probed);
+    }
+
+    [Theory]
+    [InlineData(10.0, LookAtCheck.Inside)]
+    [InlineData(null, LookAtCheck.OutsideBuiltArea)]
+    public void CheckLookAt_CollisionReady_FollowsTheRayHit(double? hitY, LookAtCheck expected)
+    {
+        var preset = new CameraPreset("p", new LocalPoint(1, 2, 3), new LocalPoint(4, 5, 6), 70, false);
+
+        Assert.Equal(expected, PresetPlacement.CheckLookAt(preset, collisionReady: true, (_, _) => hitY));
+    }
+
     [Fact]
     public void LooksAtMap_ProbesOnlyTheLookAtPoint()
     {

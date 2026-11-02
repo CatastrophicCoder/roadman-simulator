@@ -296,7 +296,13 @@ public partial class ScreenshotTool : Node
             return;
         }
 
-        if (!terrainReady && preset.GroundRelative)
+        // A collision that never became queryable means the map or its collision didn't load: an error for every
+        // preset, never N/A. ADR 0008: with a test-area pack, a preset outside the area is N/A. Every tile loaded
+        // (checked in OnMapLoaded) and the collision is queryable, so a downward ray at the look-at x/z that hits
+        // neither the terrain nor the world-edge cliff looks at no map: the image would show empty sky or the void.
+        var lookAtCheck = PresetPlacement.CheckLookAt(
+            preset, terrainReady, (x, z) => loader.GroundOrEdgeHitAt((float)x, (float)z)?.Position.Y);
+        if (lookAtCheck == LookAtCheck.CollisionNotReady)
         {
             Finish(
                 ScreenshotExitCode.Error,
@@ -304,10 +310,7 @@ public partial class ScreenshotTool : Node
             return;
         }
 
-        // ADR 0008: with a test-area pack, a preset outside the area is N/A. Every tile loaded (checked in
-        // OnMapLoaded) and the collision is queryable (awaited above), so a downward ray at the look-at x/z that hits
-        // neither the terrain nor the world-edge cliff looks at no map: the image would show empty sky or the void.
-        if (!PresetPlacement.LooksAtMap(preset, (x, z) => loader.GroundOrEdgeHitAt((float)x, (float)z)?.Position.Y))
+        if (lookAtCheck == LookAtCheck.OutsideBuiltArea)
         {
             var lookAt = FormattableString.Invariant($"x {preset.LookAt.X:0.###}, z {preset.LookAt.Z:0.###}");
             GD.Print(
