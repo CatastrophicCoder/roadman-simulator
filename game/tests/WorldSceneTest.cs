@@ -18,6 +18,10 @@ public class WorldSceneTest
         var world = runner.Scene();
         AssertThat(world).IsNotNull();
 
+        // Right after the load, before the player spawns (it waits for the terrain collision, a physics frame or
+        // more), the debug camera is current. PlayerOnFootTest checks that the player camera takes over after the
+        // spawn (docs/specs/player-on-foot.md, criterion 6).
+        AssertThat(((Roadman.Scenes.World)world!).Player).IsNull();
         var camera = world!.GetNodeOrNull<Camera3D>("DebugCamera");
         AssertThat(camera).IsNotNull();
         AssertThat(camera).IsInstanceOf<DebugCamera>();

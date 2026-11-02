@@ -47,32 +47,10 @@ public sealed record PoiPolygon(IReadOnlyList<PlanarPoint> Exterior, IReadOnlyLi
     public bool Contains(double x, double z) =>
         RingContains(Exterior, x, z) && !Holes.Any(hole => RingContains(hole, x, z));
 
-    private static double SignedArea(IReadOnlyList<PlanarPoint> ring)
-    {
-        var sum = 0.0;
-        for (var i = 0; i < ring.Count - 1; i++)
-        {
-            sum += (ring[i].X * ring[i + 1].Z) - (ring[i + 1].X * ring[i].Z);
-        }
+    private static double SignedArea(IReadOnlyList<PlanarPoint> ring) => PlanarPolygon.SignedArea(ring);
 
-        return sum / 2;
-    }
-
-    private static bool RingContains(IReadOnlyList<PlanarPoint> ring, double x, double z)
-    {
-        var inside = false;
-        for (var i = 0; i < ring.Count - 1; i++)
-        {
-            var a = ring[i];
-            var b = ring[i + 1];
-            if ((a.Z > z) != (b.Z > z) && x < a.X + ((z - a.Z) * (b.X - a.X) / (b.Z - a.Z)))
-            {
-                inside = !inside;
-            }
-        }
-
-        return inside;
-    }
+    private static bool RingContains(IReadOnlyList<PlanarPoint> ring, double x, double z) =>
+        PlanarPolygon.RingContains(ring, x, z);
 }
 
 /// <summary>One entry of <c>pois.json</c>: a shop, amenity, office, tourism or leisure feature, named or not.</summary>

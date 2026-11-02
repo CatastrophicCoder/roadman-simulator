@@ -1,4 +1,5 @@
 using Roadman.Core;
+using Roadman.Core.Maps;
 
 namespace Roadman.Core.Tests;
 
@@ -222,5 +223,92 @@ public class PlayerStateTests
         Assert.Equal([0], money);
         Assert.Equal(1, gear);
         Assert.Equal([0], wanted);
+    }
+
+    // Position: docs/specs/player-on-foot.md, acceptance criterion 4.
+
+    [Fact]
+    public void Position_StartsAtTheOrigin()
+    {
+        Assert.Equal(default, new PlayerState().Position);
+    }
+
+    [Fact]
+    public void SetPosition_RaisesPositionChangedOnlyWhenTheValueChanges()
+    {
+        var state = new PlayerState();
+        var changes = new List<LocalPoint>();
+        state.PositionChanged += changes.Add;
+        var point = new LocalPoint(70.5, 101.25, -98.75);
+
+        state.SetPosition(point);
+        state.SetPosition(point);
+        state.SetPosition(new LocalPoint(70.5, 101.25, -98.75));
+
+        Assert.Equal([point], changes);
+        Assert.Equal(point, state.Position);
+
+        var next = new LocalPoint(70.5, 101.25, -98.5);
+        state.SetPosition(next);
+        state.SetPosition(next);
+
+        Assert.Equal([point, next], changes);
+        Assert.Equal(next, state.Position);
+    }
+
+    [Fact]
+    public void SetPosition_OriginBeforeAnyMove_RaisesNothing()
+    {
+        var state = new PlayerState();
+        var changes = 0;
+        state.PositionChanged += _ => changes++;
+
+        state.SetPosition(new LocalPoint(0, 0, 0));
+
+        Assert.Equal(0, changes);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void SetPosition_NonFiniteComponent_ThrowsAndKeepsThePosition(int component)
+    {
+        var state = new PlayerState();
+        var start = new LocalPoint(1, 2, 3);
+        state.SetPosition(start);
+        var changes = 0;
+        state.PositionChanged += _ => changes++;
+
+        foreach (var bad in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+        {
+            var point = component switch
+            {
+                0 => start with { X = bad },
+                1 => start with { Y = bad },
+                _ => start with { Z = bad },
+            };
+
+            Assert.Throws<ArgumentException>(() => state.SetPosition(point));
+        }
+
+        Assert.Equal(start, state.Position);
+        Assert.Equal(0, changes);
+    }
+
+    [Fact]
+    public void Die_LeavesThePositionUnchanged()
+    {
+        var state = new PlayerState();
+        var point = new LocalPoint(70.5, 101.25, -98.75);
+        state.SetPosition(point);
+        state.AddMoney(5);
+        var changes = 0;
+        state.PositionChanged += _ => changes++;
+
+        state.Die();
+
+        Assert.Equal(point, state.Position);
+        Assert.Equal(0, changes);
     }
 }

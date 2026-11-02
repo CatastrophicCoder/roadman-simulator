@@ -148,7 +148,7 @@ public partial class StreetLabelHud : CanvasLayer
     /// <summary>The first hit on a road or terrain body along from → to, skipping every other body.</summary>
     private static Vector3? GroundBelow(PhysicsDirectSpaceState3D space, Vector3 from, Vector3 to)
     {
-        var query = PhysicsRayQueryParameters3D.Create(from, to);
+        var query = PhysicsRayQueryParameters3D.Create(from, to, CollisionLayers.Map);
         var excluded = new Godot.Collections.Array<Rid>();
         for (var i = 0; i < MaxRayHits; i++)
         {

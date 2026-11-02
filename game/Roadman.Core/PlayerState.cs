@@ -1,7 +1,9 @@
+using Roadman.Core.Maps;
+
 namespace Roadman.Core;
 
 /// <summary>
-/// The player's money, gear and wanted level, and the rules that change them.
+/// The player's money, gear, wanted level and position, and the rules that change them.
 /// Events are raised only when a value actually changes; <see cref="Died"/> is raised on every <see cref="Die"/>.
 /// </summary>
 public sealed class PlayerState
@@ -15,11 +17,38 @@ public sealed class PlayerState
     public event Action<int>? WantedLevelChanged;
     public event Action? Died;
 
+    /// <summary>Raised with the new value when <see cref="SetPosition"/> changes <see cref="Position"/>.</summary>
+    public event Action<LocalPoint>? PositionChanged;
+
     public int Money { get; private set; }
 
     public IReadOnlySet<string> Gear => _gear;
 
     public int WantedLevel { get; private set; }
+
+    /// <summary>
+    /// The player's last committed position in Godot local metres (the body's global position, written by the player
+    /// node every physics frame); the origin until the first <see cref="SetPosition"/>.
+    /// </summary>
+    public LocalPoint Position { get; private set; }
+
+    /// <summary>Sets <see cref="Position"/>; raises <see cref="PositionChanged"/> only when the value changes.</summary>
+    /// <exception cref="ArgumentException">A non-finite component.</exception>
+    public void SetPosition(LocalPoint position)
+    {
+        if (!double.IsFinite(position.X) || !double.IsFinite(position.Y) || !double.IsFinite(position.Z))
+        {
+            throw new ArgumentException($"position must be finite, is {position}", nameof(position));
+        }
+
+        if (position == Position)
+        {
+            return;
+        }
+
+        Position = position;
+        PositionChanged?.Invoke(Position);
+    }
 
     public void AddMoney(int amount)
     {
@@ -91,7 +120,10 @@ public sealed class PlayerState
         WantedLevelChanged?.Invoke(WantedLevel);
     }
 
-    /// <summary>Any death costs all the money and gear, and clears the wanted level.</summary>
+    /// <summary>
+    /// Any death costs all the money and gear, and clears the wanted level. The position stays as it is; respawn
+    /// belongs to the death and respawn spec.
+    /// </summary>
     public void Die()
     {
         if (Money != 0)

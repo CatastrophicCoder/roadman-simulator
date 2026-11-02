@@ -6,6 +6,9 @@ namespace Roadman.Debug;
 /// Free-flying camera for looking around the map.
 /// WASD moves, Q/E move down/up, holding the right mouse button looks around,
 /// Shift moves faster and the mouse wheel changes the base speed.
+/// Input is read only while this camera is <see cref="Camera3D.Current"/>, so the player's WASD and Shift don't move
+/// it while the player camera is current. It changes the mouse mode only while current: when another camera becomes
+/// current it stops looking and leaves the mouse to that camera.
 /// </summary>
 public partial class DebugCamera : Camera3D
 {
@@ -33,6 +36,11 @@ public partial class DebugCamera : Camera3D
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (!Current)
+        {
+            return;
+        }
+
         switch (@event)
         {
             case InputEventMouseButton { ButtonIndex: MouseButton.Right } button:
@@ -52,10 +60,27 @@ public partial class DebugCamera : Camera3D
 
     public override void _Process(double delta)
     {
+        if (_looking && !Current)
+        {
+            // Another camera became current (the player camera, which may have captured the mouse itself): stop
+            // looking without touching the mouse mode.
+            _looking = false;
+        }
+
+        if (!Current)
+        {
+            return;
+        }
+
         // The button release can miss _UnhandledInput (eaten by GUI, window lost focus); never stay captured.
         if (_looking && !Input.IsMouseButtonPressed(MouseButton.Right))
         {
             SetLooking(false);
+        }
+        else if (_looking && Input.MouseMode != Input.MouseModeEnum.Captured)
+        {
+            // Something else released the mouse while the button is still held: take it back.
+            Input.MouseMode = Input.MouseModeEnum.Captured;
         }
 
         var input = Input.GetVector("debug_left", "debug_right", "debug_forward", "debug_back");
@@ -84,6 +109,10 @@ public partial class DebugCamera : Camera3D
         SetLooking(false);
     }
 
+    /// <summary>
+    /// Starts or stops looking. The mouse mode changes only while this camera is current, so it never releases a capture
+    /// another camera holds.
+    /// </summary>
     private void SetLooking(bool looking)
     {
         if (_looking == looking)
@@ -92,7 +121,10 @@ public partial class DebugCamera : Camera3D
         }
 
         _looking = looking;
-        Input.MouseMode = looking ? Input.MouseModeEnum.Captured : Input.MouseModeEnum.Visible;
+        if (Current)
+        {
+            Input.MouseMode = looking ? Input.MouseModeEnum.Captured : Input.MouseModeEnum.Visible;
+        }
     }
 
     private void Look(Vector2 relative)

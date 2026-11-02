@@ -383,8 +383,8 @@ public class RoadGraphTest
         File.WriteAllText(
             Path.Combine(_tempPack, MapPack.RoadGraphFile),
             $$"""{"schema_version": 1, "map_id": "{{mapId}}", "area": "test", "nodes": [], "edges": []}""");
-        // The place data too, so the only difference from a complete pack is the empty graph.
-        foreach (var file in new[] { MapPack.BuildingsFile, MapPack.PoisFile })
+        // The place data and the boundary too, so the only difference from a complete pack is the empty graph.
+        foreach (var file in new[] { MapPack.BuildingsFile, MapPack.PoisFile, MapPack.BoundaryFile })
         {
             var json = JsonNode.Parse(File.ReadAllText(ProjectSettings.GlobalizePath($"res://maps/{MapId}/{file}")))!;
             json["map_id"] = mapId;

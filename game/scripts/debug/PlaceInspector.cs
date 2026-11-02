@@ -209,7 +209,8 @@ public partial class PlaceInspector : Node
             return InspectHit(null, null);
         }
 
-        var hit = world.DirectSpaceState.IntersectRay(PhysicsRayQueryParameters3D.Create(from, to));
+        // Map bodies only: the player's capsule (its own layer) must not hide what the third-person view looks at.
+        var hit = world.DirectSpaceState.IntersectRay(PhysicsRayQueryParameters3D.Create(from, to, CollisionLayers.Map));
         return hit.Count == 0
             ? InspectHit(null, null)
             : InspectHit(hit["collider"].AsGodotObject() as Node, hit["position"].AsVector3());

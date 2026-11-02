@@ -180,7 +180,7 @@ Contents so far:
   | `ground_relative` | Default false. When true, `position[1]` and `look_at[1]` are heights above the terrain at that point's x/z |
 
   Unknown keys are errors. JSON Schema: `tools/mapgen/src/mapgen/build/schemas/camera-presets-v1.schema.json`.
-- `boundary.json` (ADR 0015): always written, byte-identical for the same input, not listed in the manifest. JSON Schema: `tools/mapgen/src/mapgen/build/schemas/boundary-v1.schema.json`. Godot local metres (points `[x, y, z]`, footprints `[x, z]`); `s` is metres along the ring. Fields: `schema_version` (`1`), `map_id`, `area`, `boundary` (`ring` counter-clockwise from its lowest-x, lowest-n vertex, `length_m`, `source` `area`, `custom` or `test_area`), `roadblocks` (`id`, `nodes` with `node`, `edge` and `role` `spawn_despawn` or `turn_around`, `class`, `drivable`, `walkable`, `width_m`, `width_source`, `start`, `end`, `position`, `yaw_deg`, `outward`, `s_start`, `s_end`, `over_water`), `fences` (`id`, `type` `land` or `water`, `start`, `end`, `s_start`, `s_end`, `outward`, `water_ids` for water), `cliff` (`ledge_m`, `bottom_y`), `void_trigger` (`bottom_y`, `top_y`, `prisms` of convex `footprint` quads), `spawn_area` (`polygon`, `open_ground`, `open_area_m2`) and `water_crossings` (`s_start`, `s_end`, `source`, `water_ids`). Roadblocks and fences sorted by `s_start` tile the ring. Not read by the game yet.
+- `boundary.json` (ADR 0015): always written, byte-identical for the same input, not listed in the manifest. JSON Schema: `tools/mapgen/src/mapgen/build/schemas/boundary-v1.schema.json`. Godot local metres (points `[x, y, z]`, footprints `[x, z]`); `s` is metres along the ring. Fields: `schema_version` (`1`), `map_id`, `area`, `boundary` (`ring` counter-clockwise from its lowest-x, lowest-n vertex, `length_m`, `source` `area`, `custom` or `test_area`), `roadblocks` (`id`, `nodes` with `node`, `edge` and `role` `spawn_despawn` or `turn_around`, `class`, `drivable`, `walkable`, `width_m`, `width_source`, `start`, `end`, `position`, `yaw_deg`, `outward`, `s_start`, `s_end`, `over_water`), `fences` (`id`, `type` `land` or `water`, `start`, `end`, `s_start`, `s_end`, `outward`, `water_ids` for water), `cliff` (`ledge_m`, `bottom_y`), `void_trigger` (`bottom_y`, `top_y`, `prisms` of convex `footprint` quads), `spawn_area` (`polygon`, `open_ground`, `open_area_m2`) and `water_crossings` (`s_start`, `s_end`, `source`, `water_ids`). Roadblocks and fences sorted by `s_start` tile the ring. The game reads it into `MapLoader.Boundary` (`BoundaryReader`); the player spawns from `spawn_area.open_ground` (ADR 0016).
 - `road_graph.json` (ADR 0012): always written; empty `nodes` and `edges` when `map.yaml` has no `roads` block. Not listed in the manifest. JSON Schema: `tools/mapgen/src/mapgen/build/schemas/road-graph-v1.schema.json`. Coordinates are Godot local metres. Fields: `schema_version` (`1`), `map_id`, `area`, `nodes` and `edges`.
   - Node: `id` (`osm:node/<id>`, `cut:way/<id>:<n>` or `span:way/<id>:<n>`), `kind` (`junction`, `joint`, `dead_end`, `area_edge`, `span_end`), `position` `[x, y, z]`, `osm_node` (or `null`).
   - Edge: `id` (`osm:way/<id>#<n>`), `from`, `to`, `class`, `drivable`, `walkable`, `lanes`, `speed_kmh` (`null` when not drivable), `width_m`, each of these five with a `*_source` (`osm` or `default`); `oneway` (`from` → `to` is the allowed driving direction), `bridge`, `bridge_source` (`osm`, `inferred`, `inferred_underpass` or `null`), `tunnel`, `layer`, `length_m`, `osm_way`, the name fields `name`, `name_sv` and `ref` (string or `null`), and `points` (at least 2 `[x, y, z]`).
@@ -211,7 +211,7 @@ TODO: the pack formats of markers (parking spots, gameplay points of interest) a
 
 A node in the `World` scene. It reads the map id from settings or a menu, checks the manifest's schema version, and instances tiles. It loads all tiles at first and adds streaming near the camera later. It also places barrier scenes from `boundary.json`.
 
-After the tiles it reads `road_graph.json` into `MapLoader.RoadGraph`, then `buildings.json` and `pois.json` into `MapLoader.Places` (a `PlaceIndex`). Each is null, with an error naming the pack path and `/regen-map`, when its file is missing or invalid; the tiles still load. Road, path and bridge collision bodies are in the group `map_roads`, terrain bodies in `map_terrain`, building collision bodies in `map_buildings`. Each building body is named after its glTF collision node, so `MapLoader.BuildingOf(body)` resolves it through `PlaceIndex.TryGetBuildingByNode`.
+After the tiles it reads `road_graph.json` into `MapLoader.RoadGraph`, then `buildings.json` and `pois.json` into `MapLoader.Places` (a `PlaceIndex`), then `boundary.json` into `MapLoader.Boundary`. Each is null, with an error naming the pack path and `/regen-map`, when its file is missing or invalid; the tiles still load. Road, path and bridge collision bodies are in the group `map_roads`, terrain bodies in `map_terrain`, building collision bodies in `map_buildings`. Each building body is named after its glTF collision node, so `MapLoader.BuildingOf(body)` resolves it through `PlaceIndex.TryGetBuildingByNode`.
 
 Tile `.glb` files import with the project-wide `[importer_defaults]` (ADR 0008). The screenshot tool renders the pack's camera presets for visual checks (ADR 0008, `game/CLAUDE.md`).
 
@@ -238,19 +238,31 @@ Projects (all `net10.0`, ADR 0007):
 
 **`RoadGraph`** (`Maps/RoadGraph.cs`, read by `RoadGraphReader`, ADR 0012) holds the pack's nodes and edges. The reader rejects another schema version, unknown keys, unknown node kinds, duplicate ids, dangling edges, edges with fewer than 2 points, edges neither drivable nor walkable, drivable edges without a speed and non-finite numbers. Lookups: `DrivableEdgesFrom(node)` (one-way edges only in their allowed direction), `WalkableEdgesAt(node)`, `NearestNode(position, filter)`, `NearestEdge(position, maxDistance)` (nearest polyline in 3D, ties to the lower edge id).
 
+**World edge and player** (ADR 0015, ADR 0016):
+
+- `BoundaryReader` reads the whole of `boundary.json` version 1 into `Boundary`. It rejects another schema version, missing or unknown keys, unknown enum values (boundary `source`, node `role`, fence `type`, `width_source`; a water crossing's `source` is a free map.yaml source name), non-finite numbers, a `map_id` or `area` that isn't the manifest's, short or unclosed rings, prism footprints that aren't 4 points, `open_area_m2` ≤ 0 and a void `bottom_y` ≥ `top_y`.
+- `SpawnPicker` draws points uniformly by area over the open-ground polygons (holes excluded) from an injected `Random`, so a seed gives the same sequence.
+- `PlayerState.Position` is the player's last committed position (Godot local metres). `PositionChanged` fires only when it changes; death leaves it as it is.
+- `OnFootMotion` holds the on-foot movement maths: camera-relative target velocity, acceleration and deceleration limits, air control, turning, and `JumpVelocity`.
+- `FallReset.IsBelow` is the temporary fall rule (more than a depth below the slab's bottom).
+
 TODO: routing (with the traffic AI spec), mission state, and the respawn state machine.
 
 ### Gameplay (Godot C#)
 
 - Autoloads: `Events` (global signal bus) and `GameState` (player, wanted level, settings). Both stay small.
-- `World` scene: MapLoader, WorldEnvironment, sun, debug camera, HUD street label. In debug builds also the orthophoto view (F2), the road graph view (G) and the place inspector (I).
+- `World` scene: MapLoader, WorldEnvironment, sun, debug camera, HUD street label, and the player once it has spawned. In debug builds also the orthophoto view (F2), the road graph view (G) and the place inspector (I).
+- Player (ADR 0016, `docs/specs/player-on-foot.md`): a `CharacterBody3D` built in code (`scripts/player/Player.cs`) that walks, runs and jumps with `OnFootMotion`, on collision layer 2, and writes its position to `PlayerState` every physics frame. `World` spawns it at a random open-ground point of `boundary.json`'s spawn area (`SpawnPicker`, seeded from the time or `--seed`), checking each draw with a ray and a capsule query, and spawns it again after a map reload. No valid `boundary.json`, or no free draw: an error, and no player.
+- Player camera (`scripts/player/PlayerCamera.cs`): a pivot that follows the player, a spring arm on the map's collision layer so the camera never clips into walls, mouse orbit with clamped pitch, no automatic swing-back.
+- Input map: `move_*` (WASD), `run` (Shift), `jump` (Space), and the `debug_*` actions; only the current camera's owner reads input.
+- Temporary fall respawn: a player more than `FallRespawnDepth` below `cliff.bottom_y` respawns in the spawn area, with no death. The world-edge death spec replaces it.
 - HUD street label (ADR 0013): the street of the nearest road graph edge within 40 m of the player, or of the ground below the camera until there is a player, in every build. Never business names.
 - Place inspector (debug builds only): a crosshair and a panel with the pack's data for the building or point of interest under the screen centre, including raw names and the override sources. Its text comes from `Roadman.Core`'s `PlaceText`.
 - Vehicle (`VehicleBody3D`), chase camera, HUD with minimap, input map.
 - World edge: barrier scenes, the void `Area3D` and its death sequence, space backdrop.
 - Missions refer to marker ids in the pack, never to raw coordinates.
 
-TODO: traffic AI, pedestrian AI, police, missions, player character. Each of these gets a spec in `docs/specs/` before implementation.
+TODO: traffic AI, pedestrian AI, police, missions. Each of these gets a spec in `docs/specs/` before implementation.
 
 ## Testing
 

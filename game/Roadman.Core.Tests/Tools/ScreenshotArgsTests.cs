@@ -235,6 +235,75 @@ public class ScreenshotArgsTests
         Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
     }
 
+    // ----- --seed (docs/specs/player-on-foot.md, criterion 7): skipped here, read by SeedArg -----
+
+    [Fact]
+    public void Parse_Seed_InAnyPositionAlongsideScreenshotFlags_IsSkipped()
+    {
+        var after = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--seed", "42"]);
+        var before = ScreenshotArgs.Parse(["--seed", "-7", "--map", "x", "--screenshot", "a", "a.png", "--inspect"]);
+        var between = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--orthophoto", "--seed", "0", "--road-graph"]);
+
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null), after);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, "x", Inspect: true), before);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, null, Orthophoto: true, RoadGraph: true), between);
+    }
+
+    [Fact]
+    public void Parse_WithoutScreenshotFlag_IgnoresSeed()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--seed", "3"]));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--seed")]
+    [InlineData("--screenshot", "a", "a.png", "--seed", "")]
+    [InlineData("--screenshot", "a", "a.png", "--seed", "abc")]
+    [InlineData("--screenshot", "a", "a.png", "--seed", "1.5")]
+    public void Parse_SeedValueMissingOrNotAnInteger_Throws(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--seed", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_SeedValueIsConsumed_SoItIsNotTakenAsAnUnknownArgument()
+    {
+        // "-5" alone would be an unknown argument; after --seed it is the seed's value.
+        Assert.NotNull(ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--seed", "-5"]));
+        Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "-5"]));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--seed", "1", "--verbose")]
+    [InlineData("--screenshot", "a", "a.png", "--seeds", "1")]
+    [InlineData("--screenshot", "a", "a.png", "--seed", "1", "2")]
+    public void Parse_WithSeed_OtherUnknownArgumentsStillThrow(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("unexpected argument", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("--seed", "1", "--screenshot", "a", "a.png", "--seed", "2")] // one before, one after --screenshot
+    [InlineData("--screenshot", "a", "a.png", "--seed", "1", "--seed", "2")] // both after
+    [InlineData("--seed", "1", "--seed", "2", "--screenshot", "a", "a.png")] // both before
+    [InlineData("--screenshot", "a", "a.png", "--seed", "1", "--inspect", "--seed", "1")] // same value twice
+    public void Parse_SeedRepeated_ThrowsNamingSeed(params string[] args)
+    {
+        // Criterion 7: a repeated --seed is an argument error of the screenshot run, as for every other flag.
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--seed", ex.Message);
+        Assert.Contains("more than once", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_UnknownArgument_ListsSeedInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--verbose"]));
+        Assert.Contains("[--seed <n>]", ex.Message);
+    }
+
     [Fact]
     public void Parse_OutputNotPng_Throws()
     {

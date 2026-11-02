@@ -11,7 +11,8 @@ namespace Roadman.Scenes;
 /// then instances every tile under a <c>Tiles</c> child, named by tile id, at the origin (the tile meshes are
 /// already in map-local coordinates). All tiles load at once; streaming comes later.
 /// After the tiles it reads <c>road_graph.json</c> into <see cref="RoadGraph"/>, then <c>buildings.json</c> and
-/// <c>pois.json</c> into <see cref="Places"/>; a missing or invalid file is reported, and the tiles stay loaded.
+/// <c>pois.json</c> into <see cref="Places"/>, then <c>boundary.json</c> into <see cref="Boundary"/>; a missing or
+/// invalid file is reported, and the tiles stay loaded.
 /// Building collision bodies are in <see cref="BuildingGroup"/>; <see cref="BuildingOf"/> resolves one to its building.
 /// Errors are pushed with the pack path and the <c>/regen-map</c> hint; the game keeps running without a map.
 /// </summary>
@@ -129,6 +130,15 @@ public partial class MapLoader : Node3D
     /// <summary>Path of the points of interest file in the pack.</summary>
     public string PoisPath => $"{PackPath}/{MapPack.PoisFile}";
 
+    /// <summary>
+    /// The pack's world edge and spawn area (ADR 0015), read after <see cref="Places"/>; null before a
+    /// <see cref="Load"/> and when <c>boundary.json</c> is missing or invalid (an error is pushed then).
+    /// </summary>
+    public Boundary? Boundary { get; private set; }
+
+    /// <summary>Path of the boundary file in the pack.</summary>
+    public string BoundaryPath => $"{PackPath}/{MapPack.BoundaryFile}";
+
     /// <summary>The map id in use: <see cref="MapId"/>, or the project setting when that is empty.</summary>
     public string ResolvedMapId =>
         string.IsNullOrEmpty(MapId) ? ProjectSettings.GetSetting(MapIdSetting, DefaultMapId).AsString() : MapId;
@@ -148,7 +158,7 @@ public partial class MapLoader : Node3D
 
     /// <summary>
     /// Reads the manifest and instances every tile. Emits <see cref="SignalName.MapLoaded"/> with the number of
-    /// tiles loaded (a missing tile is reported and skipped; <see cref="RoadGraph"/> and <see cref="Places"/> are set before it), or <see cref="SignalName.MapLoadFailed"/> when the
+    /// tiles loaded (a missing tile is reported and skipped; <see cref="RoadGraph"/>, <see cref="Places"/> and <see cref="Boundary"/> are set before it), or <see cref="SignalName.MapLoadFailed"/> when the
     /// pack can't be used at all.
     /// </summary>
     /// <returns>True when the manifest was read and every tile loaded.</returns>
@@ -208,6 +218,7 @@ public partial class MapLoader : Node3D
         RoadGraph = LoadRoadGraph(mapId);
         Places = LoadPlaces(mapId, manifest);
         PrepareBuildingBodies(mapId);
+        Boundary = LoadBoundary(mapId, manifest);
         EmitSignal(SignalName.MapLoaded, LoadedTileCount);
         return complete;
     }
@@ -242,7 +253,8 @@ public partial class MapLoader : Node3D
         var space = GetWorld3D().DirectSpaceState;
         var query = PhysicsRayQueryParameters3D.Create(
             new Vector3(x, RayHalfLength, z),
-            new Vector3(x, -RayHalfLength, z));
+            new Vector3(x, -RayHalfLength, z),
+            CollisionLayers.Map);
         var excluded = new Godot.Collections.Array<Rid>();
         for (var i = 0; i < MaxRayHits; i++)
         {
@@ -351,6 +363,7 @@ public partial class MapLoader : Node3D
         Manifest = null;
         RoadGraph = null;
         Places = null;
+        Boundary = null;
         LoadedTileCount = 0;
         BuildingBodyCount = 0;
     }
@@ -453,6 +466,35 @@ public partial class MapLoader : Node3D
         GD.Print(
             $"MapLoader: {places.Buildings.Items.Count} buildings and {places.Pois.Items.Count} points of interest from {PackPath}");
         return places;
+    }
+
+    /// <summary>
+    /// Reads <see cref="BoundaryPath"/>, checked against <paramref name="manifest"/> (map id and area). A missing or
+    /// invalid file pushes an error and gives null; the tiles, road graph and places stay loaded.
+    /// </summary>
+    private Boundary? LoadBoundary(string mapId, MapManifest manifest)
+    {
+        var path = BoundaryPath;
+        if (!FileAccess.FileExists(path))
+        {
+            GD.PushError($"MapLoader: no boundary: {path} doesn't exist; {MapPack.RegenHint(mapId)}");
+            return null;
+        }
+
+        Boundary boundary;
+        try
+        {
+            boundary = BoundaryReader.Parse(FileAccess.GetFileAsString(path), manifest, path);
+        }
+        catch (MapPackException ex)
+        {
+            GD.PushError($"MapLoader: {ex.Message}; {MapPack.RegenHint(mapId)}");
+            return null;
+        }
+
+        GD.Print(
+            $"MapLoader: boundary with {boundary.SpawnArea.OpenGround.Count} open-ground polygons in the spawn area from {path}");
+        return boundary;
     }
 
     private bool Fail(string message)

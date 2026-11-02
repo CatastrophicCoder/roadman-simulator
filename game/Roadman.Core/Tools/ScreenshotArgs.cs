@@ -5,6 +5,8 @@ namespace Roadman.Core.Tools;
 /// <summary>
 /// The screenshot tool's user arguments (after <c>--</c> on the Godot command line):
 /// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect]</c>.
+/// <c>--seed &lt;n&gt;</c> may stand among them; it belongs to <see cref="SeedArg"/>, which reads it, and is skipped here
+/// (its value is still checked and a repeat is rejected, so a bad seed is an argument error of the screenshot run too).
 /// </summary>
 /// <param name="Preset">Camera preset name.</param>
 /// <param name="OutputPath">PNG to write, as given; resolve it with <see cref="OutputPath.Resolve"/>.</param>
@@ -40,7 +42,7 @@ public sealed record ScreenshotArgs(
     public const string InspectFlag = "--inspect";
 
     private const string Usage =
-        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}]";
+        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{SeedArg.Flag} <n>]";
 
     /// <summary>
     /// Parses the user arguments.
@@ -51,7 +53,7 @@ public sealed record ScreenshotArgs(
     /// </returns>
     /// <exception cref="ArgumentException">
     /// With <c>--screenshot</c>: a value is missing, an argument is repeated or unknown, the output isn't a <c>.png</c>,
-    /// or the map id isn't a slug.
+    /// the map id isn't a slug, or the <c>--seed</c> value isn't an integer.
     /// </exception>
     public static ScreenshotArgs? Parse(IReadOnlyList<string> userArgs)
     {
@@ -71,6 +73,7 @@ public sealed record ScreenshotArgs(
         var orthophoto = false;
         var roadGraph = false;
         var inspect = false;
+        var seenSeed = false;
 
         for (var i = 0; i < userArgs.Count; i++)
         {
@@ -133,6 +136,16 @@ public sealed record ScreenshotArgs(
                     }
 
                     inspect = true;
+                    break;
+                case SeedArg.Flag:
+                    // Read by SeedArg.Parse; here a repeat is rejected and the value is only checked and skipped.
+                    if (seenSeed)
+                    {
+                        throw new ArgumentException($"{SeedArg.Flag} is given more than once");
+                    }
+
+                    seenSeed = true;
+                    SeedArg.ParseValue(userArgs, ++i);
                     break;
                 default:
                     throw new ArgumentException($"unexpected argument '{userArgs[i]}'; usage: {Usage}");

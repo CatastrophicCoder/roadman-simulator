@@ -217,6 +217,7 @@ public class PlaceInformationTest
         AssertPackPresent();
         using var runner = ISceneRunner.Load(WorldScenePath, true);
         var world = await LoadWorld(runner);
+        await UseDebugCameraWithoutTarget(runner, world);
         var graph = world.MapLoader.RoadGraph!;
         var hud = world.Hud;
         AssertFloat(hud.StreetMaxDistance).IsEqual(40f);
@@ -257,6 +258,7 @@ public class PlaceInformationTest
         AssertPackPresent();
         using var runner = ISceneRunner.Load(WorldScenePath, true);
         var world = await LoadWorld(runner);
+        await UseDebugCameraWithoutTarget(runner, world);
         var graph = world.MapLoader.RoadGraph!;
         var hud = world.Hud;
 
@@ -287,6 +289,7 @@ public class PlaceInformationTest
         AssertPackPresent();
         using var runner = ISceneRunner.Load(WorldScenePath, true);
         var world = await LoadWorld(runner);
+        await UseDebugCameraWithoutTarget(runner, world);
         var loader = world.MapLoader;
         var graph = loader.RoadGraph!;
         var hud = world.Hud;
@@ -450,6 +453,7 @@ public class PlaceInformationTest
         }
 
         AssertThat(building).IsNotNull();
+        await UseDebugCameraWithoutTarget(runner, world);
         var (from, to) = ray!.Value;
         world.Camera.LookAtFromPosition(from, to, Vector3.Forward);
         AssertBool(inspector.SetEnabled(true)).IsTrue();
@@ -656,6 +660,26 @@ public class PlaceInformationTest
         AssertThat(loader.RoadGraph).IsNotNull();
         AssertThat(loader.Places).IsNotNull();
         return world;
+    }
+
+    /// <summary>
+    /// Waits for the player's spawn (<c>docs/specs/player-on-foot.md</c>, "Spawn"), then makes the debug camera current
+    /// and clears <see cref="StreetLabelHud.Target"/>, so the label and the inspector use the camera ray these
+    /// criteria are about (the label's behaviour without a player). The player stays in the world; the HUD and the
+    /// inspector cast on the map layer only, so its capsule never hides the ground.
+    /// </summary>
+    private static async Task UseDebugCameraWithoutTarget(ISceneRunner runner, World world)
+    {
+        for (var frame = 0; frame < 120 && world.Player is null; frame++)
+        {
+            await runner.SimulateFrames(1);
+        }
+
+        AssertThat(world.Player).OverrideFailureMessage("the player didn't spawn").IsNotNull();
+        AssertThat(world.Hud.Target).IsSame(world.Player);
+        world.Hud.Target = null;
+        world.Camera.MakeCurrent();
+        AssertBool(world.Camera.Current).IsTrue();
     }
 
     /// <summary>
