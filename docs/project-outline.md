@@ -296,7 +296,7 @@ Every map ends at a physical barrier, and anything that crosses it falls off the
 
 **Decisions**
 
-- Barriers are easy to cross: the player can jump over them on foot or drive through them.
+- Barriers are easy to cross: the player can jump over them on foot or drive through them. Barriers are at most 0.9 m tall, and the player's jump apex is about 1.3 m.
 - Boundaries avoid water: the boundary is placed so it doesn't run through lakes or along rivers. Where it has to cross water, a special water fence replaces the land fence.
 - Any death costs all money and all gear the player has collected.
 - After death, the player respawns at a random point inside a fixed spawn area defined in the map pack.
@@ -376,6 +376,18 @@ Claude Code can verify that the car spawns, moves under scripted input and stays
 &#91;embedded content: gameplay roadmap · 7 milestones\]
 
 Milestone 1 is Phases 2–4 above. The player on foot (milestone 2) is the first playable; vehicles (milestone 3) are Phase 5. Milestones 3–7 each start with a spec in `docs/specs/`, approved by you before Claude Code implements it.
+
+The milestones in text form (the diagram above doesn't survive a Markdown export):
+
+1. **Map:** data and map pipeline, tiles in Godot, flyover. Done, plus roads and bridges, place information, MML-only buildings and the world edge in the pipeline.
+2. **On foot (first playable):** player character, third-person camera, world-edge death and respawn, menu with settings and save/load, inventory, minimap.
+3. **Vehicles:** cars, then mopeds and bicycles; getting in and out; third-person chase camera; tutorial questline.
+4. **Living town:** traffic on the road graph, pedestrians, junction rules.
+5. **Wanted level:** crimes raise it, police pursue, escaping lowers it.
+6. **Missions:** scripted missions on the quest system, minimap markers, success and failure.
+7. **Release:** macOS and Windows builds, credits and licences, an itch.io page.
+
+Feature order from here: player on foot → world edge in the game → main menu, settings and save/load → inventory → minimap → vehicles → quest system and tutorial questline.
 
 ## Game features
 

@@ -22,6 +22,7 @@ Godot 4 .NET project `RoadmanSimulator` (Forward+ renderer, Jolt physics), scrip
 - Autoloads (`Events`, `GameState`) stay small.
 - Keep `.import` files in Git.
 - Missions refer to marker ids, never to raw coordinates.
+- Debug keys: new debug actions use letter or symbol keys (physical keycodes), never F-keys (on macOS they need Fn, and F3 is Mission Control). The existing F2 (`debug_orthophoto`) stays.
 
 ## Commands
 
