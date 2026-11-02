@@ -55,44 +55,55 @@ public class PresetPlacementTests
         Assert.Equal(new LocalPoint(0, 102, -9_000), result.LookAt);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void LooksAtLoadedTiles_LookAtInsideExtent_IsTrue(bool groundRelative)
+    [Fact]
+    public void IsInsideMap_WithHit_IsTrue()
     {
-        // The camera itself may be outside the extent; only the look-at point counts.
-        var preset = new CameraPreset("p", new LocalPoint(-285.4, 99.3, -1201.0), new LocalPoint(-325.4, 72.3, -1173.0), 70, groundRelative);
-        var extent = new PlanExtent(-1153, -1175, 1153, 1171);
-
-        Assert.True(PresetPlacement.LooksAtLoadedTiles(preset, extent));
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void LooksAtLoadedTiles_LookAtOutsideExtent_IsFalse(bool groundRelative)
-    {
-        // A camera inside the extent looking at a point beyond it.
-        var preset = new CameraPreset("p", new LocalPoint(0, 100, 0), new LocalPoint(-325.4, 72.3, -1173.0), 70, groundRelative);
-        var extent = new PlanExtent(-512, -512, 512, 512);
-
-        Assert.False(PresetPlacement.LooksAtLoadedTiles(preset, extent));
+        Assert.True(PresetPlacement.IsInsideMap(72.3));
     }
 
     [Fact]
-    public void LooksAtLoadedTiles_LookAtOnEdge_IsTrue()
+    public void IsInsideMap_WithoutHit_IsFalse()
     {
-        var preset = new CameraPreset("p", new LocalPoint(0, 100, 0), new LocalPoint(512, 0, -512), 70, false);
+        Assert.False(PresetPlacement.IsInsideMap(null));
+    }
 
-        Assert.True(PresetPlacement.LooksAtLoadedTiles(preset, new PlanExtent(-512, -512, 512, 512)));
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LooksAtMap_HitUnderLookAt_IsTrue(bool groundRelative)
+    {
+        // The camera itself is over nothing; only the look-at point counts.
+        var preset = new CameraPreset("p", new LocalPoint(-285.4, 99.3, -1201.0), new LocalPoint(-325.4, 72.3, -1172.0), 70, groundRelative);
+        double? Hit(double x, double z) => x == -325.4 && z == -1172.0 ? 87.3 : null;
+
+        Assert.True(PresetPlacement.LooksAtMap(preset, Hit));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LooksAtMap_NoHitUnderLookAt_IsFalse(bool groundRelative)
+    {
+        // A camera over the map looking at a point where the ray hits nothing.
+        var preset = new CameraPreset("p", new LocalPoint(0, 100, 0), new LocalPoint(-1130, 0, 719), 70, groundRelative);
+        double? Hit(double x, double z) => x == 0 && z == 0 ? 100 : null;
+
+        Assert.False(PresetPlacement.LooksAtMap(preset, Hit));
     }
 
     [Fact]
-    public void LooksAtLoadedTiles_NoExtent_IsFalse()
+    public void LooksAtMap_ProbesOnlyTheLookAtPoint()
     {
-        var preset = new CameraPreset("p", new LocalPoint(0, 100, 0), new LocalPoint(0, 0, 0), 70, false);
+        var preset = new CameraPreset("p", new LocalPoint(1, 2, 3), new LocalPoint(4, 5, 6), 70, true);
+        var probes = new List<(double X, double Z)>();
 
-        Assert.False(PresetPlacement.LooksAtLoadedTiles(preset, null));
+        PresetPlacement.LooksAtMap(preset, (x, z) =>
+        {
+            probes.Add((x, z));
+            return 0;
+        });
+
+        Assert.Equal([(4.0, 6.0)], probes);
     }
 
     [Fact]

@@ -45,6 +45,16 @@ public partial class MapLoader : Node3D
     public const string BridgeNodePrefix = "bridge_osm_way_";
 
     /// <summary>
+    /// Group of the world-edge cliff collision bodies (from the <c>edge_cliff-col</c> glTF node of a boundary tile:
+    /// ledge, face, seams and skirt). Not in <see cref="TerrainGroup"/>, so <see cref="TerrainHeightAt"/> keeps
+    /// returning the bare terrain; <see cref="GroundOrEdgeHitAt"/> finds both.
+    /// </summary>
+    public const string EdgeGroup = "map_edge";
+
+    /// <summary>Name of the world-edge cliff mesh in a boundary tile (glTF node <c>edge_cliff-col</c>).</summary>
+    public const string EdgeCliffNodeName = "edge_cliff";
+
+    /// <summary>
     /// Group of the building collision bodies (from the <c>bld_…-colonly</c> glTF nodes). Each body is named after
     /// its glTF node, so <see cref="BuildingOf"/> finds its building through <see cref="PlaceIndex.TryGetBuildingByNode"/>.
     /// </summary>
@@ -55,6 +65,8 @@ public partial class MapLoader : Node3D
 
     private const float RayHalfLength = 10_000f;
     private const int MaxRayHits = 32;
+    private static readonly string[] TerrainOnly = [TerrainGroup];
+    private static readonly string[] TerrainOrEdge = [TerrainGroup, EdgeGroup];
 
     [Signal]
     public delegate void MapLoadedEventHandler(int tileCount);
@@ -209,9 +221,23 @@ public partial class MapLoader : Node3D
 
     /// <summary>
     /// The terrain hit under Godot (x, z), with the hit body; null when there is no terrain there.
-    /// Non-terrain hits (building collision boxes) are excluded and the ray is cast again.
+    /// Non-terrain hits (building collision boxes, roads, the world-edge cliff) are excluded and the ray is cast again.
     /// </summary>
-    public (Vector3 Position, StaticBody3D Body)? RaycastTerrain(float x, float z)
+    public (Vector3 Position, StaticBody3D Body)? RaycastTerrain(float x, float z) => RaycastGroups(x, z, TerrainOnly);
+
+    /// <summary>
+    /// The highest hit of a vertical ray at Godot (x, z) on the terrain (<see cref="TerrainGroup"/>) or the world-edge
+    /// cliff (<see cref="EdgeGroup"/>), with the hit body; null when there is neither there, that is outside the loaded
+    /// map. Other hits (buildings, roads) are excluded and the ray is cast again. Same timing rule as
+    /// <see cref="TerrainHeightAt"/>.
+    /// </summary>
+    public (Vector3 Position, StaticBody3D Body)? GroundOrEdgeHitAt(float x, float z) => RaycastGroups(x, z, TerrainOrEdge);
+
+    /// <summary>
+    /// The highest hit of a vertical ray at Godot (x, z) on a <see cref="StaticBody3D"/> in one of
+    /// <paramref name="groups"/>; hits on other bodies are excluded and the ray is cast again.
+    /// </summary>
+    private (Vector3 Position, StaticBody3D Body)? RaycastGroups(float x, float z, string[] groups)
     {
         var space = GetWorld3D().DirectSpaceState;
         var query = PhysicsRayQueryParameters3D.Create(
@@ -228,7 +254,7 @@ public partial class MapLoader : Node3D
             }
 
             var collider = hit["collider"].AsGodotObject();
-            if (collider is StaticBody3D body && body.IsInGroup(TerrainGroup))
+            if (collider is StaticBody3D body && groups.Any(group => body.IsInGroup(group)))
             {
                 return (hit["position"].AsVector3(), body);
             }
@@ -268,35 +294,6 @@ public partial class MapLoader : Node3D
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// The x/z extent of the loaded tiles' visible geometry: the union of the global AABBs of every
-    /// <see cref="MeshInstance3D"/> under <see cref="Tiles"/>. Meshes can reach past a tile's <c>bounds_local</c> (the
-    /// <c>edge_cliff</c> ledge of a boundary tile overhangs it), and the extent includes them. Null when no tile mesh
-    /// is loaded.
-    /// </summary>
-    public PlanExtent? LoadedGeometryExtent()
-    {
-        var extents = new List<PlanExtent>();
-        var pending = new Stack<Node>();
-        pending.Push(Tiles);
-        while (pending.Count > 0)
-        {
-            var node = pending.Pop();
-            if (node is MeshInstance3D { Mesh: not null } mesh)
-            {
-                var aabb = mesh.GlobalTransform * mesh.GetAabb();
-                extents.Add(new PlanExtent(aabb.Position.X, aabb.Position.Z, aabb.End.X, aabb.End.Z));
-            }
-
-            foreach (var child in node.GetChildren())
-            {
-                pending.Push(child);
-            }
-        }
-
-        return PlanExtent.UnionOf(extents);
     }
 
     /// <summary>
@@ -477,10 +474,11 @@ public partial class MapLoader : Node3D
     }
 
     /// <summary>
-    /// Puts the terrain's collision bodies in <see cref="TerrainGroup"/> and the road, path and bridge ones in
-    /// <see cref="RoadGroup"/>, and sets the map materials. The importer turns <c>terrain-col</c>, <c>road-col</c>,
-    /// <c>path-col</c> and <c>bridge_osm_way_…-col</c> into meshes without the suffix, each with a
-    /// <see cref="StaticBody3D"/> child; building meshes keep their <c>bld_</c> names.
+    /// Puts the terrain's collision bodies in <see cref="TerrainGroup"/>, the road, path and bridge ones in
+    /// <see cref="RoadGroup"/> and the world-edge cliff's in <see cref="EdgeGroup"/>, and sets the map materials. The
+    /// importer turns <c>terrain-col</c>, <c>road-col</c>, <c>path-col</c>, <c>bridge_osm_way_…-col</c> and
+    /// <c>edge_cliff-col</c> into meshes without the suffix, each with a <see cref="StaticBody3D"/> child; building
+    /// meshes keep their <c>bld_</c> names.
     /// </summary>
     private void PrepareTile(Node tile)
     {
@@ -499,6 +497,10 @@ public partial class MapLoader : Node3D
                 else if (IsRoadSurfaceName(parentName))
                 {
                     body.AddToGroup(RoadGroup, persistent: false);
+                }
+                else if (parentName == EdgeCliffNodeName)
+                {
+                    body.AddToGroup(EdgeGroup, persistent: false);
                 }
             }
             else if (node is MeshInstance3D mesh)

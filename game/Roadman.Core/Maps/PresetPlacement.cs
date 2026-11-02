@@ -33,16 +33,25 @@ public static class PresetPlacement
         terrainHitY is { } ground ? HeightResolution.At(ground + relativeHeight) : HeightResolution.OutsideBuiltArea;
 
     /// <summary>
-    /// Whether a preset looks at the loaded map: its look-at x/z lies inside <paramref name="loadedExtent"/>, the
-    /// x/z extent of the loaded tiles' meshes (edges included). Only x and z count, so ground-relative and absolute
-    /// presets are treated alike. A null extent (no tile meshes at all) contains nothing.
+    /// Whether a point is inside the loaded map, given the hit <paramref name="groundOrEdgeHitY"/> of a downward ray
+    /// at its x/z on the terrain or the world-edge cliff. No hit means the point is outside the built area.
+    /// </summary>
+    public static bool IsInsideMap(double? groundOrEdgeHitY) => groundOrEdgeHitY is not null;
+
+    /// <summary>
+    /// Whether a preset looks at the loaded map: a downward ray at its look-at x/z hits the terrain or the world-edge
+    /// cliff. Only x and z count, so ground-relative and absolute presets are treated alike, and the camera position
+    /// may be outside the map.
     /// </summary>
     /// <param name="preset">The preset.</param>
-    /// <param name="loadedExtent">The union of the loaded tiles' mesh extents, or null when there are none.</param>
-    public static bool LooksAtLoadedTiles(CameraPreset preset, PlanExtent? loadedExtent)
+    /// <param name="groundOrEdgeHitAt">
+    /// Height of the terrain or world-edge cliff hit at Godot (x, z), or null when a downward ray there hits neither.
+    /// </param>
+    public static bool LooksAtMap(CameraPreset preset, Func<double, double, double?> groundOrEdgeHitAt)
     {
         ArgumentNullException.ThrowIfNull(preset);
-        return loadedExtent is { } extent && extent.Contains(preset.LookAt.X, preset.LookAt.Z);
+        ArgumentNullException.ThrowIfNull(groundOrEdgeHitAt);
+        return IsInsideMap(groundOrEdgeHitAt(preset.LookAt.X, preset.LookAt.Z));
     }
 
     /// <summary>

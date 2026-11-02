@@ -39,6 +39,6 @@ The game now loads map packs (ADR 0006). Two things have to be settled for that 
 - Screenshots from the opengl3 fallback aren't comparable with Forward+ ones.
 - With a test-area pack, presets outside the area are N/A rather than failures.
 
-## Amendment (2026-11-02): presets outside the loaded tiles
+## Amendment (2026-11-02): presets looking outside the built area
 
-Exit code 2 also covers a preset whose look-at point lies outside the loaded tiles' geometry (the x/z union of the tile meshes' AABBs, cliff overhang included), whether or not it is ground-relative, so an absolute-height preset such as `world-edge` (ADR 0015) is N/A on a test-area pack instead of rendering empty sky. The `--inspect` run's N/A when its centre ray hits nothing is the third case. The camera itself may be outside the tiles.
+Exit code 2 also covers a preset whose look-at point lies outside the loaded map, whether or not it is ground-relative: after the terrain collision is queryable, a downward ray at the look-at x/z must hit the terrain (group `map_terrain`) or the world-edge cliff (group `map_edge`), and no hit is N/A. This follows the map's real outline, notches, unwritten tiles and the void past the boundary included, rather than a bounding rectangle of the tiles, so an absolute-height preset such as `world-edge` (ADR 0015) is N/A on a test-area pack instead of rendering empty sky. The `--inspect` run's N/A when its centre ray hits nothing is the third case. The camera itself may be outside the tiles.

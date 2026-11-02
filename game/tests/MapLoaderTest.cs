@@ -108,37 +108,143 @@ public class MapLoaderTest
     }
 
     /// <summary>
-    /// The loaded tiles' mesh extent covers every tile's <c>bounds_local</c> (the terrain fills each tile), and a
-    /// look-at point far beyond the tiles is outside it, so the screenshot tool reports such a preset as N/A.
+    /// Every <c>edge_cliff</c> collision body (the <see cref="StaticBody3D"/> child of the <c>edge_cliff</c> mesh
+    /// imported from <c>edge_cliff-col</c>) is in <see cref="MapLoader.EdgeGroup"/> and not in
+    /// <see cref="MapLoader.TerrainGroup"/>. At the middle of the ledge beyond the road 52 roadblock (derived from the
+    /// pack's <c>boundary.json</c>) <see cref="MapLoader.GroundOrEdgeHitAt"/> hits the cliff, and
+    /// <see cref="MapLoader.TerrainHeightAt"/> doesn't return that hit.
     /// </summary>
     [TestCase]
-    public async Task LoadedGeometryExtent_CoversEveryTileAndNotFarBeyond()
+    public async Task EdgeCliffBodies_AreInEdgeGroupAndIgnoredByTerrainHeight()
     {
         AssertPackPresent();
         using var runner = ISceneRunner.Load(WorldScenePath, true);
-        await runner.SimulateFrames(2);
+        await runner.SimulateFrames(5);
         var loader = Loader(runner);
-        var manifest = loader.Manifest!;
 
-        var extent = loader.LoadedGeometryExtent();
-        AssertBool(extent is not null).OverrideFailureMessage("no tile meshes loaded").IsTrue();
-        var e = extent!.Value;
-        foreach (var tile in manifest.Tiles)
+        var cliffBodies = Descendants(loader.Tiles)
+            .OfType<StaticBody3D>()
+            .Where(body => body.GetParent() is MeshInstance3D { Name: var name } && name == MapLoader.EdgeCliffNodeName)
+            .ToList();
+        foreach (var body in cliffBodies)
         {
-            var b = tile.Bounds;
-            // Godot z = -north; allow float rounding of the mesh vertices.
-            AssertBool(e.MinX <= b.MinX + HeightTolerance && e.MaxX >= b.MaxX - HeightTolerance
-                    && e.MinZ <= -b.MaxY + HeightTolerance && e.MaxZ >= -b.MinY - HeightTolerance)
-                .OverrideFailureMessage($"extent {e} doesn't cover tile {tile.Id} bounds {b}")
-                .IsTrue();
+            var path = $"{body.GetParent()!.GetParent()!.Name}/{body.GetParent()!.Name}/{body.Name}";
+            AssertBool(body.IsInGroup(MapLoader.EdgeGroup)).OverrideFailureMessage($"{path} is not in {MapLoader.EdgeGroup}").IsTrue();
+            AssertBool(body.IsInGroup(MapLoader.TerrainGroup)).OverrideFailureMessage($"{path} is in {MapLoader.TerrainGroup}").IsFalse();
+            AssertBool(body.IsInGroup(MapLoader.RoadGroup)).OverrideFailureMessage($"{path} is in {MapLoader.RoadGroup}").IsFalse();
         }
 
-        var farX = e.MaxX + 50_000;
-        var preset = new CameraPreset("far-look-at", new LocalPoint(0, 600, 0), new LocalPoint(farX, 0, 0), 70, false);
-        AssertBool(PresetPlacement.LooksAtLoadedTiles(preset, extent)).IsFalse();
-        var centre = manifest.Tiles[0].Bounds.GodotCentre;
-        var inside = preset with { LookAt = new LocalPoint(centre.X, 0, centre.Z) };
-        AssertBool(PresetPlacement.LooksAtLoadedTiles(inside, extent)).IsTrue();
+        AssertInt(loader.GetTree().GetNodesInGroup(MapLoader.EdgeGroup).Count).IsEqual(cliffBodies.Count);
+        if (!IsFullPack(loader, "the road 52 ledge"))
+        {
+            return;
+        }
+
+        AssertInt(cliffBodies.Count).OverrideFailureMessage("the full pack has no edge_cliff collision body").IsGreater(0);
+        var ledge = Road52LedgeMiddle();
+        var hit = loader.GroundOrEdgeHitAt((float)ledge.X, (float)ledge.Z);
+        AssertBool(hit is not null).OverrideFailureMessage(System.FormattableString.Invariant($"no ground or edge hit at the ledge middle {ledge}")).IsTrue();
+        AssertBool(hit!.Value.Body.IsInGroup(MapLoader.EdgeGroup))
+            .OverrideFailureMessage($"the hit at the ledge middle {ledge} is {hit.Value.Body.Name}, not the cliff")
+            .IsTrue();
+        var terrain = loader.RaycastTerrain((float)ledge.X, (float)ledge.Z);
+        AssertBool(terrain is null || terrain.Value.Body.IsInGroup(MapLoader.TerrainGroup) && terrain.Value.Body != hit.Value.Body)
+            .OverrideFailureMessage($"TerrainHeightAt at the ledge middle {ledge} returned the cliff")
+            .IsTrue();
+    }
+
+    /// <summary>
+    /// A look-at point over Kirkkojärvi, 25 m past B's west edge (x −1103 there), is N/A: a downward ray there hits
+    /// neither terrain nor cliff, although the point is inside a tile's <c>bounds_local</c>. The z is the middle of the
+    /// lake's water fence on that edge, and the point is checked to be outside the boundary ring, both from the pack's
+    /// <c>boundary.json</c>.
+    /// </summary>
+    [TestCase]
+    public async Task LookAtOverLakePastWestNotch_IsOutsideBuiltArea()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(WorldScenePath, true);
+        await runner.SimulateFrames(5);
+        var loader = Loader(runner);
+        if (!IsFullPack(loader, "the lake past B's west notch"))
+        {
+            return;
+        }
+
+        using var boundary = ReadBoundary();
+        var root = boundary.RootElement;
+        // The west water fences: type "water", outward −x.
+        var westWater = root.GetProperty("fences").EnumerateArray()
+            .Where(f => f.GetProperty("type").GetString() == "water" && f.GetProperty("outward")[0].GetDouble() < -0.9)
+            .ToList();
+        AssertInt(westWater.Count).OverrideFailureMessage("boundary.json has no west water fence").IsGreater(0);
+        var edgeX = westWater.Select(f => f.GetProperty("start")[0].GetDouble()).Average();
+        var minZ = westWater.Min(f => System.Math.Min(f.GetProperty("start")[2].GetDouble(), f.GetProperty("end")[2].GetDouble()));
+        var maxZ = westWater.Max(f => System.Math.Max(f.GetProperty("start")[2].GetDouble(), f.GetProperty("end")[2].GetDouble()));
+        const double lookAtX = -1130;
+        var lookAtZ = (minZ + maxZ) / 2;
+        var ledgeM = root.GetProperty("cliff").GetProperty("ledge_m").GetDouble();
+
+        AssertFloat(lookAtX).OverrideFailureMessage($"x {lookAtX} isn't past the west edge x {edgeX} and its ledge").IsLess(edgeX - ledgeM);
+        AssertBool(BoundaryRing(root).Contains(lookAtX, lookAtZ))
+            .OverrideFailureMessage($"({lookAtX}, {lookAtZ}) is inside the boundary ring")
+            .IsFalse();
+        AssertBool(loader.Manifest!.ContainsGodotPoint(lookAtX, lookAtZ))
+            .OverrideFailureMessage($"({lookAtX}, {lookAtZ}) is outside every tile's bounds_local")
+            .IsTrue();
+
+        var preset = new CameraPreset("lake", new LocalPoint(-1000, 120, lookAtZ), new LocalPoint(lookAtX, 82, lookAtZ), 70, false);
+        AssertBool(PresetPlacement.LooksAtMap(preset, (x, z) => loader.GroundOrEdgeHitAt((float)x, (float)z)?.Position.Y))
+            .OverrideFailureMessage($"a downward ray at ({lookAtX}, {lookAtZ:0.###}) hit {loader.GroundOrEdgeHitAt((float)lookAtX, (float)lookAtZ)?.Body.GetPath()}")
+            .IsFalse();
+    }
+
+    /// <summary>
+    /// The <c>world-edge</c> preset looks at the cliff ledge, so it isn't N/A on the full pack although its camera is
+    /// over nothing; on a test-area pack it is N/A (ADR 0008). It is read from the repo's
+    /// <c>maps/&lt;id&gt;/camera_presets.json</c>, the pipeline input, so the test checks the current preset even before
+    /// the pack is regenerated. A look-at in the playable area (the pack's <c>overview</c> preset) is inside on any pack.
+    /// </summary>
+    [TestCase]
+    public async Task PackPresets_LookAtTheMap()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(WorldScenePath, true);
+        await runner.SimulateFrames(5);
+        var loader = Loader(runner);
+        var presetsPath = $"res://maps/{MapId}/{MapPack.CameraPresetsFile}";
+        var presets = CameraPresetsReader.Parse(FileAccess.GetFileAsString(presetsPath), presetsPath).Presets;
+        bool LooksAtMap(CameraPreset preset) =>
+            PresetPlacement.LooksAtMap(preset, (x, z) => loader.GroundOrEdgeHitAt((float)x, (float)z)?.Position.Y);
+
+        AssertBool(presets.ContainsKey("overview")).OverrideFailureMessage($"{presetsPath} has no overview preset").IsTrue();
+        AssertBool(LooksAtMap(presets["overview"])).OverrideFailureMessage("overview is N/A").IsTrue();
+
+        var sourcePath = System.IO.Path.GetFullPath(
+            System.IO.Path.Combine(ProjectSettings.GlobalizePath("res://"), "..", "maps", MapId, MapPack.CameraPresetsFile));
+        AssertBool(FileAccess.FileExists(sourcePath)).OverrideFailureMessage($"no presets file at {sourcePath}").IsTrue();
+        var sourcePresets = CameraPresetsReader.Parse(FileAccess.GetFileAsString(sourcePath), sourcePath).Presets;
+        AssertBool(sourcePresets.TryGetValue("world-edge", out var worldEdge))
+            .OverrideFailureMessage($"{sourcePath} has no world-edge preset")
+            .IsTrue();
+
+        var lookAt = worldEdge!.LookAt;
+        var where = System.FormattableString.Invariant($"x {lookAt.X:0.###}, z {lookAt.Z:0.###}");
+        var hit = loader.GroundOrEdgeHitAt((float)lookAt.X, (float)lookAt.Z);
+        if (loader.Manifest!.Area != "full")
+        {
+            AssertBool(hit is null)
+                .OverrideFailureMessage($"world-edge isn't N/A on the '{loader.Manifest.Area}' pack (hit {hit?.Body.GetPath()})")
+                .IsTrue();
+            return;
+        }
+
+        AssertBool(worldEdge.GroundRelative).IsFalse();
+        AssertBool(hit is not null).OverrideFailureMessage($"world-edge is N/A: nothing under its look-at {where} ({sourcePath})").IsTrue();
+        AssertBool(hit!.Value.Body.IsInGroup(MapLoader.EdgeGroup))
+            .OverrideFailureMessage($"world-edge looks at {hit.Value.Body.GetPath()}, not the cliff")
+            .IsTrue();
+        AssertBool(LooksAtMap(worldEdge)).IsTrue();
     }
 
     /// <summary>
@@ -297,6 +403,63 @@ public class MapLoaderTest
         AssertThat(buildings.Count).IsGreater(0);
         AssertThat(terrain.All(m => m.MaterialOverride == loader.TerrainMaterial)).IsTrue();
         AssertThat(buildings.All(m => m.MaterialOverride == loader.BuildingMaterial)).IsTrue();
+    }
+
+    private static bool IsFullPack(MapLoader loader, string what)
+    {
+        var area = loader.Manifest!.Area;
+        if (area == "full")
+        {
+            return true;
+        }
+
+        GD.Print($"skipped {what}: the '{MapId}' pack's area is '{area}', and boundary B is only in the full pack");
+        return false;
+    }
+
+    private static System.Text.Json.JsonDocument ReadBoundary()
+    {
+        var path = $"res://maps/{MapId}/boundary.json";
+        AssertBool(FileAccess.FileExists(path)).OverrideFailureMessage($"no {path}; {MapPack.RegenHint(MapId)}").IsTrue();
+        return System.Text.Json.JsonDocument.Parse(FileAccess.GetFileAsString(path));
+    }
+
+    /// <summary>The boundary ring of <c>boundary.json</c> (Godot x, z), closed, as a polygon without holes.</summary>
+    private static PoiPolygon BoundaryRing(System.Text.Json.JsonElement root)
+    {
+        var ring = root.GetProperty("boundary").GetProperty("ring").EnumerateArray()
+            .Select(p => new PlanarPoint(p[0].GetDouble(), p[1].GetDouble()))
+            .ToList();
+        if (ring[0] != ring[^1])
+        {
+            ring.Add(ring[0]);
+        }
+
+        return new PoiPolygon(ring, []);
+    }
+
+    /// <summary>
+    /// The middle of the cliff ledge beyond the road 52 roadblock on B's north edge: the roadblock nearest the
+    /// <c>world-edge</c> camera (ADR 0015) moved half of <c>cliff.ledge_m</c> along its <c>outward</c>.
+    /// </summary>
+    private static (double X, double Z) Road52LedgeMiddle()
+    {
+        using var boundary = ReadBoundary();
+        var root = boundary.RootElement;
+        var ledgeM = root.GetProperty("cliff").GetProperty("ledge_m").GetDouble();
+        // The world-edge camera is 40 m along the edge and 30 m outward from the roadblock (ADR 0015).
+        var presetsPath = $"res://maps/{MapId}/{MapPack.CameraPresetsFile}";
+        var presets = CameraPresetsReader.Parse(FileAccess.GetFileAsString(presetsPath), presetsPath).Presets;
+        AssertBool(presets.ContainsKey("world-edge")).OverrideFailureMessage($"{presetsPath} has no world-edge preset").IsTrue();
+        var (cameraX, cameraZ) = (presets["world-edge"].Position.X, presets["world-edge"].Position.Z);
+        var roadblock = root.GetProperty("roadblocks").EnumerateArray()
+            .MinBy(r => System.Math.Pow(r.GetProperty("position")[0].GetDouble() - cameraX, 2)
+                + System.Math.Pow(r.GetProperty("position")[2].GetDouble() - cameraZ, 2));
+        var position = roadblock.GetProperty("position");
+        var outward = roadblock.GetProperty("outward");
+        return (
+            position[0].GetDouble() + (outward[0].GetDouble() * ledgeM / 2),
+            position[2].GetDouble() + (outward[2].GetDouble() * ledgeM / 2));
     }
 
     private static MapLoader Loader(ISceneRunner runner)

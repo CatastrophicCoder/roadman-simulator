@@ -305,16 +305,14 @@ public partial class ScreenshotTool : Node
         }
 
         // ADR 0008: with a test-area pack, a preset outside the area is N/A. Every tile loaded (checked in
-        // OnMapLoaded), so a look-at point beyond their meshes looks at no map: the image would show empty sky.
-        var extent = loader.LoadedGeometryExtent();
-        if (!PresetPlacement.LooksAtLoadedTiles(preset, extent))
+        // OnMapLoaded) and the collision is queryable (awaited above), so a downward ray at the look-at x/z that hits
+        // neither the terrain nor the world-edge cliff looks at no map: the image would show empty sky or the void.
+        if (!PresetPlacement.LooksAtMap(preset, (x, z) => loader.GroundOrEdgeHitAt((float)x, (float)z)?.Position.Y))
         {
-            var range = extent is { } e
-                ? FormattableString.Invariant($"x {e.MinX:0.#}..{e.MaxX:0.#}, z {e.MinZ:0.#}..{e.MaxZ:0.#}")
-                : "no tile meshes";
-            var lookAt = FormattableString.Invariant($"x {preset.LookAt.X}, z {preset.LookAt.Z}");
+            var lookAt = FormattableString.Invariant($"x {preset.LookAt.X:0.###}, z {preset.LookAt.Z:0.###}");
             GD.Print(
-                $"N/A: outside built area (preset '{preset.Name}' looks at {lookAt}, outside the loaded tiles' meshes: {range})");
+                $"N/A: outside built area (preset '{preset.Name}' looks at {lookAt}: a downward ray there hits neither "
+                + $"the terrain ({MapLoader.TerrainGroup}) nor the world-edge cliff ({MapLoader.EdgeGroup}))");
             Finish(ScreenshotExitCode.OutsideBuiltArea, null);
             return;
         }
@@ -322,13 +320,17 @@ public partial class ScreenshotTool : Node
         var placement = PresetPlacement.Resolve(preset, (x, z) => loader.TerrainHeightAt((float)x, (float)z));
         if (placement.IsOutsideBuiltArea)
         {
-            GD.Print($"N/A: outside built area (preset '{preset.Name}' has no terrain under {preset.Position.X}, {preset.Position.Z})");
+            var position = FormattableString.Invariant($"x {preset.Position.X:0.###}, z {preset.Position.Z:0.###}");
+            GD.Print($"N/A: outside built area (preset '{preset.Name}' has no terrain under its camera at {position})");
             Finish(ScreenshotExitCode.OutsideBuiltArea, null);
             return;
         }
 
         PlaceCamera(ToVector(placement.Position), ToVector(placement.LookAt), (float)preset.Fov);
-        GD.Print($"Screenshot: preset '{preset.Name}' camera at {_camera!.GlobalPosition}, looking at {ToVector(placement.LookAt)}");
+        var camera = _camera!.GlobalPosition;
+        var target = ToVector(placement.LookAt);
+        GD.Print(FormattableString.Invariant(
+            $"Screenshot: preset '{preset.Name}' camera at ({camera.X:0.###}, {camera.Y:0.###}, {camera.Z:0.###}), looking at ({target.X:0.###}, {target.Y:0.###}, {target.Z:0.###})"));
 
         for (var i = 0; i < SettleFrames; i++)
         {

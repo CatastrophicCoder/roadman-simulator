@@ -173,8 +173,8 @@ public static class ScreenshotExitCode
     public const int Error = 1;
 
     /// <summary>
-    /// Outside the built area although every manifest tile loaded: the preset's look-at x/z is outside the x/z
-    /// extent of the loaded tiles' meshes, a ground-relative preset has no terrain under its camera, or the
+    /// Outside the built area although every manifest tile loaded: a downward ray at the preset's look-at x/z hits
+    /// neither the terrain nor the world-edge cliff, a ground-relative preset has no terrain under its camera, or the
     /// <c>--inspect</c> centre ray hits nothing. Reported as N/A; no PNG is written.
     /// </summary>
     public const int OutsideBuiltArea = 2;
