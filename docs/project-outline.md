@@ -287,7 +287,7 @@ Every map ends at a physical barrier, and anything that crosses it falls off the
 
 **Game (Phase 5)**
 
-- Barrier scenes: reusable roadblock, land fence and water fence scenes, low enough to jump over on foot, with breakable physics pieces that vehicles drive straight through, placed from `boundary.json`.
+- Barrier scenes: reusable roadblock, land fence and water fence scenes, reaching at most 1 m outward from the boundary so they never start inside the void trigger, low enough to jump over on foot, with breakable physics pieces that vehicles drive straight through, placed from `boundary.json`.
 - Void trigger: an `Area3D` beyond the barrier. Entering it starts the death sequence: controls off, a pull outward and down replaces normal gravity, the camera pulls back to show the floating world against space, then a death screen and respawn at a random point inside the map's fixed spawn area.
 - Space backdrop: a starfield sky (procedural shader or CC0 panorama), visible past the edge.
 - Same rule for everyone: vehicles, pedestrians and police that cross also fall. AI routes never lead through barriers, and police pursuit stops at the edge.
