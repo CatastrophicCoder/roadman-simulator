@@ -8,6 +8,7 @@ import json
 import shutil
 import socket
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -253,14 +254,17 @@ def test_ac19_fixture_has_every_highway_way_touching_the_test_area(tmp_path: Pat
 
 # The full build's counts as the implementation reported them (place-information spec,
 # criterion 5; compared there with the "Expected categories" preview).
-# Since the world edge (docs/specs/world-edge-pipeline.md) the 37 buildings crossing the
-# build area's edge (5 OSM, 32 MML-only) are left out, so these counts are lower than the
-# place information spec's (1795 matched; 1501 residential, 279 garage_or_shed, ...).
-FULL_MATCHED = 1792  # OSM buildings matched to an MML record
+# Since the world edge (docs/specs/world-edge-pipeline.md) the full build keeps only the
+# buildings whose centroid is inside Somero's boundary polygon B (maps/somero/map.yaml),
+# which is notched around every building near the build area's edge: 1835 OSM buildings
+# (6 lie outside B) and 105 MML-only ones, 1940 in all, against 1944 with the build area
+# rectangle (which dropped the 37 buildings crossing its edge) and more in the place
+# information spec (1795 matched; 1501 residential, 279 garage_or_shed, ...).
+FULL_MATCHED = 1791  # OSM buildings matched to an MML record
 # All buildings, the MML-only ones included (docs/specs/mml-only-buildings.md).
 FULL_CATEGORY_COUNTS = {
-    "residential": 1475,
-    "garage_or_shed": 274,
+    "residential": 1473,
+    "garage_or_shed": 272,
     "industrial": 77,
     "unknown": 51,
     "commercial": 29,
@@ -272,8 +276,8 @@ FULL_CATEGORY_COUNTS = {
     "other": 0,
 }
 FULL_SOURCE_COUNTS = {
-    "mml_use_class": 1222,
-    "osm_landuse": 614,
+    "mml_use_class": 1220,
+    "osm_landuse": 612,
     "osm_building": 41,
     "osm_poi": 15,
     "osm_poi_area": 1,
@@ -304,15 +308,18 @@ def test_ac5_full_build_reports_its_mml_matches_and_category_counts(
 
 # Criterion 13: "The rules applied to Somero" (computed with the inward-shrink sliver test;
 # the spec asks the implementation report to explain any difference with the opening rule).
+# With boundary B the 42 records whose centroid lies outside the polygon (the build area
+# rectangle gave 140 added, 120 whole and 20 cut, and not added 0 outside, 4 too small and
+# 23 slivers) are `outside`; the centroid test comes before the other rules.
 FULL_MML_ONLY = {
-    "added": 140,
-    "added_whole": 120,
-    "added_cut": 20,
-    "not_added": {"outside": 0, "too_small": 4, "slivers": 23, "lidar_contradicts": 1},
+    "added": 105,
+    "added_whole": 86,
+    "added_cut": 19,
+    "not_added": {"outside": 42, "too_small": 3, "slivers": 21, "lidar_contradicts": 1},
 }
-# Heights of the added buildings the world edge keeps (32 of the 140 cross the build
-# area's edge and are left out; before the world edge: 133 lidar, 5 few points).
-FULL_MML_ONLY_LIDAR = {"mml_lidar": 103, "few_points": 3, "tree_cover": 2}
+# Heights of the added buildings (inside B; with the rectangle, 32 of 140 crossed its edge
+# and were left out: 103 lidar; before the world edge: 133 lidar, 5 few points).
+FULL_MML_ONLY_LIDAR = {"mml_lidar": 100, "few_points": 3, "tree_cover": 2}
 
 
 def test_mml_only_ac13_full_build_reports_the_spec_counts(
@@ -339,8 +346,9 @@ def test_mml_only_ac13_full_build_reports_the_spec_counts(
     ids = {b["id"] for b in buildings}
     edge = json.loads((full_build.work / "10-world-edge" / "report.json").read_text("utf-8"))
     dropped = {d["id"] for d in edge["dropped_buildings"]}
-    # Added, but its wall lies on the build area's edge, so the world edge leaves it out.
-    assert "mml:rakennus/339041253" in dropped
+    # Its wall lies on the build area's edge: boundary B is notched round it, so its
+    # centroid is outside B and it isn't added (with the rectangle it was dropped).
+    assert "mml:rakennus/339041253" in block["not_added_ids"]["outside"]
     assert "mml:rakennus/339041253" not in ids
     assert "mml:rakennus/3000145173" not in ids
     mml_dropped = sum(1 for i in dropped if i.startswith("mml:"))
@@ -352,3 +360,97 @@ def test_mml_only_ac13_full_build_reports_the_spec_counts(
         FULL_MML_ONLY_LIDAR["few_points"],
         FULL_MML_ONLY_LIDAR["tree_cover"],
     )
+
+
+# docs/specs/world-edge-pipeline.md: Somero's boundary B in the full build.
+
+# "Somero: boundary candidates" and "Somero: spawn area candidates": B's ring, water on the
+# boundary, the spawn check, and the heights of "Config" (cliff.depth_m). Roadblocks, fences
+# and touched road surfaces are the measured counts of this build (the spec's estimate was
+# about 39-41 roadblocks, 33-35 drivable; see its 2026-11-02 amendment for slice (b)).
+B_RING_M = 10_560
+B_WATER_M = 320.7
+B_LAKE_M = 255.8
+B_LAKE_ID = "mml:jarvi/2026919564"
+B_COUNTS = {
+    "roadblocks": 41,
+    "roadblocks_drivable": 34,
+    "fences_land": 747,
+    "fences_water": 17,
+    "touched_without_crossing": 2,
+}
+B_SPAWN = {"open_area_m2": 5308, "boundary_distance_m": 1017}
+B_HEIGHTS = {"boundary_min": 81.8, "boundary_max": 133.4, "cliff_bottom_y": 51.8}
+
+
+def test_ac16_somero_mml_records_outside_b_are_not_in_the_pack(
+    request: pytest.FixtureRequest,
+) -> None:
+    """MML building-use records whose centroid lies outside B (42, two of them 1.81 and
+    1.72 m from it, inside building_clearance_m) have no entry in buildings.json, no POI
+    link and no mesh or collision node in any tile."""
+    if not list((RAW / "mml" / "topographic").glob("*.gpkg")):
+        pytest.skip(f"Topographic Database for {MAP_ID} not downloaded")
+    from mapgen.build.buildings import node_name
+    from mapgen.build.export_glb import read_glb_node_names
+
+    full_build: FullBuild = request.getfixturevalue("full_build")
+    report = json.loads((full_build.work / "03-buildings" / "report.json").read_text("utf-8"))
+    outside = set(report["mml_only"]["not_added_ids"]["outside"])
+    assert len(outside) == FULL_MML_ONLY["not_added"]["outside"]
+    buildings = json.loads((full_build.pack / "buildings.json").read_text("utf-8"))["buildings"]
+    assert not outside & {b["id"] for b in buildings}
+    pois = json.loads((full_build.pack / "pois.json").read_text("utf-8"))["pois"]
+    links = {p["building_id"] for p in pois} | {i for p in pois for i in p["contains_building_ids"]}
+    assert not outside & links
+    nodes = {node_name(i) for i in outside}
+    for glb in (full_build.pack / "tiles").glob("*.glb"):
+        names = read_glb_node_names(glb)
+        bases = {n.removesuffix("-colonly").rsplit("_c", 1)[0] for n in names if "-" in n}
+        assert not nodes & ({n for n in names if "-" not in n} | bases), glb.name
+
+
+def test_ac16_somero_full_build_uses_boundary_b_with_the_spec_figures(
+    full_build: FullBuild,
+) -> None:
+    from shapely.geometry import Polygon
+
+    from mapgen.build.world_edge.spawn import crossing_buildings
+
+    doc = json.loads((full_build.pack / "boundary.json").read_text("utf-8"))
+    report = json.loads((full_build.work / "10-world-edge" / "report.json").read_text("utf-8"))
+    assert doc["boundary"]["source"] == "custom"
+    assert round(doc["boundary"]["length_m"]) == B_RING_M
+    assert len(doc["boundary"]["ring"]) == len(full_build.config.world_edge.boundary_wgs84 or [])
+    water = report["water"]
+    assert round(water["total_m"], 1) == B_WATER_M
+    lake = [c for c in water["crossings"] if c["water_ids"] == [B_LAKE_ID]]
+    assert [round(c["length_m"], 1) for c in lake] == [B_LAKE_M]
+    counts = report["counts"]
+    assert {k: counts[k] for k in B_COUNTS} == B_COUNTS
+    assert len(report["touched_without_crossing"]) == B_COUNTS["touched_without_crossing"]
+    assert len(doc["roadblocks"]) == B_COUNTS["roadblocks"]
+    fence_types = Counter(f["type"] for f in doc["fences"])
+    assert fence_types == {"land": B_COUNTS["fences_land"], "water": B_COUNTS["fences_water"]}
+    assert counts["dropped_buildings"] == 0
+    spawn = report["spawn"]
+    assert spawn["passed"]
+    assert {k: round(spawn[k]) for k in B_SPAWN} == B_SPAWN
+    assert {k: round(report["heights"][k], 1) for k in B_HEIGHTS} == B_HEIGHTS
+    # No building crosses B (criterion 16).
+    origin = (full_build.config.origin.x, full_build.config.origin.y)
+    features = json.loads(
+        (full_build.work / "03-buildings" / "buildings.geojson").read_text("utf-8")
+    )["features"]
+    footprints = [(f["properties"]["id"], _local_polygon(f["geometry"], origin)) for f in features]
+    ring = Polygon([(p[0], -p[1]) for p in doc["boundary"]["ring"]])
+    clearance = full_build.config.world_edge.building_clearance_m
+    assert crossing_buildings(ring, footprints, clearance) == []
+
+
+def _local_polygon(geometry: dict[str, Any], origin: tuple[float, float]) -> Any:
+    import numpy as np
+    import shapely
+    from shapely.geometry import shape
+
+    return shapely.transform(shape(geometry), lambda c: c - np.array(origin))

@@ -19,6 +19,10 @@ class TerrainChunk:
     vertices: np.ndarray  # (n, 3) float
     faces: np.ndarray  # (m, 3) int
     normals: np.ndarray | None = None  # (n, 3) unit vertex normals, or None to compute them
+    # The y values of the grid rows, for a chunk cut along a boundary polygon
+    # (`terrain/clip.py`): its vertices then also have the cut's own y values. None: every
+    # vertex y is a grid row.
+    rows: np.ndarray | None = None
 
 
 class TerrainBuilder(Protocol):

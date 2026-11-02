@@ -1,7 +1,9 @@
 """The full pipeline on the testtown fixture (test area, 2 x 2 tiles), built once."""
 
 import json
+import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -299,6 +301,52 @@ def test_pack_checks_reject_bad_collision_names(
     fixture_build: FixtureBuild, tmp_path: Path, building_id: str, new: list[str], message: str
 ) -> None:
     pack = _corrupt_collisions(fixture_build, tmp_path, building_id, new)
+    with pytest.raises(PackCheckError, match=message):
+        _check(fixture_build, pack)
+
+
+def _stray_renamed(pack: Path) -> None:
+    """A building's mesh node renamed to one no building in buildings.json has."""
+    building = _json(pack / "buildings.json")["buildings"][0]
+    _rename_glb_nodes(
+        pack / "tiles" / f"{building['tile']}.glb", {building["node"]: "bld_osm_way_999999"}
+    )
+
+
+def _stray_left_out(pack: Path) -> None:
+    """A building removed from buildings.json (and its POI links) whose mesh and collision
+    nodes stay in its tile, as a building left out of the pack must not."""
+    document = _json(pack / "buildings.json")
+    building = document["buildings"].pop(0)
+    (pack / "buildings.json").write_text(json.dumps(document), encoding="utf-8")
+    pois = _json(pack / "pois.json")
+    for poi in pois["pois"]:
+        if poi["building_id"] == building["id"]:
+            poi["building_id"] = None
+        poi["contains_building_ids"] = [
+            i for i in poi["contains_building_ids"] if i != building["id"]
+        ]
+    (pack / "pois.json").write_text(json.dumps(pois), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "stray"),
+    [(_stray_renamed, "bld_osm_way_999999"), (_stray_left_out, None)],
+    ids=["renamed-mesh", "left-out-building"],
+)
+def test_pack_checks_reject_a_bld_node_of_no_building(
+    fixture_build: FixtureBuild,
+    tmp_path: Path,
+    mutate: Callable[[Path], None],
+    stray: str | None,
+) -> None:
+    pack = tmp_path / "pack"
+    shutil.copytree(fixture_build.pack_dir, pack)
+    first = _json(pack / "buildings.json")["buildings"][0]
+    mutate(pack)
+    # Left out: the first stray name (sorted) is the mesh, before its _c<k> bodies.
+    name = re.escape(stray if stray is not None else first["node"])
+    message = rf"{first['tile']}: bld_ node\(s\) of no building in buildings.json: \['{name}"
     with pytest.raises(PackCheckError, match=message):
         _check(fixture_build, pack)
 

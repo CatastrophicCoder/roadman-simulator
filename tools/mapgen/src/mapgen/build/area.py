@@ -2,11 +2,20 @@
 
 Tiles are aligned to the origin: tile (i, j) covers [i*T, (i+1)*T) x [j*T, (j+1)*T),
 clipped to the area, and is named "tile_x{i}_y{j}".
+
+With a custom boundary polygon (`world_edge.boundary_wgs84`, full builds only), the area
+also carries that polygon (`boundary`): what the area keeps (building and POI centroids,
+road ways, POI outlines, surfaces and terrain) is clipped by it instead of the rectangle,
+while the tile grid and the tile bounds still come from the rectangle
+(docs/specs/world-edge-pipeline.md, "The boundary").
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
+
+import shapely
+from shapely.geometry import Polygon
 
 from mapgen.config import MapConfig
 from mapgen.geo import BBox
@@ -37,6 +46,9 @@ class BuildArea:
     name: AreaName
     bounds: BBox
     tile_size: float
+    # The custom boundary polygon (local coordinates), inside `bounds`; None: the
+    # rectangle is the boundary.
+    boundary: Polygon | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         if self.tile_size <= 0:
@@ -64,7 +76,23 @@ class BuildArea:
         return result
 
     def contains(self, x: float, y: float) -> bool:
+        """Whether the point is in the rectangle (the tile grid's extent)."""
         return self.bounds.contains_point(x, y)
+
+    def includes(self, x: float, y: float) -> bool:
+        """Whether the area keeps a feature with its centroid (or representative point)
+        here: inside the rectangle and, with a custom boundary, inside the polygon (its
+        edge counts as inside)."""
+        if not self.contains(x, y):
+            return False
+        return self.boundary is None or bool(shapely.intersects_xy(self.boundary, x, y))
+
+    def clip_polygon(self) -> Polygon:
+        """What geometry kept by the area is clipped to: the custom boundary polygon, or
+        the rectangle."""
+        if self.boundary is not None:
+            return self.boundary
+        return shapely.box(*self.bounds.as_list())
 
     def tile_index(self, x: float, y: float) -> tuple[int, int] | None:
         """The tile containing a point inside the area (the area's max edges count as inside)."""

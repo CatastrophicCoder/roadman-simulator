@@ -28,6 +28,7 @@ from dataclasses import dataclass
 import mapbox_earcut as earcut
 import numpy as np
 import shapely
+import shapely.ops
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 
@@ -44,6 +45,22 @@ EDGE_EXTENSION_MARGIN_M = 0.1  # an area-edge end runs this far past the boundar
 # crossing whose whole width still reaches a straight boundary.
 MAX_EDGE_EXTENSION_WIDTHS = 4.0
 TOUCH_M = 1e-9  # metres: a sweep piece this close to the cap line starts at it
+# A terrain height asked for in a tile that isn't written (outside a custom boundary
+# polygon) comes from road geometry at an area-edge cut: an end extended past the
+# boundary by at most MAX_EDGE_EXTENSION_WIDTHS road widths, or a probe half a width
+# beside a node on it. Twice the extension cap of the widest road is the most such a
+# point can be from the written terrain; further out is an error (`off_terrain_limit`).
+OFF_TERRAIN_WIDTHS = 2 * MAX_EDGE_EXTENSION_WIDTHS
+
+
+def off_terrain_limit(widest_m: float) -> float:
+    """How far from the written terrain a height may be asked for, with the widest road or
+    path `widest_m` wide: `OFF_TERRAIN_WIDTHS` widths."""
+    return OFF_TERRAIN_WIDTHS * widest_m
+
+
+class OffTerrainError(ValueError):
+    """A terrain height was asked for too far from any written terrain."""
 
 
 def plane_z(tri: np.ndarray, pts: np.ndarray) -> np.ndarray:
@@ -84,20 +101,33 @@ class _TileMesh:
     triangles: np.ndarray  # (m, 3, 3)
     polygons: np.ndarray  # (m,) shapely triangles
     tree: shapely.STRtree
+    # The terrain grid's rows (y values), where the chunk was cut along a boundary
+    # polygon; None: every vertex y is a row.
+    rows: np.ndarray | None = None
 
 
 class TerrainSurface:
     """Heights of the terrain meshes (the tiles' actual triangles) at local points."""
 
-    def __init__(self, area: BuildArea, tiles: Sequence[Tile], chunks: dict[str, TerrainChunk]):
+    def __init__(
+        self,
+        area: BuildArea,
+        tiles: Sequence[Tile],
+        chunks: dict[str, TerrainChunk],
+        *,
+        max_off_terrain_m: float,
+    ):
+        """`max_off_terrain_m`: a height asked for in a tile that isn't written may be at
+        most this far from the written terrain (`off_terrain_limit`)."""
         self.area = area
+        self.max_off_terrain_m = max_off_terrain_m
         self.meshes: dict[tuple[int, int], _TileMesh] = {}
         for tile in tiles:
             chunk = chunks[tile.id]
             tris = np.asarray(chunk.vertices, dtype=float)[np.asarray(chunk.faces)]
             polygons = shapely.polygons(tris[:, :, :2])
             self.meshes[(tile.i, tile.j)] = _TileMesh(
-                tile, tris, polygons, shapely.STRtree(polygons)
+                tile, tris, polygons, shapely.STRtree(polygons), chunk.rows
             )
 
     def mesh(self, tile: Tile) -> _TileMesh:
@@ -112,8 +142,14 @@ class TerrainSurface:
         result = np.full(len(pts), np.nan)
         tile_of = [self.area.tile_index(float(x), float(y)) for x, y in pts]
         for key in sorted({t for t in tile_of if t is not None}):
-            mesh = self.meshes[key]
             idx = np.array([i for i, t in enumerate(tile_of) if t == key])
+            if key not in self.meshes:
+                # A tile not written because it lies outside a custom boundary polygon:
+                # the nearest terrain of the written tiles.
+                for i in idx:
+                    result[i] = self._nearest_height(pts[i])
+                continue
+            mesh = self.meshes[key]
             sub = pts[idx]
             hits = mesh.tree.query(shapely.points(sub), predicate="intersects")
             chosen = np.full(len(idx), -1)
@@ -125,6 +161,32 @@ class TerrainSurface:
             for p, t in enumerate(chosen):
                 result[idx[p]] = plane_z(mesh.triangles[t], sub[p : p + 1])[0]
         return result
+
+    def _nearest_height(self, point: np.ndarray) -> float:
+        """The terrain height at the point of the written terrain closest to `point`: the
+        nearest triangle of any tile, at the point of that triangle closest to `point`
+        (clamped onto the triangle, not its plane extended). Raises `OffTerrainError` when
+        no terrain lies within `max_off_terrain_m`."""
+        best: tuple[float, float] | None = None
+        geometry = shapely.points(point)
+        for key in sorted(self.meshes):
+            mesh = self.meshes[key]
+            if len(mesh.triangles) == 0:
+                continue
+            t = int(mesh.tree.query_nearest(geometry)[0])
+            distance = float(shapely.distance(mesh.polygons[t], geometry))
+            if best is None or distance < best[0]:
+                on, _ = shapely.ops.nearest_points(mesh.polygons[t], geometry)
+                closest = np.array([[on.x, on.y]])
+                best = (distance, float(plane_z(mesh.triangles[t], closest)[0]))
+        if best is None or best[0] > self.max_off_terrain_m:
+            where = "no terrain" if best is None else f"the nearest terrain is {best[0]:.2f} m away"
+            raise OffTerrainError(
+                f"terrain height asked at ({point[0]:.3f}, {point[1]:.3f}) (local metres) in a "
+                f"tile that isn't written: {where}; the limit is {self.max_off_terrain_m:g} m "
+                f"({OFF_TERRAIN_WIDTHS:g} widths of the widest road)"
+            )
+        return best[1]
 
     def max_along(self, p: np.ndarray, q: np.ndarray) -> float:
         """The highest terrain mesh height on the segment p-q (exact: at its crossings with
@@ -220,7 +282,7 @@ def edge_extension(
     cap_parts = shapely.get_parts(shapely.intersection(LineString([left, right]), clip))
     cap = [g for g in cap_parts if not g.is_empty and g.distance(at_end) <= TOUCH_M]
     need = 0.0
-    for piece in _polygons(shapely.intersection(sweep, clip)):
+    for piece in polygons_of(shapely.intersection(sweep, clip)):
         if not any(piece.distance(c) <= TOUCH_M for c in cap):
             continue  # inside again beyond a notch: not this end's surface
         coords = np.asarray(piece.exterior.coords)
@@ -275,7 +337,7 @@ def buffer_run(
     shape = shapely.union_all(shapes)
     if extend and clip is not None:
         centre = LineString(run.xy)
-        kept = [p for p in _polygons(shapely.intersection(shape, clip)) if p.intersects(centre)]
+        kept = [p for p in polygons_of(shapely.intersection(shape, clip)) if p.intersects(centre)]
         shape = shapely.union_all(kept) if kept else MultiPolygon()
     for i in (run.start, run.end):
         deck = (decks or {}).get(run.piece.keys[i])
@@ -312,18 +374,18 @@ def merged_surfaces(
 
 
 def _polygonal(geom: BaseGeometry) -> BaseGeometry:
-    polygons = [p for p in _polygons(geom) if p.area > MIN_AREA]
+    polygons = [p for p in polygons_of(geom) if p.area > MIN_AREA]
     if not polygons:
         return MultiPolygon()
     return MultiPolygon(polygons) if len(polygons) > 1 else polygons[0]
 
 
-def _polygons(geom: BaseGeometry) -> list[Polygon]:
+def polygons_of(geom: BaseGeometry) -> list[Polygon]:
     if geom.is_empty:
         return []
     if isinstance(geom, Polygon):
         return [geom]
-    return [p for g in getattr(geom, "geoms", []) for p in _polygons(g)]
+    return [p for g in getattr(geom, "geoms", []) for p in polygons_of(g)]
 
 
 # Tile edges.
@@ -353,7 +415,7 @@ def insert_tile_crossings(geom: BaseGeometry, area: BuildArea) -> BaseGeometry:
     xs = np.array(sorted({t.bounds.min_x for t in tiles} | {t.bounds.max_x for t in tiles}))
     ys = np.array(sorted({t.bounds.min_y for t in tiles} | {t.bounds.max_y for t in tiles}))
     result = []
-    for polygon in _polygons(geom):
+    for polygon in polygons_of(geom):
         shell = _insert_crossings(np.asarray(polygon.exterior.coords), xs, ys)
         holes = [_insert_crossings(np.asarray(r.coords), xs, ys) for r in polygon.interiors]
         result.append(Polygon(shell, holes))
@@ -377,7 +439,7 @@ class SurfaceMesh:
         return float(np.abs(d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]).sum() / 2)
 
 
-def _triangulate(polygon: Polygon) -> tuple[np.ndarray, np.ndarray]:
+def triangulate(polygon: Polygon) -> tuple[np.ndarray, np.ndarray]:
     """(2D vertices, counter-clockwise triangles) of a polygon with holes, by earcut."""
     rings = [np.asarray(polygon.exterior.coords)[:-1, :2]]
     rings += [np.asarray(r.coords)[:-1, :2] for r in polygon.interiors]
@@ -408,15 +470,18 @@ def drape_tile(
     Each vertex is at its terrain triangle's plane + `offset`, then the ramp `field` is
     applied (it leaves heights outside ramp zones unchanged).
 
-    The polygon is cut into horizontal strips at the terrain vertices' y values first, so
-    each triangle intersection works on a small piece.
+    The polygon is cut into horizontal strips at the terrain vertices' y values first (the
+    grid rows, for a terrain cut along a boundary polygon), so each triangle intersection
+    works on a small piece.
     """
     b = tile.bounds
     clipped = shapely.intersection(surface, box(b.min_x, b.min_y, b.max_x, b.max_y))
     if clipped.is_empty or clipped.area <= MIN_AREA:
         return None
     mesh = terrain.mesh(tile)
-    ys = np.unique(mesh.triangles[:, :, 1])
+    # Strips at the grid rows only: a cut terrain's own y values (along a boundary polygon)
+    # would add vertices on the tile edges that the neighbouring tile doesn't have.
+    ys = np.unique(mesh.triangles[:, :, 1]) if mesh.rows is None else np.asarray(mesh.rows)
     ys = ys[(ys >= b.min_y) & (ys <= b.max_y)]
     if len(ys) < 2 or ys[0] > b.min_y or ys[-1] < b.max_y:
         ys = np.unique(np.concatenate([ys, [b.min_y, b.max_y]]))
@@ -436,10 +501,10 @@ def drape_tile(
         candidates = np.sort(candidates)
         pieces = shapely.intersection(part, mesh.polygons[candidates])
         for tri_index, piece in zip(candidates, pieces, strict=True):
-            for polygon in _polygons(piece):
+            for polygon in polygons_of(piece):
                 if polygon.area <= MIN_AREA:
                     continue
-                xy, tris = _triangulate(polygon)
+                xy, tris = triangulate(polygon)
                 if len(tris) == 0:
                     continue
                 z = plane_z(mesh.triangles[tri_index], xy) + offset

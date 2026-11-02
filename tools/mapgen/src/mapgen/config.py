@@ -33,6 +33,28 @@ def snapshot_tag_pattern(map_id: str) -> str:
     return rf"data-{re.escape(map_id)}-(\d{{4}}-\d{{2}}-\d{{2}}){SNAPSHOT_SUFFIX_PATTERN}"
 
 
+# A custom boundary point this far outside the full build area (local metres) is moved
+# onto the area's edge rather than rejected: a WGS84 point rounded to 7 decimals moves by
+# at most half a step per coordinate, and 1e-7 degrees is about 1.1 cm of latitude and at
+# most about 1.1 cm of longitude (at the equator, less elsewhere), so a point meant to lie
+# on the edge lands at most about 1.1 cm off it at any latitude.
+BOUNDARY_SNAP_M = 0.05
+BOUNDARY_DECIMALS = 6  # custom boundary points in local metres: 1 µm, as in boundary.json
+
+
+def _outside_by(value: float, lo: float, hi: float) -> float:
+    return max(lo - value, value - hi, 0.0)
+
+
+def _snap(value: float, lo: float, hi: float) -> float:
+    """`value` clamped into [lo, hi] when it is at most `BOUNDARY_SNAP_M` outside."""
+    if lo - BOUNDARY_SNAP_M <= value < lo:
+        return float(lo)
+    if hi < value <= hi + BOUNDARY_SNAP_M:
+        return float(hi)
+    return value
+
+
 class ConfigError(ValueError):
     """A map config is missing or invalid."""
 
@@ -321,8 +343,8 @@ class MapConfig(StrictModel):
         b = self.projected_bbox.offset(-self.origin.x, -self.origin.y)
         return b.rounded_outward()
 
-    def boundary_local(self) -> list[tuple[float, float]] | None:
-        """`world_edge.boundary_wgs84` in local coordinates (x, n), or None."""
+    def _boundary_projected(self) -> list[tuple[float, float]] | None:
+        """`world_edge.boundary_wgs84` projected to local coordinates (x, n), as is."""
         points = self.world_edge.boundary_wgs84
         if points is None:
             return None
@@ -330,23 +352,53 @@ class MapConfig(StrictModel):
             [(p.lat, p.lon) for p in points], self.crs, self.origin.x, self.origin.y
         )
 
-    def boundary_problem(self) -> str | None:
-        """Why the custom boundary polygon is invalid, or None (also without one)."""
-        coords = self.boundary_local()
+    def boundary_local(self) -> list[tuple[float, float]] | None:
+        """`world_edge.boundary_wgs84` in local coordinates (x, n), or None.
+
+        A point at most `BOUNDARY_SNAP_M` outside the full build area is moved onto its
+        edge (each coordinate clamped), and every coordinate is rounded to
+        `BOUNDARY_DECIMALS`, so the polygon the build uses is exactly the one
+        `boundary.json` records.
+        """
+        coords = self._boundary_projected()
         if coords is None:
             return None
-        problem = geo.polygon_problem(coords)
-        if problem is not None:
-            return problem
         area = self.full_area_local
-        outside = [i for i, (x, y) in enumerate(coords) if not area.contains_point(x, y)]
-        if outside:
-            return (
-                f"{len(outside)} point(s) lie outside the build area "
-                f"{area.as_list()} (local metres), first: point {outside[0]} at "
-                f"({coords[outside[0]][0]:.2f}, {coords[outside[0]][1]:.2f})"
+        return [
+            (
+                round(_snap(x, area.min_x, area.max_x), BOUNDARY_DECIMALS) + 0.0,
+                round(_snap(y, area.min_y, area.max_y), BOUNDARY_DECIMALS) + 0.0,
             )
-        return None
+            for x, y in coords
+        ]
+
+    def boundary_problem(self) -> str | None:
+        """Why the custom boundary polygon is invalid, or None (also without one).
+
+        A point more than `BOUNDARY_SNAP_M` outside the full build area is an error; the
+        others are snapped onto it first (`boundary_local`), then the polygon is checked.
+        """
+        projected = self._boundary_projected()
+        if projected is None:
+            return None
+        if len(projected) >= 3:
+            area = self.full_area_local
+            outside = [
+                i
+                for i, (x, y) in enumerate(projected)
+                if _outside_by(x, area.min_x, area.max_x) > BOUNDARY_SNAP_M
+                or _outside_by(y, area.min_y, area.max_y) > BOUNDARY_SNAP_M
+            ]
+            if outside:
+                x, y = projected[outside[0]]
+                return (
+                    f"{len(outside)} point(s) lie outside the build area "
+                    f"{area.as_list()} (local metres) by more than {BOUNDARY_SNAP_M:g} m, "
+                    f"first: point {outside[0]} at ({x:.2f}, {y:.2f})"
+                )
+        coords = self.boundary_local()
+        assert coords is not None
+        return geo.polygon_problem(coords)
 
     def enabled_sources(self) -> dict[str, SourceConfig]:
         return {name: src for name, src in self.sources.items() if src.enabled}

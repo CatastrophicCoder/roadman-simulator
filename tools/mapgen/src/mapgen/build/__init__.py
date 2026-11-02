@@ -24,7 +24,11 @@ the map has no road meshes and an empty (valid) `road_graph.json`.
 stage. The world edge (stage 10, docs/specs/world-edge-pipeline.md) runs after the roads
 stage and writes `boundary.json`; buildings crossing the boundary (the build area
 rectangle, or the test-area square) are dropped before the buildings stage and listed in
-the reports.
+the reports. A full build of a map with a custom boundary polygon
+(`world_edge.boundary_wgs84`) clips everything the build area clips by that polygon
+instead: building and POI centroids, road ways, surfaces and the terrain mesh, which is
+cut along it (`terrain/clip.py`). The tile grid stays the build area's, but a tile with no
+terrain inside the polygon isn't written. A building the polygon crosses fails the build.
 """
 
 import shutil
@@ -36,8 +40,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import shapely
+from shapely.geometry import Polygon
+
 from mapgen import __version__
-from mapgen.build.area import AreaName, build_area
+from mapgen.build.area import AreaName, Tile, build_area
 from mapgen.build.buildings import BuildingsResult, match_measured_heights, resolve_buildings
 from mapgen.build.camera_presets import (
     PRESETS_NAME,
@@ -93,9 +100,11 @@ from mapgen.build.places.overrides import (
 from mapgen.build.roads import RoadsResult, build_roads
 from mapgen.build.roads.model import ROAD_GRAPH_NAME, RoadGraphError, empty_graph_document
 from mapgen.build.roads.model import validate_file as validate_road_graph_file
-from mapgen.build.stage1_load import BuildError, run_load
+from mapgen.build.roads.surface import OffTerrainError
+from mapgen.build.stage1_load import BuildError, LocalFootprint, run_load
 from mapgen.build.stage_io import write_geojson, write_json
 from mapgen.build.terrain import MeshTerrainBuilder, TerrainBuilder, TerrainChunk
+from mapgen.build.terrain.clip import CutStats, clip_chunk
 from mapgen.build.world_edge import (
     STAGE_DIR as WORLD_EDGE_DIR,
 )
@@ -214,6 +223,9 @@ def run_build(
         boundary = boundary_for(config, area)
     except WorldEdgeError as exc:
         raise BuildError(str(exc)) from exc
+    if boundary.source == "custom":
+        # Everything the area keeps is clipped by the polygon from here on.
+        area = replace(area, boundary=boundary.polygon())
     if map_dir is None:
         raise BuildError(f"no map folder: the build needs maps/{config.id}/{MARKERS_NAME}")
     try:
@@ -242,14 +254,35 @@ def run_build(
     with stage("terrain"):
         chunks: dict[str, TerrainChunk] = {}
         stats = []
+        written: list[Tile] = []
+        cuts: list[tuple[str, CutStats]] = []
         for tile in tiles:
             chunk = builder.build_tile(loaded.heightfield, tile)
+            if area.boundary is not None:
+                chunk, cut = clip_chunk(chunk, area.boundary, loaded.heightfield)
+                cuts.append((tile.id, cut))
+                if len(chunk.faces) == 0:
+                    continue  # no terrain inside the polygon: the tile isn't written
+            written.append(tile)
             chunks[tile.id] = chunk
             stats.append(_terrain_stats(tile.id, chunk))
             export_glb(
                 work_dir / "02-terrain" / f"{tile.id}.glb", [_terrain_node(chunk, tile.bounds)]
             )
-        write_json(work_dir / "02-terrain" / "stats.json", {"tiles": stats})
+        terrain_stats: dict[str, Any] = {"tiles": stats}
+        if area.boundary is not None:
+            terrain_stats["boundary_cut"] = _cut_report(cuts, {t.id for t in written})
+            left_out = terrain_stats["boundary_cut"]["tiles_not_written"]
+            totals = terrain_stats["boundary_cut"]["totals"]
+            log(
+                f"[terrain] cut along the boundary polygon: {totals['removed']} grid "
+                f"triangles removed, {totals['cut']} cut into {totals['pieces']}; "
+                f"{len(written)} of {len(tiles)} tiles written"
+                + (f" ({', '.join(left_out)} outside)" if left_out else "")
+            )
+        write_json(work_dir / "02-terrain" / "stats.json", terrain_stats)
+        tiles = written
+        report.tile_count = len(tiles)
 
     with stage("buildings"):
         measured = match_measured_heights(loaded.footprints, loaded.buildings_3d)
@@ -281,12 +314,17 @@ def run_build(
         added_footprints = selection.footprints()
         report.mml_only_added = len(added_footprints)
         # No building may cross the boundary: with the build area or test-area square as
-        # the boundary, the crossing ones are left out (docs/specs/world-edge-pipeline.md).
+        # the boundary, the crossing ones are left out; a custom polygon must be routed
+        # around buildings, so a crossing fails the build (docs/specs/world-edge-pipeline.md).
         crossing = crossing_buildings(
             boundary.polygon(),
             [(f.id, f.geometry) for f in [*loaded.footprints, *added_footprints]],
             config.world_edge.building_clearance_m,
         )
+        if boundary.source == "custom":
+            crossing += _cut_by_polygon(boundary.polygon(), loaded.footprints_outside, selection)
+            if crossing:
+                raise BuildError(_crossing_message(crossing, config))
         dropped = [
             {
                 "id": c["id"],
@@ -363,7 +401,7 @@ def run_build(
                     log=log,
                     boundary=boundary.polygon(),
                 )
-            except RoadGraphError as exc:
+            except (RoadGraphError, OffTerrainError) as exc:
                 raise BuildError(str(exc)) from exc
         road_graph = roads.document
         report.roads = True
@@ -511,6 +549,68 @@ def run_build(
 
     write_json(work_dir / "timings.json", report.timings_s)
     return report
+
+
+def _cut_report(cuts: Sequence[tuple[str, CutStats]], written: set[str]) -> dict[str, Any]:
+    """`02-terrain/stats.json` `boundary_cut`: what cutting the terrain along the custom
+    boundary polygon did, per tile and in total, and the tiles left out."""
+    totals = {
+        key: sum(c.as_dict()[key] for _, c in cuts) for key in CutStats(0, 0, 0, 0, 0).as_dict()
+    }
+    return {
+        "totals": totals,
+        "tiles_not_written": [tid for tid, _ in cuts if tid not in written],
+        "tiles": [{"id": tid, **cut.as_dict()} for tid, cut in cuts],
+    }
+
+
+def _cut_by_polygon(
+    polygon: Polygon,
+    outside: Sequence[LocalFootprint],
+    selection: MmlOnlySelection,
+) -> list[dict[str, Any]]:
+    """Buildings whose centroid lies outside a custom boundary polygon but whose
+    footprint reaches inside it (intersection area > 0), which the polygon so cuts
+    (docs/specs/world-edge-pipeline.md, amendments of 2026-11-02). A building wholly
+    outside isn't in the pack at all, however close to the polygon, so
+    `building_clearance_m` doesn't apply to it. Same fields as `crossing_buildings`:
+    `distance_m` is the footprint's distance to the boundary line (0 when it crosses it)."""
+    candidates = [(f.id, f.geometry) for f in outside]
+    candidates += [
+        (r.id, r.kept if r.kept is not None else r.record.geometry)
+        for r in selection.records
+        if r.outcome == "outside"
+    ]
+    line = polygon.exterior
+    shapely.prepare(polygon)
+    result = []
+    for fid, geometry in candidates:
+        if not (polygon.intersects(geometry) and float(geometry.intersection(polygon).area) > 0):
+            continue
+        distance = float(geometry.distance(line))
+        result.append(
+            {
+                "id": fid,
+                "area_outside_m2": float(geometry.difference(polygon).area),
+                "distance_m": distance,
+            }
+        )
+    return result
+
+
+def _crossing_message(crossing: Sequence[dict[str, Any]], config: MapConfig) -> str:
+    clearance = config.world_edge.building_clearance_m
+    names = ", ".join(
+        f"{c['id']} ({c['distance_m']:.3f} m from the boundary, "
+        f"{c['area_outside_m2']:.1f} m² outside)"
+        for c in crossing
+    )
+    return (
+        f"world_edge.boundary_wgs84 crosses {len(crossing)} building(s): a building "
+        f"with its centroid inside has part of its footprint outside the polygon or "
+        f"within building_clearance_m ({clearance:g} m) of it, or one with its centroid "
+        f"outside reaches inside it; route the polygon around them: {names}"
+    )
 
 
 def _terrain_node(chunk: TerrainChunk, bounds: BBox) -> MeshNode:

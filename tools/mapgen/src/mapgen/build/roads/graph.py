@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
+import shapely
+from shapely.geometry import Polygon
 
 from mapgen.build.roads.tags import WayAttributes
 from mapgen.build.stage1_load import LocalRoadWay
@@ -141,6 +143,88 @@ def _point_on_edge(p: np.ndarray, q: np.ndarray, t: float, edge: int, b: BBox) -
     return point
 
 
+T_SNAP = 1e-12  # segment parameters this close to 0 or 1 are the segment's ends
+
+
+@dataclass(frozen=True)
+class SegmentPart:
+    """A part of a segment inside the clip region: parameters t0 < t1 along it, and the
+    boundary point where the part starts / ends (None where it reaches the segment's end)."""
+
+    t0: float
+    t1: float
+    cut0: np.ndarray | None
+    cut1: np.ndarray | None
+
+
+def clip_segment_polygon(
+    p: np.ndarray, q: np.ndarray, polygon: Polygon
+) -> tuple[list[SegmentPart], bool]:
+    """The parts of segment p -> q inside the closed polygon (no holes), in order, and
+    whether the segment meets the polygon at all.
+
+    The segment is split where it meets the polygon's ring; a piece between two splits is
+    inside when its midpoint is (its boundary counts). Touching the ring in a point only
+    gives no part. A cut point lies on the ring: it is computed on the ring's edge, not on
+    the segment, so the `area_edge` node is on the boundary within floating-point noise.
+    """
+    ring = np.asarray(polygon.exterior.coords, dtype=float)
+    a, b = ring[:-1], ring[1:]
+    d = q - p
+    e = b - a
+    ap = a - p
+    denom = d[0] * e[:, 1] - d[1] * e[:, 0]
+    cross_ap_e = ap[:, 0] * e[:, 1] - ap[:, 1] * e[:, 0]
+    cross_ap_d = ap[:, 0] * d[1] - ap[:, 1] * d[0]
+    hits: dict[float, np.ndarray] = {}
+
+    def add(t: float, point: np.ndarray) -> None:
+        if t < -T_SNAP or t > 1 + T_SNAP:
+            return
+        t = 0.0 if abs(t) <= T_SNAP else 1.0 if abs(t - 1) <= T_SNAP else t
+        hits.setdefault(t, point)
+
+    length2 = float(d @ d)
+    for k in range(len(a)):
+        if denom[k] != 0:
+            t = cross_ap_e[k] / denom[k]
+            u = cross_ap_d[k] / denom[k]
+            if -T_SNAP <= u <= 1 + T_SNAP:
+                u = min(max(u, 0.0), 1.0)
+                add(float(t), a[k] + u * e[k])
+        elif cross_ap_d[k] == 0 and length2 > 0:  # collinear: the overlap's ends
+            for corner in (a[k], b[k]):
+                add(float((corner - p) @ d / length2), corner.copy())
+            for t, point in ((0.0, p), (1.0, q)):
+                s = float((point - a[k]) @ e[k] / float(e[k] @ e[k]))
+                if 0.0 <= s <= 1.0:
+                    add(t, point.copy())
+    ts = sorted({0.0, 1.0, *(t for t in hits if 0.0 <= t <= 1.0)})
+    shapely.prepare(polygon)
+    parts: list[list[float]] = []
+    for t0, t1 in zip(ts[:-1], ts[1:], strict=True):
+        if t1 <= t0:
+            continue
+        mid = p + d * ((t0 + t1) / 2)
+        if not shapely.intersects_xy(polygon, float(mid[0]), float(mid[1])):
+            continue
+        if parts and parts[-1][1] == t0:
+            parts[-1][1] = t1
+        else:
+            parts.append([t0, t1])
+    result = [
+        SegmentPart(
+            t0,
+            t1,
+            hits.get(t0) if t0 > 0 else None,
+            hits.get(t1) if t1 < 1 else None,
+        )
+        for t0, t1 in parts
+    ]
+    touched = bool(result) or any(0.0 <= t <= 1.0 for t in hits)
+    return result, touched
+
+
 @dataclass
 class Piece:
     """A part of an included way inside the build area, in way order.
@@ -199,20 +283,44 @@ class ClippedWay:
     edge_nodes: list[frozenset[int]] = field(default_factory=list)
 
 
-def clip_way(way: LocalRoadWay, bounds: BBox) -> ClippedWay:
-    """The way's parts inside the closed box, with `area_edge` cut points where it leaves.
+def _box_parts(p: np.ndarray, q: np.ndarray, bounds: BBox) -> list[SegmentPart] | None:
+    """The part of p -> q inside the box (`clip_segment`), as a list; None when the
+    segment misses the box. Touching it in one point gives an empty list."""
+    clipped = clip_segment(p, q, bounds)
+    if clipped is None:
+        return None
+    t0, t1, e0, e1 = clipped
+    if t0 >= t1 and not (p == q).all():
+        return []  # touches the box in one point only
+    return [
+        SegmentPart(
+            t0,
+            t1,
+            _point_on_edge(p, q, t0, e0, bounds) if e0 is not None else None,
+            _point_on_edge(p, q, t1, e1, bounds) if e1 is not None else None,
+        )
+    ]
+
+
+def clip_way(way: LocalRoadWay, region: BBox | Polygon) -> ClippedWay:
+    """The way's parts inside the closed region (the build area box, or a custom boundary
+    polygon), with `area_edge` cut points where it leaves.
 
     A way that leaves and re-enters becomes several parts. Segments that only touch the
-    box in a point are dropped. A part that ends on an OSM node on the box edge, where the
-    way goes on outside, lists that end in `edge_nodes`.
+    region in a point are dropped. A part that ends on an OSM node on the region's edge,
+    where the way goes on outside, lists that end in `edge_nodes`. Cut points lie on the
+    region's edge: exactly for a box, within floating-point noise on a polygon's edge.
     """
     xy = way.xy
-    inside = (
-        (xy[:, 0] >= bounds.min_x)
-        & (xy[:, 0] <= bounds.max_x)
-        & (xy[:, 1] >= bounds.min_y)
-        & (xy[:, 1] <= bounds.max_y)
-    )
+    if isinstance(region, BBox):
+        inside = (
+            (xy[:, 0] >= region.min_x)
+            & (xy[:, 0] <= region.max_x)
+            & (xy[:, 1] >= region.min_y)
+            & (xy[:, 1] <= region.max_y)
+        )
+    else:
+        inside = shapely.intersects_xy(region, xy[:, 0], xy[:, 1])
     pieces: list[tuple[np.ndarray, list[str], list[int | None]]] = []
     edge_nodes: list[frozenset[int]] = []
     # (point, key, OSM node id, index in the way; -1 for a cut)
@@ -246,28 +354,33 @@ def clip_way(way: LocalRoadWay, bounds: BBox) -> ClippedWay:
 
     for i in range(len(xy) - 1):
         p, q = xy[i].astype(float), xy[i + 1].astype(float)
-        clipped = clip_segment(p, q, bounds)
-        if clipped is None:
-            close()
-            continue
-        touches = True
-        t0, t1, e0, e1 = clipped
-        if t0 >= t1 and not (p == q).all():
-            close()  # touches the box in one point only
-            continue
-        if e0 is not None:
-            close()
-            current = [(_point_on_edge(p, q, t0, e0, bounds), cut_key(way.osm_id, cuts), None, -1)]
-            cuts += 1
-        elif current is None:
-            current = [node(i)]
-        if e1 is not None:
-            cut = _point_on_edge(p, q, t1, e1, bounds)
-            current.append((cut, cut_key(way.osm_id, cuts), None, -1))
-            cuts += 1
-            close()
+        if isinstance(region, BBox):
+            parts = _box_parts(p, q, region)
+            if parts is None:
+                close()
+                continue
+            touches = True
         else:
-            current.append(node(i + 1))
+            parts, touched = clip_segment_polygon(p, q, region)
+            touches = touches or touched
+        if not parts:
+            close()  # outside, or touches the region in one point only
+            continue
+        for part in parts:
+            if part.cut0 is not None:
+                close()
+                current = [(part.cut0, cut_key(way.osm_id, cuts), None, -1)]
+                cuts += 1
+            elif current is None:
+                current = [node(i)]
+            if part.cut1 is not None:
+                assert current is not None
+                current.append((part.cut1, cut_key(way.osm_id, cuts), None, -1))
+                cuts += 1
+                close()
+            else:
+                assert current is not None
+                current.append(node(i + 1))
     close()
     return ClippedWay(pieces, int(inside.sum()), touches, edge_nodes)
 

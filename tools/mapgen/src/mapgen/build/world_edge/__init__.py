@@ -7,8 +7,8 @@ bottom height, the void trigger prisms and the spawn area check, and returns the
 
 Every part is a function of a `Ring` and plain inputs (surfaces, graph, heightfield,
 water), so it works for any simple ring. `boundary_for` picks the ring: the test-area
-square for test builds, the build area rectangle otherwise. Custom polygons
-(`world_edge.boundary_wgs84`) are validated by `MapConfig` but not built yet.
+square for test builds, the custom polygon (`world_edge.boundary_wgs84`) for full builds
+that have one, the build area rectangle otherwise.
 """
 
 import math
@@ -86,20 +86,18 @@ class Boundary:
 
 def boundary_for(config: MapConfig, area: BuildArea) -> Boundary:
     """The playable boundary: the test-area square in a test build (whatever
-    `boundary_wgs84` says), else the build area rectangle.
-
-    Raises `WorldEdgeError` for a full build of a map with `world_edge.boundary_wgs84`:
-    custom polygons aren't built yet.
-    """
-    ring = Ring.rectangle(*area.bounds.as_list())
+    `boundary_wgs84` says), the custom polygon (`world_edge.boundary_wgs84`, in local
+    metres as `MapConfig.boundary_local` gives it) in a full build that has one, else the
+    build area rectangle."""
     if area.name == "test":
-        return Boundary(ring, "test_area")
-    if config.world_edge.boundary_wgs84 is not None:
-        raise WorldEdgeError(
-            "world_edge.boundary_wgs84 is set, but custom boundary polygons are not built "
-            "yet; remove it to build with the build area rectangle, or build --area test"
-        )
-    return Boundary(ring, "area")
+        return Boundary(Ring.rectangle(*area.bounds.as_list()), "test_area")
+    coords = config.boundary_local()
+    if coords is None:
+        return Boundary(Ring.rectangle(*area.bounds.as_list()), "area")
+    try:
+        return Boundary(Ring.from_coords(coords), "custom")
+    except ValueError as exc:
+        raise WorldEdgeError(f"world_edge.boundary_wgs84: {exc}") from exc
 
 
 @dataclass

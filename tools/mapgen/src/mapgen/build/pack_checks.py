@@ -5,13 +5,15 @@ untouched. The checks read the staged files back (tiles, manifest, road graph) a
 stage output in the work folder, so they test what the game will load.
 
 - Tiles and buildings: tile files match the manifest; vertices are finite; terrain stays
-  in its tile; collision nodes match `buildings.json` and are named `<node>_c<k>-colonly`
-  (k = 0..n-1); no two node names of a tile are equal once Godot strips its collision
-  suffixes (`-col`, `-colonly`, `-convcolonly`), so the import renames nothing; every
+  in its tile; every `bld_` node belongs to a building in `buildings.json`; collision
+  nodes match `buildings.json` and are named `<node>_c<k>-colonly` (k = 0..n-1); no two
+  node names of a tile are equal once Godot strips its collision suffixes (`-col`,
+  `-colonly`, `-convcolonly`), so the import renames nothing; every
   building's centroid is in its tile; no building base floats above the terrain mesh.
 - Roads (docs/specs/roads-and-road-graph.md, criterion numbers in messages): the graph
   matches its schema and its report; nodes and points are finite and in the area;
-  `length_m` is the polyline length; every edge starts and ends exactly at its nodes.
+  `area_edge` nodes lie on the boundary ring of `boundary.json` (1 µm); `length_m` is the
+  polyline length; every edge starts and ends exactly at its nodes.
 - Criterion 9 with ramps: every road and path vertex, and every graph point on a ground
   edge, is at `F(x, y)` within 1 mm, where `F` is the ramp field of `04-roads/report.json`
   (`build/roads/ramps.py`) applied to terrain mesh + `surface_offset_m`. Outside ramp zones
@@ -25,7 +27,8 @@ stage output in the work folder, so they test what the game will load.
   0.01 mm float32 slack), underside and railings, deck ends at the road surface height.
 - Ramps: no vertical step over 2 cm between a deck end edge and the ramp surface beyond it,
   at the corners and every 0.1 m along the edge.
-- Criterion 13b: terrain vertices inside deck footprints are the DEM-only terrain.
+- Criterion 13b: terrain vertices inside deck footprints are the DEM-only terrain (cut
+  along the custom boundary polygon when `boundary.json` has one).
 - Places (docs/specs/place-information.md, `check_places`): `buildings.json` (schema
   version 2) and `pois.json` match their committed schemas; categories and sources are
   valid values; each `category_source` has its raw value; POI and building links exist and
@@ -44,11 +47,20 @@ stage output in the work folder, so they test what the game will load.
   listed as touched without a crossing; fences over water (more than 1 mm) are water
   fences and water fences lie in water; fence ends are at `Heightfield.sample` (1 mm),
   no longer than `fence.max_segment_m` and land fences within the terrain deviation; no
-  building crosses the boundary; 10,000 sampled points of the void band lie in a prism
-  and no prism reaches over the playable area; the spawn area is inside the test area and
-  its open ground passes the spawn check.
+  building in `buildings.json` has any part of its footprint (`03-buildings`) outside the
+  `boundary.json` ring or within `building_clearance_m` of it (any boundary source);
+  10,000 sampled points of the void band lie in a prism and no prism reaches over the
+  playable area; the spawn area is inside the test area and its open ground passes the
+  spawn check.
+- Custom boundary polygon (`check_custom_boundary`, only when `boundary.json` has
+  `source` "custom"): every terrain triangle, road graph node and edge polyline, POI
+  position and outline, and kept building centroid lies inside the polygon grown by 1 mm.
 
-Heights are sampled on the actual triangles (the tiles' terrain meshes), not a grid.
+Heights are sampled on the actual triangles (the tiles' terrain meshes), not a grid. In a
+pack with a custom boundary polygon only, a surface or graph point that no terrain
+triangle is within 1 µm of (on a terrain edge cut along a slanted boundary edge, after
+float32 rounding) takes the triangle within `cut_edge_slack` of the points checked, a few
+float32 steps at their largest coordinate. Other packs keep the 1 µm.
 """
 
 import json
@@ -88,6 +100,18 @@ GRADE_SPACING_M = 0.25  # graded ramps: samples along the path
 # bends. 0.001 allows both with margin.
 GRADE_TOL = 0.001
 STEP_SPACING_M = 0.1  # ramps: samples along each deck end edge
+# Surface and graph points on a custom boundary polygon's edge, where the terrain is cut
+# along a slanted line: the tiles store float32, so a road vertex on the cut edge and the
+# cut terrain edge itself can each be rounded by half a float32 step per coordinate, and so
+# lie up to about two steps apart (9.8e-5 m measured on Somero, where a step at 1 km is
+# 6.1e-5 m). Such a point takes its terrain height from the triangle within this many
+# float32 steps at the largest coordinate of the points checked (`cut_edge_slack`); the
+# height error is that times the slope, far under 1 mm. Axis-aligned edges are exact in
+# float32, and packs without a custom polygon use no slack.
+CUT_EDGE_SLACK_STEPS = 4
+# What a custom boundary polygon clips (terrain, road graph, POIs, kept building centroids)
+# lies inside it grown by this (`check_custom_boundary`).
+CUSTOM_BOUNDARY_TOL_M = MM
 ROAD_SURFACES = ("road-col", "path-col")
 # Godot's glTF import suffixes for collision; the imported node's name drops them.
 COLLISION_SUFFIXES = ("-convcolonly", "-colonly", "-col")
@@ -211,8 +235,20 @@ class TriangleSampler:
         self.polygons = shapely.polygons(self.triangles[:, :, :2])
         self.tree = shapely.STRtree(self.polygons)
 
-    def height(self, xy: np.ndarray, distance: float = 1e-6) -> np.ndarray:
-        """Heights at (n, 2) points; NaN where no triangle is within `distance`."""
+    def height(
+        self, xy: np.ndarray, distance: float = 1e-6, slack: float | None = None
+    ) -> np.ndarray:
+        """Heights at (n, 2) points; NaN where no triangle is within `distance`. With
+        `slack`, a point no triangle is within `distance` of takes the first triangle
+        within `slack` instead (in that triangle's plane)."""
+        result = self._height(xy, distance)
+        if slack is not None and np.isnan(result).any():
+            missing = np.isnan(result)
+            pts = np.asarray(xy, dtype=float).reshape(-1, 2)
+            result[missing] = self._height(pts[missing], slack)
+        return result
+
+    def _height(self, xy: np.ndarray, distance: float) -> np.ndarray:
         pts = np.asarray(xy, dtype=float).reshape(-1, 2)
         result = np.full(len(pts), np.nan)
         if len(pts) == 0 or len(self.triangles) == 0:
@@ -289,6 +325,7 @@ def check_pack(
     origin = np.array([manifest["origin"]["x"], manifest["origin"]["y"]])
     geometries = {f["properties"]["id"]: shape(f["geometry"]) for f in features}
     by_node = {b["node"]: b for b in buildings}
+    known_nodes = {*by_node, *(c for b in buildings for c in b["collision_nodes"])}
 
     _require(
         {p.name for p in (pack_dir / "tiles").iterdir()}
@@ -311,6 +348,10 @@ def check_pack(
             f"{tid}: terrain outside the tile",
         )
         check_import_names(tid, meshes.names)
+        # Every bld_ node (mesh or collision) belongs to a building in buildings.json, so a
+        # building left out (crossing the boundary, centroid outside) has neither.
+        stray = sorted(n for n in meshes.nodes if n.startswith("bld_") and n not in known_nodes)
+        _require(not stray, f"{tid}: bld_ node(s) of no building in buildings.json: {stray[:5]}")
         names = meshes.buildings()
         colonly = {n for n in meshes.nodes if n.endswith("-colonly")}
         expected = {c for n in names for c in by_node[n]["collision_nodes"]}
@@ -375,6 +416,7 @@ def check_pack(
             extra = [n for n in meshes.nodes if n in ROAD_SURFACES or BRIDGE_NODE.match(n)]
             _require(not extra, f"no roads block, but {tid} has {extra}")
     roadblocks = check_world_edge(pack_dir, work_dir, manifest, world_edge)
+    check_custom_boundary(pack_dir, work_dir, manifest, tiles)
     return PackSummary(len(manifest["tiles"]), glb_buildings, road_summary, poi_count, roadblocks)
 
 
@@ -654,17 +696,31 @@ class RoadSummary:
     max_graded_grade: float = 0.0  # steepest measured along any graded ramp
 
 
+def cut_edge_slack(xy: np.ndarray) -> float:
+    """The cut-edge slack for local points `xy`: `CUT_EDGE_SLACK_STEPS` float32 steps at
+    their largest absolute coordinate."""
+    pts = np.asarray(xy, dtype=float)
+    largest = float(np.abs(pts).max()) if pts.size else 0.0
+    return CUT_EDGE_SLACK_STEPS * float(np.spacing(np.float32(largest)))
+
+
 def _terrain_at(
-    xy: np.ndarray, tiles: dict[str, Any], samplers: dict[str, TriangleSampler]
+    xy: np.ndarray,
+    tiles: dict[str, Any],
+    samplers: dict[str, TriangleSampler],
+    cut: bool = False,
 ) -> np.ndarray:
-    """Terrain mesh heights at local points, from the first tile whose bounds hold each point."""
+    """Terrain mesh heights at local points, from the first tile whose bounds hold each
+    point. `cut`: the terrain is cut along a custom boundary polygon, so a point off every
+    triangle by float32 rounding takes the triangle within `cut_edge_slack`."""
     result = np.full(len(xy), np.nan)
     for tid, (tile, _) in tiles.items():
         min_x, min_y, max_x, max_y = tile["bounds_local"]
         todo = np.isnan(result) & (xy[:, 0] >= min_x) & (xy[:, 0] <= max_x)
         todo &= (xy[:, 1] >= min_y) & (xy[:, 1] <= max_y)
         if todo.any():
-            result[todo] = samplers[tid].height(xy[todo])
+            slack = cut_edge_slack(xy[todo]) if cut else None
+            result[todo] = samplers[tid].height(xy[todo], slack=slack)
     return result
 
 
@@ -769,11 +825,34 @@ def work_heightfield(work_dir: Path, origin: tuple[float, float]) -> Any:
     return heightfield
 
 
-class _DemTerrain:
-    """Criterion 13b: tile terrain vertices built from the stage-1 DEM alone (float32)."""
+def _boundary_ring(pack_dir: Path) -> list[tuple[float, float]] | None:
+    """The boundary ring of the pack's boundary.json in local (x, n), or None without one."""
+    path = pack_dir / "boundary.json"
+    if not path.is_file():
+        return None
+    return [(float(p[0]), -float(p[1])) for p in _json(path)["boundary"]["ring"]]
 
-    def __init__(self, work_dir: Path, origin: tuple[float, float]) -> None:
-        self.work_dir, self.origin = work_dir, origin
+
+def _custom_boundary(pack_dir: Path) -> Any:
+    """The custom boundary polygon the build cut the terrain along (exactly: boundary.json
+    holds its points, already rounded to 1 µm by the config), or None."""
+    path = pack_dir / "boundary.json"
+    if not path.is_file():
+        return None
+    boundary = _json(path)["boundary"]
+    if boundary["source"] != "custom":
+        return None
+    from mapgen.build.world_edge.ring import Ring
+
+    return Ring.from_coords([(float(p[0]), -float(p[1])) for p in boundary["ring"]]).polygon()
+
+
+class _DemTerrain:
+    """Criterion 13b: tile terrain vertices built from the stage-1 DEM alone (float32),
+    cut along the custom boundary polygon when the pack has one."""
+
+    def __init__(self, work_dir: Path, origin: tuple[float, float], clip: Any = None) -> None:
+        self.work_dir, self.origin, self.clip = work_dir, origin, clip
         self._heightfield: Any = None
 
     def tile_vertices(self, tile: dict[str, Any]) -> np.ndarray:
@@ -787,6 +866,10 @@ class _DemTerrain:
         chunk = MeshTerrainBuilder().build_tile(
             self._heightfield, Tile(i, j, BBox(*tile["bounds_local"]))
         )
+        if self.clip is not None:
+            from mapgen.build.terrain.clip import clip_chunk
+
+            chunk, _ = clip_chunk(chunk, self.clip, self._heightfield)
         return chunk.vertices.astype(np.float32).astype(float)
 
 
@@ -836,6 +919,16 @@ def check_roads(
         samplers = {tid: TriangleSampler(*m.nodes[TERRAIN_NODE]) for tid, (_, m) in tiles.items()}
     bounds = np.array([t["bounds_local"] for t, _ in tiles.values()])
     area = (bounds[:, 0].min(), bounds[:, 1].min(), bounds[:, 2].max(), bounds[:, 3].max())
+    # `area_edge` nodes lie on the boundary: the ring in boundary.json (the build area
+    # rectangle, the test-area square or a custom polygon), else the area's rectangle.
+    boundary = _boundary_ring(pack_dir)
+    custom = _custom_boundary(pack_dir)
+    cut = custom is not None  # the terrain is cut along a custom polygon
+    edge_line = (
+        LineString([*boundary, boundary[0]])
+        if boundary is not None
+        else shapely.box(*area).exterior
+    )
 
     # 8: finite points inside the area, length_m is the 3D polyline length.
     for node in graph["nodes"]:
@@ -850,8 +943,7 @@ def check_roads(
                 _require(node["id"].startswith("cut:way/"), f"4: {node['id']}")
             else:
                 _require(node["id"] == f"osm:node/{node['osm_node']}", f"4: {node['id']}")
-            on_edge = min(abs(p[0] - area[0]), abs(p[0] - area[2]))
-            on_edge = min(on_edge, abs(p[1] - area[1]), abs(p[1] - area[3]))
+            on_edge = float(edge_line.distance(shapely.Point(p[0], p[1])))
             _require(on_edge <= 1e-6, f"4: {node['id']} isn't on the area edge")
         elif node["kind"] == "span_end":
             _require(
@@ -886,7 +978,8 @@ def check_roads(
             if name not in meshes.nodes:
                 continue
             v, f = meshes.nodes[name]
-            h = samplers[tid].height(v[:, :2])
+            slack = cut_edge_slack(v[:, :2]) if cut else None
+            h = samplers[tid].height(v[:, :2], slack=slack)
             _require(not np.isnan(h).any(), f"9: {tid}/{name}: vertices off the terrain")
             base = h + offset
             _require((v[:, 2] >= base - MM).all(), f"9: {tid}/{name} below terrain + offset")
@@ -936,7 +1029,7 @@ def check_roads(
     if ground:
         p = np.concatenate(ground)
         if len(p):
-            expected = field.apply(p[:, :2], _terrain_at(p[:, :2], tiles, samplers) + offset)
+            expected = field.apply(p[:, :2], _terrain_at(p[:, :2], tiles, samplers, cut) + offset)
             err = np.abs(p[:, 2] - expected)
             worst = int(np.argmax(err))
             _require(err[worst] <= MM, f"criterion 9: {owner[worst]} is {err[worst]} m off")
@@ -974,7 +1067,7 @@ def check_roads(
             np.abs(z - chain.line_z(chain.s)).max() <= FLOAT32_SLACK, f"11: {label} not straight"
         )
         ends = chain.points[[0, -1]]
-        surface = field.apply(ends[:, :2], _terrain_at(ends[:, :2], tiles, samplers) + offset)
+        surface = field.apply(ends[:, :2], _terrain_at(ends[:, :2], tiles, samplers, cut) + offset)
         _require(
             np.abs(ends[:, 2] - surface).max() <= MM,
             f"11: {label}: ends {ends[:, 2]} vs road surface {surface}",
@@ -1096,7 +1189,7 @@ def check_roads(
         for sampler in road_samplers.values():
             h = np.where(np.isnan(h), sampler.height(xy, distance=0.1 * MM), h)
         _require(not np.isnan(h).any(), f"graded ramp at {ramp.edge.node}: no surface on the path")
-        base = _terrain_at(xy, tiles, samplers) + offset
+        base = _terrain_at(xy, tiles, samplers, cut) + offset
         # On the descent: where it is above the terrain. Within one terrain triangle of
         # where it meets the terrain, the mesh interpolates between the descent and the
         # terrain (the terrain's slope, not the ramp's), so those samples are left out.
@@ -1131,7 +1224,7 @@ def check_roads(
         corners = ramp.corners
         count = max(int(np.ceil(np.linalg.norm(corners[1] - corners[0]) / 0.005)), 1) + 1
         edge = corners[0] + np.outer(np.linspace(0, 1, count), corners[1] - corners[0])
-        road = float(np.nanmax(_terrain_at(edge, tiles, samplers))) + offset
+        road = float(np.nanmax(_terrain_at(edge, tiles, samplers, cut))) + offset
         (z,) = local_points(node["position"])[:, 2]
         _require(
             abs(z - road) <= MM,
@@ -1139,7 +1232,7 @@ def check_roads(
         )
 
     # 13b: the terrain under every deck is the DEM-only terrain.
-    dem = _DemTerrain(work_dir, origin)
+    dem = _DemTerrain(work_dir, origin, custom)
     for chain in chains:
         width = max(e["width_m"] for e in chain.edges)
         footprint = LineString(chain.points[:, :2]).buffer(width / 2, cap_style="flat")
@@ -1374,6 +1467,8 @@ def check_world_edge(
             work_dir / "03-buildings" / "buildings.geojson", origin
         )
     }
+    missing = [b["id"] for b in buildings if b["id"] not in footprints]
+    _require(not missing, f"buildings without a footprint in 03-buildings: {missing[:5]}")
     crossing = crossing_buildings(
         polygon,
         [(b["id"], footprints[b["id"]]) for b in buildings],
@@ -1456,3 +1551,76 @@ def check_world_edge(
             overlap <= AREA_TOLERANCE_M2, f"open ground overlaps obstacles by {overlap:.3f} m²"
         )
     return len(roadblocks)
+
+
+def check_custom_boundary(
+    pack_dir: Path,
+    work_dir: Path,
+    manifest: dict[str, Any],
+    tiles: dict[str, Any] | None = None,
+) -> bool:
+    """With a custom boundary polygon in `boundary.json` (`boundary.source` "custom"):
+    everything the build clips by it lies inside it, grown by `CUSTOM_BOUNDARY_TOL_M`.
+    Checks every terrain triangle of every tile, every road graph node and edge polyline,
+    every POI position and outline, and the centroid of every kept building (footprints
+    from `03-buildings/buildings.geojson`). Returns whether the pack has a custom polygon
+    (False: nothing to check)."""
+    polygon = _custom_boundary(pack_dir)
+    if polygon is None:
+        return False
+    grown = polygon.buffer(CUSTOM_BOUNDARY_TOL_M)
+    shapely.prepare(grown)
+    origin = np.array([manifest["origin"]["x"], manifest["origin"]["y"]])
+
+    if tiles is None:
+        tiles = {t["id"]: (t, read_glb_meshes(pack_dir / t["file"])) for t in manifest["tiles"]}
+    for tid, (_, meshes) in tiles.items():
+        vertices, faces = meshes.nodes[TERRAIN_NODE]
+        triangles = shapely.polygons(np.asarray(vertices)[np.asarray(faces)][:, :, :2])
+        outside = np.flatnonzero(~shapely.covers(grown, triangles))
+        _require(
+            len(outside) == 0,
+            f"{tid}: {len(outside)} terrain triangle(s) outside the custom boundary, first "
+            f"{np.asarray(triangles[outside[0]].exterior.coords)[:3].round(3).tolist()}"
+            if len(outside)
+            else "",
+        )
+
+    graph = _json(pack_dir / "road_graph.json")
+    for node in graph["nodes"]:
+        x, n = _local_xz(node["position"])
+        _require(
+            grown.covers(shapely.Point(x, n)),
+            f"road graph node {node['id']} at ({x:.3f}, {n:.3f}) is outside the custom boundary",
+        )
+    for edge in graph["edges"]:
+        points = [_local_xz(p) for p in edge["points"]]
+        line = LineString(points) if len(points) > 1 else shapely.Point(points[0])
+        _require(grown.covers(line), f"road graph edge {edge['id']} leaves the custom boundary")
+
+    for poi in _json(pack_dir / POIS_NAME)["pois"]:
+        x, n = _local_xz(poi["position"])
+        _require(
+            grown.covers(shapely.Point(x, n)),
+            f"POI {poi['id']} at ({x:.3f}, {n:.3f}) is outside the custom boundary",
+        )
+        for rings in poi["outline"] or []:
+            outline = shapely.Polygon([_local_xz(p) for p in rings[0]])
+            _require(grown.covers(outline), f"POI {poi['id']}: outline leaves the custom boundary")
+
+    footprints = {
+        props["id"]: geometry
+        for props, geometry in _work_features(
+            work_dir / "03-buildings" / "buildings.geojson", origin
+        )
+    }
+    for building in _json(pack_dir / "buildings.json")["buildings"]:
+        bid = building["id"]
+        _require(bid in footprints, f"{bid}: no footprint in 03-buildings/buildings.geojson")
+        centroid = footprints[bid].centroid
+        _require(
+            grown.covers(centroid),
+            f"building {bid}: centroid ({centroid.x:.3f}, {centroid.y:.3f}) is outside the "
+            "custom boundary",
+        )
+    return True

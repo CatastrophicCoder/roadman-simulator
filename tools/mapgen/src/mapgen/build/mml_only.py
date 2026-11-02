@@ -291,7 +291,7 @@ def select_mml_only(
         geometry = record.geometry
         record_area = float(geometry.area)
         centroid = geometry.centroid
-        if not area.contains(centroid.x, centroid.y):
+        if not area.includes(centroid.x, centroid.y):
             result.append(MmlOnlyRecord(record, "outside", record_area))
             continue
         if not record_area >= MIN_AREA_M2:
@@ -322,7 +322,7 @@ def select_mml_only(
             "cut_by": cut.cut_by,
         }
         kept_centroid = kept.centroid
-        if not area.contains(kept_centroid.x, kept_centroid.y):
+        if not area.includes(kept_centroid.x, kept_centroid.y):
             # The building would belong to no tile; left out like an OSM footprint.
             result.append(MmlOnlyRecord(record, "outside", record_area, **details))
             continue

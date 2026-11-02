@@ -109,12 +109,11 @@ def place_poi(poi: LocalPoi, area: BuildArea) -> PlacePoi | str | None:
     position = geometry if isinstance(geometry, Point) else geometry.point_on_surface()
     if position.is_empty or not all(math.isfinite(v) for v in (position.x, position.y)):
         return "no representative point"
-    if not area.contains(position.x, position.y):
+    if not area.includes(position.x, position.y):
         return None
     if isinstance(geometry, Point):
         return PlacePoi(poi, position, None, None)
-    box = shapely.box(*area.bounds.as_list())
-    clipped = _polygonal(geometry.intersection(box))
+    clipped = _polygonal(geometry.intersection(area.clip_polygon()))
     if clipped is None:
         return "outline has no area inside the build area"
     outline = godot_outline(clipped)

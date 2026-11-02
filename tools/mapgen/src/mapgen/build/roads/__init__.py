@@ -45,7 +45,7 @@ from mapgen.build.roads.graph import (
     godot_point,
     graph_document,
 )
-from mapgen.build.roads.model import validate_document
+from mapgen.build.roads.model import RoadGraphError, validate_document
 from mapgen.build.roads.ramps import GradedRamp, Ramp, RampField
 from mapgen.build.roads.surface import (
     TerrainSurface,
@@ -53,6 +53,7 @@ from mapgen.build.roads.surface import (
     ground_runs,
     insert_tile_crossings,
     merged_surfaces,
+    off_terrain_limit,
     surface_normals,
 )
 from mapgen.build.roads.tags import is_bridge, is_tunnel, resolve_attributes, road_class
@@ -105,7 +106,8 @@ def prepare_pieces(
     invalid: Counter[str] = Counter()
     included = not_in_area = both_tags = 0
     for way in sorted(loaded.roads, key=lambda w: w.osm_id):
-        clipped = clip_way(way, area.bounds)
+        # Cut by the custom boundary polygon when there is one, else by the area box.
+        clipped = clip_way(way, area.boundary if area.boundary is not None else area.bounds)
         if not clipped.touches_area:
             not_in_area += 1
             continue
@@ -184,8 +186,9 @@ def build_roads(
     so they reach the boundary across their whole width (docs/specs/world-edge-pipeline.md).
     """
     offset = roads.surface_offset_m
-    terrain = TerrainSurface(area, tiles, chunks)
     pieces, info = prepare_pieces(loaded, area, roads)
+    widest = max((p.attrs.width_m for p in pieces), default=0.0)
+    terrain = TerrainSurface(area, tiles, chunks, max_off_terrain_m=off_terrain_limit(widest))
     water = WaterIndex.build(
         loaded.water_areas, loaded.water_lines, roads.bridge.inferred_waterways
     )
@@ -295,6 +298,11 @@ def build_roads(
     for part in decks:
         name = names[(part.way_id, part.tile)]
         tid = tile_id(*part.tile)
+        if tid not in tile_nodes:
+            raise RoadGraphError(
+                f"the deck of osm:way/{part.way_id} lies in {tid}, a tile outside the "
+                "boundary polygon that isn't written"
+            )
         tile_nodes[tid].append(
             MeshNode(name, part.mesh.vertices, part.mesh.faces, material="bridge")
         )

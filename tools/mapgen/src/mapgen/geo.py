@@ -198,10 +198,10 @@ def polygon_problem(coords: "list[tuple[float, float]]") -> str | None:
         if a == b:
             return f"points {i} and {(i + 1) % len(coords)} are the same"
     polygon = Polygon(coords)
-    if polygon.area <= 0:
-        return "the polygon has no area"
     if not polygon.exterior.is_simple:
         return f"the polygon isn't simple ({explain_validity(polygon)})"
+    if polygon.area <= 0:
+        return "the polygon has no area"
     if not polygon.is_valid:
         return f"the polygon isn't valid ({explain_validity(polygon)})"
     return None

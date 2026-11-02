@@ -136,26 +136,71 @@ def test_a_valid_boundary_polygon_in_either_winding_loads(
         assert local is not None and len(local) == 3
 
 
-def test_full_build_with_a_custom_boundary_fails_before_the_pack_is_touched(
-    tmp_repo: TmpRepo, fixture_data: dict[str, Any], tmp_path: Path
+def test_boundary_for_uses_the_custom_polygon_in_full_builds_and_the_square_in_test_builds(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any]
 ) -> None:
-    from mapgen.build import BuildError, run_build
+    from mapgen.build.area import build_area
+    from mapgen.build.world_edge import boundary_for
 
     fixture_data["world_edge"] = {
         "boundary_wgs84": _latlon([(-500.0, -500.0), (500.0, -500.0), (0.0, 600.0)])
     }
     config = tmp_repo.load(fixture_data)
-    with pytest.raises(BuildError, match="custom boundary polygons are not built yet"):
-        run_build(
-            config,
-            "full",
-            tmp_path / "raw",
-            tmp_path / "pack",
-            tmp_path / "work",
-            map_dir=tmp_repo.map_dir("testtown"),
-            log=lambda _: None,
-        )
-    assert not (tmp_path / "work").exists()
+    full = boundary_for(config, build_area(config, "full"))
+    assert full.source == "custom"
+    local = config.boundary_local()
+    assert local is not None
+    assert sorted(map(tuple, full.ring.xy.tolist())) == sorted(local)
+    test = boundary_for(config, build_area(config, "test"))
+    assert test.source == "test_area"
+    assert test.polygon().equals(box(*build_area(config, "test").bounds.as_list()))
+
+
+def test_boundary_points_are_local_metres_rounded_to_1_um(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any]
+) -> None:
+    fixture_data["world_edge"] = {
+        "boundary_wgs84": _latlon([(-500.123, -500.0), (500.0, -500.0), (0.0, 600.0)])
+    }
+    local = tmp_repo.load(fixture_data).boundary_local()
+    assert local is not None
+    for x, y in local:
+        assert (x, y) == (round(x, 6), round(y, 6))
+    assert local[0] == pytest.approx((-500.123, -500.0), abs=1e-6)
+
+
+@pytest.mark.parametrize(("side", "outside_m"), [("max_x", 0.03), ("min_y", 0.049)])
+def test_boundary_points_up_to_5_cm_outside_snap_onto_the_build_area_edge(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any], side: str, outside_m: float
+) -> None:
+    """A point meant to lie on the build area's edge, a few mm to cm off it after the
+    7-decimal WGS84 rounding, is moved onto the edge (BOUNDARY_SNAP_M = 0.05 m)."""
+    from mapgen.config import BOUNDARY_SNAP_M
+
+    area = tmp_repo.load(fixture_data).full_area_local
+    assert outside_m <= BOUNDARY_SNAP_M
+    if side == "max_x":
+        off = (area.max_x + outside_m, 0.0)
+    else:
+        off = (0.0, area.min_y - outside_m)
+    fixture_data["world_edge"] = {"boundary_wgs84": _latlon([off, (-300.0, 300.0), (300.0, 300.0)])}
+    local = tmp_repo.load(fixture_data).boundary_local()
+    assert local is not None
+    if side == "max_x":
+        assert local[0][0] == area.max_x and local[0][1] == pytest.approx(0.0, abs=1e-6)
+    else:
+        assert local[0][1] == area.min_y and local[0][0] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_a_boundary_point_more_than_5_cm_outside_the_build_area_fails(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any]
+) -> None:
+    area = tmp_repo.load(fixture_data).full_area_local
+    fixture_data["world_edge"] = {
+        "boundary_wgs84": _latlon([(area.max_x + 0.06, 0.0), (-300.0, 300.0), (300.0, 300.0)])
+    }
+    with pytest.raises(ConfigError, match=r"outside the build area .* by more than 0.05 m"):
+        tmp_repo.load(fixture_data)
 
 
 # markers.json

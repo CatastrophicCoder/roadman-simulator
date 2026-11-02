@@ -32,12 +32,15 @@ from mapgen.build.roads.model import committed_schema, generated_schema
 from mapgen.build.roads.surface import (
     EDGE_EXTENSION_MARGIN_M,
     MAX_EDGE_EXTENSION_WIDTHS,
+    OFF_TERRAIN_WIDTHS,
+    OffTerrainError,
     TerrainSurface,
     drape_tile,
     edge_extension,
     ground_runs,
     insert_tile_crossings,
     merged_surfaces,
+    off_terrain_limit,
     plane_z,
 )
 from mapgen.build.roads.tags import (
@@ -193,6 +196,72 @@ def test_way_leaving_through_a_node_on_the_area_edge_ends_at_an_area_edge_node()
     assert graph.nodes["osm:node/5"].kind == "dead_end"
 
 
+# Clipping by a custom boundary polygon (docs/specs/world-edge-pipeline.md, slice (b)).
+
+# A 10 x 10 square with a notch x 4..6, n 6..10 cut into its north side (CCW).
+NOTCHED = Polygon([(0, 0), (10, 0), (10, 10), (6, 10), (6, 6), (4, 6), (4, 10), (0, 10)])
+
+
+@pytest.mark.parametrize(
+    "xy",
+    [
+        [(2, 2), (2, 13), (7, 13), (7.3, 2)],  # leaves and re-enters
+        [(-3, 5), (5, 5), (14, 5)],  # through, cut twice
+        [(4, 5), (10, 5), (14, 5)],  # leaves through a node on the edge
+        [(1, 1), (9, 9)],  # inside
+        [(-1, -1), (-1, 20)],  # outside
+        [(10, -5), (10, 15)],  # along the edge
+        [(-5, 10), (12, 10)],  # along the edge, round two corners
+        [(5, 5), (5, 5), (5, 15)],  # a zero-length segment, then out
+    ],
+)
+def test_clip_way_by_a_rectangle_polygon_matches_the_box(xy: list[tuple[float, float]]) -> None:
+    way = _way(7, xy, list(range(1, len(xy) + 1)))
+    by_box = clip_way(way, BBox(0, 0, 10, 10))
+    by_polygon = clip_way(way, shapely.box(0, 0, 10, 10))
+    assert by_polygon.nodes_inside == by_box.nodes_inside
+    assert by_polygon.touches_area == by_box.touches_area
+    assert by_polygon.edge_nodes == by_box.edge_nodes
+    assert len(by_polygon.pieces) == len(by_box.pieces)
+    for (xy_p, keys_p, ids_p), (xy_b, keys_b, ids_b) in zip(
+        by_polygon.pieces, by_box.pieces, strict=True
+    ):
+        assert keys_p == keys_b and ids_p == ids_b
+        assert np.allclose(xy_p, xy_b, atol=1e-12)
+
+
+def test_clip_way_by_a_notched_polygon_cuts_on_the_notch() -> None:
+    """A way along n = 8 crosses the notch: two pieces, cut on its sides x = 4 and 6."""
+    way = _way(9, [(-2, 8), (12, 8)], [1, 2])
+    clipped = clip_way(way, NOTCHED)
+    assert clipped.nodes_inside == 0 and clipped.touches_area
+    assert [keys for _, keys, _ in clipped.pieces] == [
+        ["cut:way/9:0", "cut:way/9:1"],
+        ["cut:way/9:2", "cut:way/9:3"],
+    ]
+    cuts = [p for xy, _, _ in clipped.pieces for p in xy]
+    assert np.allclose(cuts, [(0, 8), (4, 8), (6, 8), (10, 8)], atol=1e-12)
+    for x, y in cuts:
+        assert NOTCHED.exterior.distance(Point(x, y)) <= 1e-12
+
+
+def test_clip_way_by_a_polygon_cuts_slanted_edges_on_the_ring() -> None:
+    """Cut points on a slanted polygon edge lie on that edge (1 nm), not only on the way."""
+    triangle = Polygon([(0, 0), (100, 3), (37, 91)])
+    way = _way(3, [(-50, 40), (30, 41), (150, 47)], [1, 2, 3])
+    clipped = clip_way(way, triangle)
+    ((xy, keys, _),) = clipped.pieces
+    assert keys == ["cut:way/3:0", "osm:node/2", "cut:way/3:1"]
+    for point in (xy[0], xy[-1]):
+        assert triangle.exterior.distance(Point(point)) <= 1e-9
+
+
+def test_clip_way_touching_a_polygon_corner_in_a_point_has_no_piece() -> None:
+    corner = _way(5, [(-5, 5), (0, 0), (5, -5)], [1, 2, 3])  # touches (0, 0) only
+    clipped = clip_way(corner, NOTCHED)
+    assert clipped.pieces == [] and clipped.touches_area
+
+
 # Surfaces at area-edge cuts (docs/specs/world-edge-pipeline.md: the road surface reaches
 # the boundary across its whole width).
 
@@ -331,7 +400,61 @@ def _valley_terrain(tmp_size: float = 64.0) -> tuple[BuildArea, list[Tile], Terr
     tiles = area.tiles()
     builder = MeshTerrainBuilder()
     chunks = {t.id: builder.build_tile(heightfield, t) for t in tiles}
-    return area, tiles, TerrainSurface(area, tiles, chunks)
+    return area, tiles, TerrainSurface(area, tiles, chunks, max_off_terrain_m=VALLEY_LIMIT_M)
+
+
+VALLEY_LIMIT_M = 5.0  # off-terrain limit of the valley surfaces
+
+
+def test_off_terrain_limit_is_twice_the_edge_extension_cap() -> None:
+    assert OFF_TERRAIN_WIDTHS == 2 * MAX_EDGE_EXTENSION_WIDTHS
+    assert off_terrain_limit(7.0) == 2 * MAX_EDGE_EXTENSION_WIDTHS * 7.0
+
+
+def test_height_in_a_tile_not_written_is_the_closest_terrain_point_not_its_plane() -> None:
+    """Tile (0, 0) (x 0..60, n 0..60) isn't written, as if outside a custom boundary.
+    A point 2 m east of the written tile (-1, 0) takes the height at its closest terrain
+    point (0, n), not the nearest triangle's plane extended 2 m down the valley side."""
+    area, tiles, full = _valley_terrain()
+    written = [t for t in tiles if (t.i, t.j) != (0, 0)]
+    xs = np.arange(-64.0, 65.0, 2.0)
+    gx, gy = np.meshgrid(xs, xs)
+    z = 100.0 - 8.0 * np.exp(-(gx**2) / 200.0) + 0.01 * gy
+    heightfield = Heightfield(z=z, x0=-64.0, y0=-64.0, dx=2.0, dy=2.0)
+    chunks = {t.id: MeshTerrainBuilder().build_tile(heightfield, t) for t in written}
+    surface = TerrainSurface(area, written, chunks, max_off_terrain_m=VALLEY_LIMIT_M)
+    (h,) = surface.height(np.array([[2.0, 31.0]]))
+    (expected,) = full.height(np.array([[0.0, 31.0]]))
+    assert h == pytest.approx(expected, abs=1e-12)
+    # The nearest triangle's plane, extended to x = 2, is 0.16 m lower: the old answer.
+    mesh = surface.meshes[(-1, 0)]
+    t = int(mesh.tree.query_nearest(Point(2.0, 31.0))[0])
+    extended = plane_z(mesh.triangles[t], np.array([[2.0, 31.0]]))[0]
+    assert expected - extended > 0.1
+    # Within the limit diagonally too: (3, -3) is 3 m from tile (0, -1) and (-1, 0).
+    assert np.isfinite(surface.height(np.array([[3.0, 3.0]]))).all()
+
+
+@pytest.mark.parametrize("point", [(5.5, 30.0), (30.0, 30.0), (60.0, 60.0)])
+def test_height_too_far_from_written_terrain_fails_naming_the_point(
+    point: tuple[float, float],
+) -> None:
+    area, tiles, _ = _valley_terrain()
+    written = [t for t in tiles if (t.i, t.j) != (0, 0)]
+    xs = np.arange(-64.0, 65.0, 2.0)
+    gx, gy = np.meshgrid(xs, xs)
+    heightfield = Heightfield(z=100.0 + 0.0 * gx + 0.0 * gy, x0=-64.0, y0=-64.0, dx=2.0, dy=2.0)
+    chunks = {t.id: MeshTerrainBuilder().build_tile(heightfield, t) for t in written}
+    surface = TerrainSurface(area, written, chunks, max_off_terrain_m=VALLEY_LIMIT_M)
+    with pytest.raises(OffTerrainError, match=rf"\({point[0]:.3f}, {point[1]:.3f}\).*limit is 5 m"):
+        surface.height(np.array([point]))
+
+
+def test_height_with_no_written_terrain_at_all_fails() -> None:
+    area, tiles, _ = _valley_terrain()
+    surface = TerrainSurface(area, [], {}, max_off_terrain_m=VALLEY_LIMIT_M)
+    with pytest.raises(OffTerrainError, match="no terrain"):
+        surface.height(np.array([[0.0, 0.0]]))
 
 
 def test_deck_on_a_bend_stays_on_or_just_above_the_straight_line() -> None:

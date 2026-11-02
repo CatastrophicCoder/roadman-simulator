@@ -192,6 +192,10 @@ class LoadResult:
     edge_water_skipped: list[SkippedFeature] = field(default_factory=list)  # unreadable
     # OSM water relations left out by the load stage (all of them, wherever they lie).
     water_left_out: list[LocalLeftOut] = field(default_factory=list)
+    # With a custom boundary polygon only (else empty): OSM footprints that meet the
+    # build area rectangle but whose centroid the area doesn't keep (outside the polygon
+    # or the rectangle). The build checks that the polygon doesn't cross them.
+    footprints_outside: list[LocalFootprint] = field(default_factory=list)
 
 
 def _geometry_to_local(geometry: BaseGeometry, crs: str, config: MapConfig) -> Any:
@@ -588,6 +592,15 @@ def run_load(
 
     return LoadResult(
         footprints=in_area,
+        footprints_outside=(
+            [
+                f
+                for f in all_footprints
+                if not _centroid_in(f, area) and f.geometry.intersects(area_box)
+            ]
+            if area.boundary is not None
+            else []
+        ),
         buildings_3d=buildings_3d,
         heightfield=heightfield,
         raster=raster,
@@ -704,7 +717,7 @@ def _area_polygon(area: BuildArea) -> Polygon:
 
 def _centroid_in(footprint: LocalFootprint, area: BuildArea) -> bool:
     centroid = footprint.geometry.centroid
-    return area.contains(centroid.x, centroid.y)
+    return area.includes(centroid.x, centroid.y)
 
 
 def _rel(path: Path, root: Path) -> str:

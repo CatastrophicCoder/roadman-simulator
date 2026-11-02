@@ -1,11 +1,11 @@
-"""World edge, slice (a): the acceptance criteria on whole builds.
+"""World edge, slices (a) and (b): the acceptance criteria on whole builds.
 
 Criterion numbers (`acN`) refer to docs/specs/world-edge-pipeline.md. Slice (a) covers
-criteria 1-13, 15, 16 (default rectangle only), 18, 19 and 21; the custom-polygon build
-(17, the custom half of 16) and the cliff meshes (14, 20) come later. The unit tests on
-synthetic rings are in test_world_edge.py; this file adds what they don't cover.
+criteria 1-13, 15, 16 (default rectangle only), 18, 19 and 21; slice (b) the custom
+polygon (17 and the custom half of 16). The cliff meshes (14, 20) come later. The unit
+tests on synthetic rings are in test_world_edge.py; this file adds what they don't cover.
 
-Three kinds of build, all fast:
+Four kinds of build, all fast:
 
 - `somero_area` (conftest): the Somero test area from the committed fixture, as CI
   builds it.
@@ -16,6 +16,8 @@ Three kinds of build, all fast:
   config defaults, never from guessed ranges. Run once with OSM water (the
   `mml_topographic` source disabled, its GeoPackage still in the raw folder) and once
   with MML water.
+- `edge_custom`: edgeville's full build with a small bbox and a custom boundary polygon
+  (see "AC16 and AC17" below); the criteria tests that take `built` run on it too.
 
 The test-area ring is the square x, n -150..150 (local metres, n north), counter-
 clockwise from (-150, -150): south edge s 0..300 (s = x + 150), east 300..600
@@ -49,14 +51,25 @@ from conftest import (
     TmpRepo,
     build_somero_fixture,
     lidar_entry,
+    read_tile,
     write_fixture_raw,
     write_markers,
     write_rakennus_gpkg,
 )
 from mapgen import paths
 from mapgen.build import BuildError, BuildReport, run_build
+from mapgen.build.buildings import node_name
+from mapgen.build.export_glb import TERRAIN_NODE, read_glb_node_names
 from mapgen.build.markers import MARKERS_SCHEMA
-from mapgen.build.pack_checks import PackCheckError, check_pack, check_world_edge, work_heightfield
+from mapgen.build.pack_checks import (
+    PackCheckError,
+    check_custom_boundary,
+    check_pack,
+    check_world_edge,
+    read_glb_meshes,
+    work_heightfield,
+)
+from mapgen.build.places.model import POIS_NAME
 from mapgen.build.roads.model import committed_schema as road_graph_schema
 from mapgen.build.world_edge import roadblock_record
 from mapgen.build.world_edge.model import BOUNDARY_SCHEMA
@@ -221,15 +234,24 @@ def setup_edge_map(
     markers: Sequence[tuple[float, float]] | None = None,
     water: dict[str, list[tuple[int, Any]] | None] | None = None,
     near_relation: bool = False,
+    data_update: dict[str, Any] | None = None,
+    osm: Osm | None = None,
+    area: str = "test",
+    rakennus: Sequence[tuple[float, float, float, float]] = (),
 ) -> EdgeMap:
     """The edgeville repo (map.yaml, markers.json, raw data), not built yet. The MML
-    GeoPackage is always in the raw folder; `topographic` enables its source."""
+    GeoPackage is always in the raw folder; `topographic` enables its source.
+    `data_update` replaces top-level map.yaml keys, `osm` the OSM data (default
+    `edge_osm`), `area` is the area the work folder is for, and `rakennus` lists
+    building-use records as local boxes (x0, n0, x1, n1), numbered from 1 (feature class
+    42211, use class 1)."""
     data = yaml.safe_load(FIXTURE_YAML.read_text(encoding="utf-8"))
     data["id"] = MAP_ID
     data["roads"] = copy.deepcopy(SNIPPET_ROADS)
     data["sources"]["mml_topographic"]["enabled"] = topographic
     if world_edge is not None:
         data["world_edge"] = world_edge
+    data.update(copy.deepcopy(data_update or {}))
     repo = TmpRepo(root)
     (root / "tools" / "mapgen").mkdir(parents=True, exist_ok=True)
     config = repo.load(data)
@@ -237,10 +259,11 @@ def setup_edge_map(
     if markers is not None:
         write_markers(map_dir, markers)
     raw = write_fixture_raw(repo.raw_dir(MAP_ID), MAP_ID)
-    edge_osm(near_relation=near_relation).write(raw / "osm" / f"{MAP_ID}.osm")
+    (osm or edge_osm(near_relation=near_relation)).write(raw / "osm" / f"{MAP_ID}.osm")
     write_dem(raw / "mml" / "dem_2m" / "plane.tif", _bumpy)
     gpkg = "mml/topographic/edge.gpkg"
-    write_rakennus_gpkg(raw / gpkg, [], water=mml_water() if water is None else water)
+    rows = [(k, _world(box(*b)), 42211, 1) for k, b in enumerate(rakennus, start=1)]
+    write_rakennus_gpkg(raw / gpkg, rows, water=mml_water() if water is None else water)
     manifest = _json(raw / "download-manifest.json")
     entry = lidar_entry(gpkg)
     entry.update(source="mml_topographic", dataset="Topographic Database")
@@ -252,15 +275,15 @@ def setup_edge_map(
         raw,
         map_dir,
         paths.pack_dir(root, MAP_ID),
-        paths.work_dir(root, MAP_ID, "test"),
+        paths.work_dir(root, MAP_ID, area),
     )
 
 
-def build_edge_map(root: Path, **options: Any) -> EdgeMap:
-    edge = setup_edge_map(root, **options)
+def build_edge_map(root: Path, *, area: str = "test", **options: Any) -> EdgeMap:
+    edge = setup_edge_map(root, area=area, **options)
     edge.report = run_build(
         edge.config,
-        "test",
+        area,  # type: ignore[arg-type]
         edge.raw,
         edge.pack,
         edge.work,
@@ -310,7 +333,7 @@ class Built:
         return (self.config.origin.x, self.config.origin.y)
 
 
-BUILDS = ["somero", "edge_osm", "edge_mml", "edge_override"]
+BUILDS = ["somero", "edge_osm", "edge_mml", "edge_override", "edge_custom"]
 
 
 @pytest.fixture(params=BUILDS)
@@ -1248,6 +1271,517 @@ def test_ac16_no_building_in_the_somero_test_area_pack_crosses_its_boundary(
         i for p in pois for i in p["contains_building_ids"]
     }
     assert not dropped & linked
+
+
+# AC16 and AC17: a custom boundary polygon (slice (b))
+#
+# `edge_custom`: edgeville with a small bbox (a "full" area of x -202..202, n -200..200,
+# 4 x 4 tiles of 128 m, so a full build stays fast) and a custom polygon inside it that
+# cuts across the fixture's data: its south edge cuts the roads at n = -135, its west
+# edge crosses the OSM lake at x = -140, its north edge the pond and the stream at
+# n = 145, a notch (x > 130, n -30..-5) leaves out building NEAR_EDGE and a POI, and
+# tile_x-2_y-2 (x -202..-128, n -200..-128) lies entirely outside it.
+
+CUSTOM_BBOX = {"lat_min": 60.6283, "lat_max": 60.6317, "lon_min": 23.5165, "lon_max": 23.5235}
+CUSTOM_AREA = (-202.0, -200.0, 202.0, 200.0)  # CUSTOM_BBOX projected, rounded outward
+CUSTOM_TILE_M = 128
+CUSTOM_RING = [
+    (-120.0, -135.0),
+    (165.0, -135.0),
+    (165.0, -30.0),
+    (130.0, -30.0),
+    (130.0, -5.0),
+    (165.0, -5.0),
+    (165.0, 145.0),
+    (-140.0, 145.0),
+    (-140.0, -60.0),
+    (-120.0, -60.0),
+]
+OUTSIDE_TILE = "tile_x-2_y-2"
+CUSTOM_SOUTH_N = -135.0
+POI_INSIDE = "Inside"  # name of an amenity=cafe node at (0, 20)
+POI_OUTSIDE = "Outside"  # name of an amenity=cafe node in the notch, at (150, -15)
+POI_AREA = 62  # amenity=parking area x 140..175, n 60..80: across the east edge (x 165)
+POI_AREA_BOX = (140.0, 60.0, 175.0, 80.0)
+# Variants crossing a building (criterion 16): the notch moved to x > 142 cuts through
+# NEAR_EDGE (centroid outside); a second notch at x > 148.5, n 25..45 passes 1.5 m from
+# KEPT (x 120..147), inside the 2 m clearance.
+THROUGH_RING = [(142.0 if x == 130.0 else x, n) for x, n in CUSTOM_RING]
+NEAR_RING = [
+    *CUSTOM_RING[:6],
+    (165.0, 25.0),
+    (148.5, 25.0),
+    (148.5, 45.0),
+    (165.0, 45.0),
+    *CUSTOM_RING[6:],
+]
+
+
+def custom_osm() -> Osm:
+    osm = edge_osm()
+    osm.node(0.0, 20.0, {"amenity": "cafe", "name": POI_INSIDE})
+    osm.node(150.0, -15.0, {"amenity": "cafe", "name": POI_OUTSIDE})
+    x0, y0, x1, y1 = POI_AREA_BOX
+    ids = [osm.node(x, y) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+    osm.way(POI_AREA, [*ids, ids[0]], {"amenity": "parking"})
+    return osm
+
+
+def custom_data(ring: Sequence[tuple[float, float]] = CUSTOM_RING) -> dict[str, Any]:
+    return {
+        "bbox_wgs84": CUSTOM_BBOX,
+        "tile_size_m": CUSTOM_TILE_M,
+        "world_edge": {"boundary_wgs84": _latlon(ring)},
+    }
+
+
+def build_custom_map(
+    root: Path,
+    area: str = "full",
+    ring: Sequence[tuple[float, float]] = CUSTOM_RING,
+    **options: Any,
+) -> EdgeMap:
+    return build_edge_map(
+        root, area=area, data_update=custom_data(ring), osm=custom_osm(), **options
+    )
+
+
+@pytest.fixture(scope="module")
+def edge_custom_build(tmp_path_factory: pytest.TempPathFactory) -> EdgeMap:
+    """Edgeville's full build with the custom polygon (treat as read-only)."""
+    return build_custom_map(tmp_path_factory.mktemp("edge-custom"))
+
+
+def _poi_by_osm(pois: Sequence[dict[str, Any]], osm_id: str) -> list[dict[str, Any]]:
+    return [p for p in pois if p["id"] == osm_id]
+
+
+def _poi_by_name(pois: Sequence[dict[str, Any]], name: str) -> list[dict[str, Any]]:
+    return [p for p in pois if p["name"] == name]
+
+
+def test_ac17_the_custom_build_uses_the_polygon_as_its_boundary(
+    edge_custom_build: EdgeMap,
+) -> None:
+    edge = edge_custom_build
+    doc = edge.doc()
+    assert (doc["area"], doc["boundary"]["source"]) == ("full", "custom")
+    ring = DocRing.of(doc)
+    expected = Polygon(CUSTOM_RING)
+    # The committed WGS84 points (7 decimals) round-trip to within 1 cm.
+    assert ring.polygon.symmetric_difference(expected).area < 0.01 * expected.length
+    assert len(ring.coords) == len(CUSTOM_RING)
+    config = edge.config
+    local = config.boundary_local()
+    assert local is not None and sorted(ring.coords) == sorted(local)
+
+
+def test_ac17_area_edge_nodes_lie_on_the_polygon(edge_custom_build: EdgeMap) -> None:
+    ring = DocRing.of(edge_custom_build.doc())
+    nodes = [n for n in edge_custom_build.graph()["nodes"] if n["kind"] == "area_edge"]
+    assert nodes
+    for node in nodes:
+        x, n = _local(node["position"])
+        assert ring.line.distance(Point(x, n)) <= MM, node["id"]
+    # The polygon's own edges cut the roads: the south edge at n = -135, not the area's.
+    south = sorted(
+        round(_local(n["position"])[0], 1)
+        for n in nodes
+        if abs(_local(n["position"])[1] - CUSTOM_SOUTH_N) < 0.05
+    )
+    assert ROAD_90_X in south and BESIDE_ROAD_X in south
+    # Every graph point is inside the polygon (1 mm).
+    grown = ring.polygon.buffer(MM)
+    for edge in edge_custom_build.graph()["edges"]:
+        line = LineString([_local(p) for p in edge["points"]])
+        assert grown.covers(line), edge["id"]
+
+
+def test_ac17_no_kept_building_centroid_or_poi_lies_outside_the_polygon(
+    edge_custom_build: EdgeMap,
+) -> None:
+    edge = edge_custom_build
+    polygon = DocRing.of(edge.doc()).polygon
+    origin = np.array(FIXTURE_ORIGIN)
+    footprints = {
+        f["properties"]["id"]: shapely.transform(shape(f["geometry"]), lambda c: c - origin)
+        for f in _json(edge.work / "03-buildings" / "buildings.geojson")["features"]
+    }
+    kept = {b["id"] for b in _json(edge.pack / "buildings.json")["buildings"]}
+    assert kept == {f"osm:way/{OVERHANGING}", f"osm:way/{KEPT}"}
+    for bid in kept:
+        assert polygon.contains(footprints[bid].centroid), bid
+    pois = _json(edge.pack / "pois.json")["pois"]
+    assert _poi_by_name(pois, POI_INSIDE)
+    assert not _poi_by_name(pois, POI_OUTSIDE)
+    grown = polygon.buffer(MM)
+    for poi in pois:
+        assert grown.covers(Point(_local(poi["position"]))), poi["id"]
+        for rings in poi["outline"] or []:
+            assert grown.covers(Polygon([_local(p) for p in rings[0]])), poi["id"]
+    (area_poi,) = _poi_by_osm(pois, f"osm:way/{POI_AREA}")
+    outline = Polygon([_local(p) for p in area_poi["outline"][0][0]])
+    clipped = box(*POI_AREA_BOX).intersection(polygon)
+    assert outline.symmetric_difference(clipped).area <= 0.01 * clipped.length
+    assert outline.bounds[2] == pytest.approx(165.0, abs=0.02)  # cut at the east edge
+
+
+def test_ac17_no_terrain_triangle_lies_outside_the_polygon(edge_custom_build: EdgeMap) -> None:
+    edge = edge_custom_build
+    polygon = DocRing.of(edge.doc()).polygon
+    grown = polygon.buffer(MM)
+    covered = 0.0
+    manifest = _json(edge.pack / "manifest.json")
+    for tile in manifest["tiles"]:
+        vertices, faces = read_tile(edge.pack / tile["file"]).nodes[TERRAIN_NODE]
+        triangles = shapely.polygons(np.asarray(vertices)[np.asarray(faces)][:, :, :2])
+        outside = ~shapely.covers(grown, triangles)
+        assert not outside.any(), f"{tile['id']}: {int(outside.sum())} triangles outside"
+        covered += float(shapely.area(triangles).sum())
+    # And the terrain covers the whole polygon (float32 vertices: 0.01 m² slack).
+    assert covered == pytest.approx(polygon.area, abs=0.01)
+    stats = _json(edge.work / "02-terrain" / "stats.json")["boundary_cut"]
+    assert stats["totals"]["removed"] > 0 and stats["totals"]["cut"] > 0
+
+
+def test_ac17_a_tile_entirely_outside_the_polygon_is_not_written(
+    edge_custom_build: EdgeMap,
+) -> None:
+    edge = edge_custom_build
+    manifest = _json(edge.pack / "manifest.json")
+    ids = {t["id"] for t in manifest["tiles"]}
+    files = {p.stem for p in (edge.pack / "tiles").glob("*.glb")}
+    x0, y0, x1, y1 = CUSTOM_AREA
+    t = CUSTOM_TILE_M
+    every = {
+        f"tile_x{i}_y{j}"
+        for i in range(math.floor(x0 / t), math.ceil(x1 / t))
+        for j in range(math.floor(y0 / t), math.ceil(y1 / t))
+    }
+    assert ids == files == every - {OUTSIDE_TILE}
+    # The tile grid and bounds are still the build area's.
+    bounds = np.array([tile["bounds_local"] for tile in manifest["tiles"]])
+    assert (bounds[:, 0].min(), bounds[:, 1].min()) == (x0, y0)
+    assert (bounds[:, 2].max(), bounds[:, 3].max()) == (x1, y1)
+    assert edge.report is not None and edge.report.tile_count == len(every) - 1
+    stats = _json(edge.work / "02-terrain" / "stats.json")["boundary_cut"]
+    assert stats["tiles_not_written"] == [OUTSIDE_TILE]
+
+
+def test_ac17_the_world_edge_pack_checks_pass_on_the_custom_build(
+    edge_custom_build: EdgeMap,
+) -> None:
+    edge = edge_custom_build
+    summary = check_pack(edge.pack, edge.work, edge.config.roads, world_edge=edge.config.world_edge)
+    doc = edge.doc()
+    assert summary.roadblocks == len(doc["roadblocks"]) > 0
+    # The lake crossing on the west edge (x = -140, n -40..20) and the pond on the north
+    # edge (x 60..80) are water fences; the stream is a land fence.
+    ring = DocRing.of(doc)
+    water = _fence_union(doc, "water")
+    for (x, n0), (_, n1) in (((-140.0, 20.0), (-140.0, -40.0)),):
+        a, b = ring.s(x, n0), ring.s(x, n1)
+        assert _covered(water, min(a, b), max(a, b))
+    a, b = ring.s(80.0, 145.0), ring.s(60.0, 145.0)
+    assert _covered(water, min(a, b), max(a, b))
+    lines = edge.edge_report()["water"]["lines"]
+    assert [item["id"] for item in lines] == [f"osm:way/{OSM_STREAM}"]
+
+
+def test_ac17_a_test_build_of_a_custom_polygon_map_uses_the_test_area_square(
+    tmp_path: Path,
+) -> None:
+    edge = build_custom_map(tmp_path, area="test")
+    doc = edge.doc()
+    assert (doc["area"], doc["boundary"]["source"]) == ("test", "test_area")
+    assert DocRing.of(doc).polygon.equals(box(-HALF, -HALF, HALF, HALF))
+    terrain = _json(edge.work / "02-terrain" / "stats.json")
+    assert "boundary_cut" not in terrain
+    # The test-area rules apply: buildings crossing the square are dropped and listed.
+    dropped = {d["id"] for d in edge.edge_report()["dropped_buildings"]}
+    assert dropped == {f"osm:way/{OVERHANGING}", f"osm:way/{NEAR_EDGE}"}
+
+
+@pytest.mark.parametrize(
+    ("ring", "message"),
+    [
+        (THROUGH_RING, rf"osm:way/{NEAR_EDGE} \(0\.000 m from the boundary"),
+        (NEAR_RING, rf"osm:way/{KEPT} \(1\.[45]\d\d m from the boundary"),
+    ],
+    ids=["through", "within-clearance"],
+)
+def test_ac16_a_custom_polygon_crossing_a_building_fails_the_build_naming_it(
+    tmp_path: Path, ring: Sequence[tuple[float, float]], message: str
+) -> None:
+    with pytest.raises(BuildError, match=message) as info:
+        build_custom_map(tmp_path, ring=ring)
+    assert "1 building(s)" in str(info.value)
+    assert not paths.pack_dir(tmp_path, MAP_ID).exists()
+
+
+# The notch's west side moved from x 130 to x 138.5: NEAR_EDGE (x 139..149, in the notch)
+# stays outside the polygon, 0.5 m from it (WGS84 rounding moves that by a few mm), inside
+# the 2 m clearance.
+CLOSE_OUTSIDE_RING = [(138.5 if x == 130.0 else x, n) for x, n in CUSTOM_RING]
+# MML building-use records in the notch (x 130..165, n -30..-5), centroids outside the
+# polygon, with the MML source on: one 0.5 m from the notch side, one reaching 3 m in, one
+# 5 m from its sides.
+MML_CLOSE_BOX = (130.5, -25.0, 136.0, -15.0)
+MML_INTO_BOX = (127.0, -25.0, 135.0, -15.0)
+MML_FAR_BOX = (140.0, -25.0, 150.0, -10.0)
+
+
+def _assert_not_in_pack(edge: EdgeMap, building_id: str) -> None:
+    """The building has no entry in buildings.json, no POI link and no tile node."""
+    buildings = _json(edge.pack / "buildings.json")["buildings"]
+    assert building_id not in {b["id"] for b in buildings}
+    for poi in _json(edge.pack / POIS_NAME)["pois"]:
+        assert poi["building_id"] != building_id
+        assert building_id not in poi["contains_building_ids"]
+    node = node_name(building_id)
+    for glb in (edge.pack / "tiles").glob("*.glb"):
+        names = read_glb_node_names(glb)
+        assert not [n for n in names if n == node or n.startswith(f"{node}_c")], glb.name
+
+
+def test_ac16_an_osm_building_outside_the_polygon_within_clearance_is_left_out(
+    tmp_path: Path,
+) -> None:
+    """Centroid outside and footprint not reaching inside: the building isn't in the pack,
+    so the clearance (which keeps barriers out of walls) doesn't apply to it."""
+    edge = build_custom_map(tmp_path, ring=CLOSE_OUTSIDE_RING)
+    footprint = box(*NEAR_EDGE_BOX)
+    distance = footprint.distance(DocRing.of(edge.doc()).line)
+    assert 0.4 < distance < edge.config.world_edge.building_clearance_m
+    _assert_not_in_pack(edge, f"osm:way/{NEAR_EDGE}")
+    assert edge.edge_report()["dropped_buildings"] == []
+
+
+def test_ac16_an_mml_only_record_outside_the_polygon_fails_the_build_when_it_reaches_in(
+    tmp_path: Path,
+) -> None:
+    message = r"mml:rakennus/1 \(0\.000 m from the boundary, 50\.0 m² outside\)"
+    with pytest.raises(BuildError, match=message) as info:
+        build_custom_map(tmp_path, topographic=True, rakennus=[MML_INTO_BOX])
+    assert "1 building(s)" in str(info.value)
+    assert not paths.pack_dir(tmp_path, MAP_ID).exists()
+
+
+@pytest.mark.parametrize("record", [MML_CLOSE_BOX, MML_FAR_BOX], ids=["within-2m", "far"])
+def test_an_mml_only_record_outside_the_polygon_is_left_out_quietly(
+    tmp_path: Path, record: tuple[float, float, float, float]
+) -> None:
+    """A record in the notch is `outside`, not crossing, also 0.5 m from the polygon: the
+    build passes and leaves it out of the pack."""
+    edge = build_custom_map(tmp_path, topographic=True, rakennus=[record])
+    report = _json(edge.work / "03-buildings" / "report.json")["mml_only"]
+    assert report["not_added_ids"]["outside"] == ["mml:rakennus/1"]
+    _assert_not_in_pack(edge, "mml:rakennus/1")
+
+
+@pytest.fixture(scope="module")
+def edge_rect_build(tmp_path_factory: pytest.TempPathFactory) -> EdgeMap:
+    """Edgeville's full build over CUSTOM_BBOX without a custom polygon: the boundary is
+    the build area rectangle (treat as read-only)."""
+    return build_edge_map(
+        tmp_path_factory.mktemp("edge-rect"),
+        area="full",
+        data_update={"bbox_wgs84": CUSTOM_BBOX, "tile_size_m": CUSTOM_TILE_M},
+        osm=custom_osm(),
+    )
+
+
+# Kept building KEPT (x 120..147, n 30..40) moved east in a copy's 03-buildings footprints:
+# its east wall 1 m inside the ring (within building_clearance_m), or 5 m over it.
+KEPT_MOVES = {"1m-inside": -1.0, "partly-outside": 5.0}
+
+
+@pytest.mark.parametrize("move", sorted(KEPT_MOVES))
+@pytest.mark.parametrize(
+    ("build", "source"),
+    [("edge_custom", "custom"), ("edge_osm", "test_area"), ("edge_rect", "area")],
+)
+def test_ac16_the_pack_check_fails_a_kept_building_crossing_or_near_the_boundary(
+    build: str, source: str, move: str, request: pytest.FixtureRequest, tmp_path: Path
+) -> None:
+    """The check uses each kept building's footprint, the boundary.json ring (whatever its
+    source) and the configured building_clearance_m."""
+    edge: EdgeMap = request.getfixturevalue(f"{build}_build")
+    assert edge.doc()["boundary"]["source"] == source
+    pack, work = tmp_path / "pack", tmp_path / "work"
+    shutil.copytree(edge.pack, pack)
+    shutil.copytree(edge.work, work)
+    manifest = _json(pack / "manifest.json")
+    assert check_world_edge(pack, work, manifest, edge.config.world_edge) >= 0  # copy passes
+    ring = DocRing.of(edge.doc())
+    x0, y0, x1, y1 = KEPT_BOX
+    across = ring.polygon.intersection(LineString([(x0, (y0 + y1) / 2), (1e4, (y0 + y1) / 2)]))
+    east = across.bounds[2]  # the ring's east side at the building's mid n
+    dx = east + KEPT_MOVES[move] - x1
+    path = work / "03-buildings" / "buildings.geojson"
+    document = _json(path)
+    for feature in document["features"]:
+        if feature["properties"]["id"] == f"osm:way/{KEPT}":
+            moved = _world(box(x0 + dx, y0, x1 + dx, y1))
+            feature["geometry"] = shapely.geometry.mapping(moved)
+    path.write_text(json.dumps(document), encoding="utf-8")
+    distance = "1.000" if move == "1m-inside" else "0.000"
+    with pytest.raises(
+        PackCheckError, match=rf"buildings crossing the boundary: osm:way/{KEPT} \({distance} m\)"
+    ):
+        check_world_edge(pack, work, manifest, edge.config.world_edge)
+
+
+def test_ac16_no_building_in_the_custom_pack_crosses_its_boundary(
+    edge_custom_build: EdgeMap,
+) -> None:
+    edge = edge_custom_build
+    origin = np.array(FIXTURE_ORIGIN)
+    footprints = {
+        f["properties"]["id"]: shapely.transform(shape(f["geometry"]), lambda c: c - origin)
+        for f in _json(edge.work / "03-buildings" / "buildings.geojson")["features"]
+    }
+    ring = DocRing.of(edge.doc())
+    clearance = edge.config.world_edge.building_clearance_m
+    for building in _json(edge.pack / "buildings.json")["buildings"]:
+        footprint = footprints[building["id"]]
+        assert ring.polygon.contains(footprint)
+        assert footprint.distance(ring.line) >= clearance
+    assert edge.edge_report()["dropped_buildings"] == []
+
+
+# AC16 and AC17: the custom boundary pack checks (`check_custom_boundary`) catch what the
+# polygon clips lying outside it. Each case corrupts a copy of the custom build; the
+# NOTCH point (x 150, n -15) lies outside the polygon, 15 m from its edge.
+
+NOTCH = (150.0, -15.0)
+
+
+def _godot(x: float, n: float, y: float = 0.0) -> list[float]:
+    return [x, y, -n]
+
+
+def _node_outside(pack: Path, work: Path) -> None:
+    path = pack / "road_graph.json"
+    graph = _json(path)
+    node = next(n for n in graph["nodes"] if n["kind"] != "area_edge")
+    node["position"] = _godot(*NOTCH, node["position"][1])
+    path.write_text(json.dumps(graph), encoding="utf-8")
+
+
+def _edge_point_outside(pack: Path, work: Path) -> None:
+    path = pack / "road_graph.json"
+    graph = _json(path)
+    edge = next(e for e in graph["edges"] if len(e["points"]) >= 2)
+    y = edge["points"][0][1]
+    edge["points"].insert(1, _godot(*NOTCH, y))  # its nodes stay where they are
+    path.write_text(json.dumps(graph), encoding="utf-8")
+
+
+def _poi_outside(pack: Path, work: Path) -> None:
+    path = pack / "pois.json"
+    document = _json(path)
+    (poi,) = _poi_by_name(document["pois"], POI_INSIDE)
+    poi["position"] = _godot(*NOTCH, poi["position"][1])
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+def _outline_outside(pack: Path, work: Path) -> None:
+    path = pack / "pois.json"
+    document = _json(path)
+    (poi,) = _poi_by_osm(document["pois"], f"osm:way/{POI_AREA}")
+    # The outline's side on the east edge (x 165) moved 10 mm further east.
+    east = max(point[0] for point in poi["outline"][0][0])
+    assert east == pytest.approx(165.0, abs=0.02)
+    for point in poi["outline"][0][0]:
+        if point[0] == east:
+            point[0] += 0.01
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+def _centroid_outside(pack: Path, work: Path) -> None:
+    path = work / "03-buildings" / "buildings.geojson"
+    document = _json(path)
+    for feature in document["features"]:
+        if feature["properties"]["id"] == f"osm:way/{KEPT}":
+            _, y0, _, y1 = KEPT_BOX
+            moved = _world(box(170.0, y0, 180.0, y1))  # x 170..180: east of the edge (165)
+            feature["geometry"] = shapely.geometry.mapping(moved)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+CUSTOM_CORRUPTIONS: dict[str, tuple[Callable[[Path, Path], None], str]] = {
+    "graph-node-outside": (_node_outside, r"road graph node .* outside the custom boundary"),
+    "graph-edge-point-outside": (_edge_point_outside, r"road graph edge .* leaves the custom"),
+    "poi-position-outside": (_poi_outside, r"POI .* at \(150\.000, -15\.000\) is outside"),
+    "poi-outline-outside": (_outline_outside, rf"POI osm:way/{POI_AREA}: outline leaves"),
+    "building-centroid-outside": (_centroid_outside, rf"building osm:way/{KEPT}: centroid"),
+}
+
+
+def _custom_copy(edge: EdgeMap, tmp_path: Path) -> tuple[Path, Path, dict[str, Any]]:
+    pack, work = tmp_path / "pack", tmp_path / "work"
+    shutil.copytree(edge.pack, pack)
+    shutil.copytree(edge.work, work)
+    manifest = _json(pack / "manifest.json")
+    assert check_custom_boundary(pack, work, manifest)  # the copy passes
+    return pack, work, manifest
+
+
+@pytest.mark.parametrize("case", sorted(CUSTOM_CORRUPTIONS))
+def test_ac17_each_custom_boundary_pack_check_catches_a_corrupted_pack(
+    case: str, edge_custom_build: EdgeMap, tmp_path: Path
+) -> None:
+    mutate, message = CUSTOM_CORRUPTIONS[case]
+    pack, work, manifest = _custom_copy(edge_custom_build, tmp_path)
+    mutate(pack, work)
+    with pytest.raises(PackCheckError, match=message):
+        check_custom_boundary(pack, work, manifest)
+
+
+def test_ac17_the_custom_boundary_pack_check_catches_a_terrain_triangle_outside(
+    edge_custom_build: EdgeMap, tmp_path: Path
+) -> None:
+    """A terrain vertex on the east edge (x about 165) moved 10 mm east: its triangles
+    leave the polygon by more than 1 mm."""
+    pack, work, manifest = _custom_copy(edge_custom_build, tmp_path)
+    tiles = {t["id"]: (t, read_glb_meshes(pack / t["file"])) for t in manifest["tiles"]}
+    east = max(x for x, _ in DocRing.of(edge_custom_build.doc()).coords)  # about 165
+    tid = next(
+        tid
+        for tid, (_, m) in tiles.items()
+        if abs(m.nodes[TERRAIN_NODE][0][:, 0].max() - east) < 1e-4
+    )
+    vertices, faces = tiles[tid][1].nodes[TERRAIN_NODE]
+    vertices = vertices.copy()
+    vertices[int(np.argmax(vertices[:, 0])), 0] += 0.01
+    tiles[tid][1].nodes[TERRAIN_NODE] = (vertices, faces)
+    with pytest.raises(PackCheckError, match=rf"{tid}: \d+ terrain triangle\(s\) outside"):
+        check_custom_boundary(pack, work, manifest, tiles)
+    # A 0.5 mm move stays within the 1 mm tolerance.
+    vertices[int(np.argmax(vertices[:, 0])), 0] -= 0.0095
+    assert check_custom_boundary(pack, work, manifest, tiles)
+
+
+def test_ac17_check_pack_runs_the_custom_boundary_checks(
+    edge_custom_build: EdgeMap, tmp_path: Path
+) -> None:
+    pack, work, _ = _custom_copy(edge_custom_build, tmp_path)
+    _poi_outside(pack, work)
+    with pytest.raises(PackCheckError, match="is outside the custom boundary"):
+        check_pack(
+            pack,
+            work,
+            edge_custom_build.config.roads,
+            world_edge=edge_custom_build.config.world_edge,
+        )
+
+
+def test_the_custom_boundary_checks_skip_packs_without_a_custom_polygon(
+    edge_osm_build: EdgeMap,
+) -> None:
+    manifest = _json(edge_osm_build.pack / "manifest.json")
+    assert not check_custom_boundary(edge_osm_build.pack, edge_osm_build.work, manifest)
 
 
 # AC18
