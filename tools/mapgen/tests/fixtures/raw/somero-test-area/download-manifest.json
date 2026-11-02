@@ -173,16 +173,21 @@
           "length": "10170368"
         },
         "test_area_cut": {
-          "contents": "Topographic Database buildings (rakennus) whose polygon meets the test area",
+          "contents": "Topographic Database buildings (rakennus) whose polygon meets the test area, and water areas (jarvi, virtavesialue) and narrow waterways (virtavesikapea) meeting it",
           "table": "rakennus",
           "records": 64,
+          "water_records": {
+            "jarvi": 0,
+            "virtavesialue": 0,
+            "virtavesikapea": 0
+          },
           "source_size": 10170368,
           "source_sha256": "46fa13b53e03cf2a65ba5300543249d465fc4e64d13eed9eca284226e470f15b"
         }
       },
       "retrieved_at": "2026-10-29T11:57:40Z",
-      "size": 65536,
-      "sha256": "7acedb1cd987511f0a7be34f8af45c5da54de94635475299e153a9141f7c497c",
+      "size": 77824,
+      "sha256": "ec36a5b75bfa51444de9af5bb06c98f7d99f45913bb0ea3e07fe4bdcd26c5401",
       "licence": "CC BY 4.0",
       "attribution": "Contains data from the National Land Survey of Finland Topographic Database, 10/2026",
       "origin": "downloaded"

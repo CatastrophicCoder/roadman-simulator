@@ -194,6 +194,56 @@ class RoadsConfig(StrictModel):
         return value
 
 
+class LatLon(StrictModel):
+    """A WGS84 point in degrees (`boundary_wgs84`, `markers.json` polygons)."""
+
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+
+class FenceConfig(StrictModel):
+    max_segment_m: float = Field(default=20.0, gt=0)  # longest fence segment
+    # Largest vertical gap between a land segment's straight line and the terrain under it.
+    max_terrain_deviation_m: float = Field(default=0.25, gt=0)
+
+
+class RoadblockConfig(StrictModel):
+    clearance_m: float = Field(default=1.0, ge=0)  # span beyond the road surface, each side
+    merge_distance_m: float = Field(default=15.0, ge=0)  # fence gaps under this are merged
+
+
+class CliffConfig(StrictModel):
+    ledge_m: float = Field(default=2.0, ge=0)  # ground between the boundary and the cliff top
+    depth_m: float = Field(default=30.0, gt=0)  # cliff face below the lowest boundary point
+
+
+class VoidConfig(StrictModel):
+    inner_offset_m: float = Field(default=1.0, ge=0)  # trigger starts this far outside
+    width_m: float = Field(default=20.0, gt=0)  # and reaches this far out
+    top_margin_m: float = Field(default=20.0, ge=0)  # above the highest boundary point
+
+
+class SpawnConfig(StrictModel):
+    obstacle_buffer_m: float = Field(default=2.0, ge=0)  # buildings, water, roads grown by
+    min_open_area_m2: float = Field(default=500.0, gt=0)
+    min_clear_radius_m: float = Field(default=5.0, gt=0)
+    min_boundary_distance_m: float = Field(default=10.0, ge=0)
+
+
+class WorldEdgeConfig(StrictModel):
+    """The `world_edge` block (docs/specs/world-edge-pipeline.md). Every key has a default,
+    so map.yaml lists only what it overrides."""
+
+    # A custom boundary polygon, without repeating the first point. None: the build area.
+    boundary_wgs84: list[LatLon] | None = None
+    building_clearance_m: float = Field(default=2.0, ge=0)
+    fence: FenceConfig = Field(default_factory=FenceConfig)
+    roadblock: RoadblockConfig = Field(default_factory=RoadblockConfig)
+    cliff: CliffConfig = Field(default_factory=CliffConfig)
+    void: VoidConfig = Field(default_factory=VoidConfig)
+    spawn: SpawnConfig = Field(default_factory=SpawnConfig)
+
+
 class MapConfig(StrictModel):
     id: str = Field(pattern=SLUG_PATTERN)
     display_name: str = Field(min_length=1)
@@ -206,6 +256,7 @@ class MapConfig(StrictModel):
     sources: dict[str, SourceConfig] = Field(min_length=1)
     snapshot: SnapshotConfig | None = None
     roads: RoadsConfig | None = None  # without it, the map builds without roads
+    world_edge: WorldEdgeConfig = Field(default_factory=WorldEdgeConfig)
 
     @field_validator("crs")
     @classmethod
@@ -240,6 +291,10 @@ class MapConfig(StrictModel):
             )
         if not bbox.contains(self.test_area_bbox):
             raise ValueError("test_area does not fit inside the bbox around the origin")
+        if self.world_edge.boundary_wgs84 is not None:
+            problem = self.boundary_problem()
+            if problem is not None:
+                raise ValueError(f"world_edge.boundary_wgs84: {problem}")
         if self.snapshot is not None:
             tag = self.snapshot.release_tag
             if not re.fullmatch(snapshot_tag_pattern(self.id), tag):
@@ -258,6 +313,40 @@ class MapConfig(StrictModel):
     def test_area_bbox(self) -> geo.BBox:
         """The test area in the map CRS (world coordinates)."""
         return geo.square_around(self.origin.x, self.origin.y, self.test_area.size_m)
+
+    @property
+    def full_area_local(self) -> geo.BBox:
+        """The full build area in local coordinates, rounded outward to whole metres (the
+        same box as `mapgen.build.area.build_area(config, "full").bounds`)."""
+        b = self.projected_bbox.offset(-self.origin.x, -self.origin.y)
+        return b.rounded_outward()
+
+    def boundary_local(self) -> list[tuple[float, float]] | None:
+        """`world_edge.boundary_wgs84` in local coordinates (x, n), or None."""
+        points = self.world_edge.boundary_wgs84
+        if points is None:
+            return None
+        return geo.wgs84_ring_to_local(
+            [(p.lat, p.lon) for p in points], self.crs, self.origin.x, self.origin.y
+        )
+
+    def boundary_problem(self) -> str | None:
+        """Why the custom boundary polygon is invalid, or None (also without one)."""
+        coords = self.boundary_local()
+        if coords is None:
+            return None
+        problem = geo.polygon_problem(coords)
+        if problem is not None:
+            return problem
+        area = self.full_area_local
+        outside = [i for i, (x, y) in enumerate(coords) if not area.contains_point(x, y)]
+        if outside:
+            return (
+                f"{len(outside)} point(s) lie outside the build area "
+                f"{area.as_list()} (local metres), first: point {outside[0]} at "
+                f"({coords[outside[0]][0]:.2f}, {coords[outside[0]][1]:.2f})"
+            )
+        return None
 
     def enabled_sources(self) -> dict[str, SourceConfig]:
         return {name: src for name, src in self.sources.items() if src.enabled}

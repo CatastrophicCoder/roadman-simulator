@@ -6,12 +6,14 @@ decks) on small synthetic inputs.
 """
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 import numpy as np
 import pytest
+import shapely
 from shapely.geometry import LineString, Point, Polygon
 
 from conftest import SOMERO_YAML, SomeroArea, TmpRepo, mesh_height_at, read_tile
@@ -28,9 +30,14 @@ from mapgen.build.roads.bridges import (
 from mapgen.build.roads.graph import Piece, build_graph, clip_segment, clip_way
 from mapgen.build.roads.model import committed_schema, generated_schema
 from mapgen.build.roads.surface import (
+    EDGE_EXTENSION_MARGIN_M,
+    MAX_EDGE_EXTENSION_WIDTHS,
     TerrainSurface,
     drape_tile,
+    edge_extension,
+    ground_runs,
     insert_tile_crossings,
+    merged_surfaces,
     plane_z,
 )
 from mapgen.build.roads.tags import (
@@ -184,6 +191,90 @@ def test_way_leaving_through_a_node_on_the_area_edge_ends_at_an_area_edge_node()
     assert graph.nodes["osm:node/2"].kind == "area_edge"
     assert graph.nodes["osm:node/2"].osm_node == 2
     assert graph.nodes["osm:node/5"].kind == "dead_end"
+
+
+# Surfaces at area-edge cuts (docs/specs/world-edge-pipeline.md: the road surface reaches
+# the boundary across its whole width).
+
+
+def _clipped_pieces(way: LocalRoadWay, b: BBox, roads: RoadsConfig) -> list[Piece]:
+    clipped = clip_way(way, b)
+    attrs = resolve_attributes(way.tags, road_class(way.tags) or "", roads)
+    pieces = []
+    for index, (xy, keys, ids) in enumerate(clipped.pieces):
+        piece = Piece(way, attrs, index, xy, keys, ids)
+        piece.edge_nodes = clipped.edge_nodes[index]
+        pieces.append(piece)
+    return pieces
+
+
+def _on_line(surface: Any, line: LineString) -> float:
+    """The length of `line` within 1 µm of `surface` (longer by 2 µm / sin θ at a crossing
+    angle θ)."""
+    return float(line.intersection(surface.buffer(1e-6)).length)
+
+
+@pytest.mark.parametrize("degrees", [90.0, 45.0, 20.0, 10.0])
+def test_an_area_edge_road_reaches_the_boundary_across_its_whole_width(degrees: float) -> None:
+    roads = _roads()
+    b = BBox(0, 0, 100, 100)
+    a = math.radians(degrees)
+    # From inside the area across the south edge at (50, 0), `degrees` to the edge.
+    inside = (50 + 40 * math.cos(a), 40 * math.sin(a))
+    outside = (50 - 20 * math.cos(a), -20 * math.sin(a))
+    way = _way(1, [inside, outside], [1, 2], highway="residential")
+    (piece,) = _clipped_pieces(way, b, roads)
+    assert piece.is_cut(len(piece.xy) - 1)
+    runs = ground_runs([piece], set())
+    assert runs[0].edge_end and not runs[0].edge_start
+    clip = shapely.box(0, 0, 100, 100)
+    road, _ = merged_surfaces(runs, clip=clip)
+    width = piece.attrs.width_m
+    south = LineString([(0, 0), (100, 0)])
+    assert _on_line(road, south) == pytest.approx(width / math.sin(a), abs=1e-4)
+    assert clip.buffer(1e-9).covers(road)
+    # The graph's cut node stays on the boundary.
+    assert piece.xy[-1][1] == 0.0
+    # Without the clip polygon the end keeps its flat cap at the node: at an angle one
+    # side falls short of the boundary.
+    unclipped, _ = merged_surfaces(runs)
+    if degrees < 90:
+        assert _on_line(unclipped.intersection(clip), south) < width / math.sin(a) - 0.1
+
+
+def test_the_extension_is_capped_at_a_few_road_widths() -> None:
+    clip = shapely.box(0, 0, 100, 100)
+    half = 2.0
+    # At 2° the far side would need half / tan(2°) ≈ 57 m; the cap is 4 widths (16 m).
+    a = math.radians(2.0)
+    d = np.array([-math.cos(a), -math.sin(a)])
+    extension = edge_extension(np.array([50.0, 0.0]), d, half, clip)
+    assert extension == pytest.approx(MAX_EDGE_EXTENSION_WIDTHS * 2 * half)
+    # At 90° only the margin.
+    straight = edge_extension(np.array([50.0, 0.0]), np.array([0.0, -1.0]), half, clip)
+    assert straight == pytest.approx(EDGE_EXTENSION_MARGIN_M)
+
+
+def test_an_area_edge_extension_doesnt_re_enter_the_boundary_beyond_a_notch() -> None:
+    """A road leaving through the west wall of a 2 m notch at 20°: neither its extension
+    nor its own buffer (whose cap already reaches across the notch) may reappear on the
+    far side, and the far side doesn't lengthen the extension."""
+    roads = _roads()
+    clip = Polygon([(0, 0), (10, 0), (10, 50), (12, 50), (12, 0), (100, 0), (100, 100), (0, 100)])
+    a = math.radians(20.0)
+    end = np.array([10.0, 21.0])
+    start = end - 20 * np.array([math.sin(a), math.cos(a)])
+    way = _way(1, [tuple(start), tuple(end)], [1, 2], highway="residential")
+    attrs = resolve_attributes(way.tags, "residential", roads)
+    piece = Piece(way, attrs, 0, way.xy, ["osm:node/1", "cut:way/1:0"], [1, None])
+    half = attrs.width_m / 2
+    assert edge_extension(end, end - start, half, clip) == pytest.approx(
+        half / math.tan(a) + EDGE_EXTENSION_MARGIN_M
+    )
+    road, _ = merged_surfaces(ground_runs([piece], set()), clip=clip)
+    assert road.intersection(shapely.box(12, 0, 100, 50)).area == 0.0
+    wall = LineString([(10, 0), (10, 50)])
+    assert _on_line(road, wall) == pytest.approx(attrs.width_m / math.sin(a), abs=1e-4)
 
 
 # Graph
@@ -358,7 +449,15 @@ def test_map_without_roads_writes_an_empty_road_graph(tmp_path: Path) -> None:
     config = repo.load(data)
     raw = write_fixture_raw(repo.raw_dir("testtown"))
     logs: list[str] = []
-    run_build(config, "test", raw, tmp_path / "pack", tmp_path / "work", log=logs.append)
+    run_build(
+        config,
+        "test",
+        raw,
+        tmp_path / "pack",
+        tmp_path / "work",
+        map_dir=repo.map_dir("testtown"),
+        log=logs.append,
+    )
     document = json.loads((tmp_path / "pack" / "road_graph.json").read_text(encoding="utf-8"))
     jsonschema.validate(document, committed_schema())
     assert document["nodes"] == [] and document["edges"] == []
@@ -495,15 +594,17 @@ def test_failed_pack_check_fails_the_build_and_keeps_the_previous_pack(
     config = repo.load(yaml.safe_load(FIXTURE_YAML.read_text(encoding="utf-8")))
     raw = write_fixture_raw(repo.raw_dir("testtown"))
     pack, work = tmp_path / "pack", tmp_path / "work"
-    run_build(config, "test", raw, pack, work, log=lambda _: None)
+    run_build(config, "test", raw, pack, work, map_dir=repo.map_dir("testtown"), log=lambda _: None)
     before = {p: p.read_bytes() for p in sorted(pack.rglob("*")) if p.is_file()}
 
-    def failing(*_: Any) -> None:
+    def failing(*_: Any, **__: Any) -> None:
         raise PackCheckError("criterion 9: test")
 
     monkeypatch.setattr(build, "check_pack", failing)
     with pytest.raises(BuildError, match="pack check failed: criterion 9"):
-        run_build(config, "test", raw, pack, work, log=lambda _: None)
+        run_build(
+            config, "test", raw, pack, work, map_dir=repo.map_dir("testtown"), log=lambda _: None
+        )
     assert {p: p.read_bytes() for p in sorted(pack.rglob("*")) if p.is_file()} == before
     assert not list(tmp_path.glob("pack.*"))  # no staging folder left behind
 

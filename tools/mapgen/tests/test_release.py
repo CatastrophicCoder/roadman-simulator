@@ -262,7 +262,15 @@ def _build(root: Path, config: MapConfig, raw: Path, **kwargs: Any) -> tuple[Pat
     pack = root / "game" / "maps" / "testtown"
     log: list[str] = []
     run_build(
-        config, "test", raw, pack, root / "work", now=lambda: FIXED_NOW, log=log.append, **kwargs
+        config,
+        "test",
+        raw,
+        pack,
+        root / "work",
+        map_dir=root / "maps" / config.id,
+        now=lambda: FIXED_NOW,
+        log=log.append,
+        **kwargs,
     )
     return pack, log
 

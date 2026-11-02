@@ -31,7 +31,15 @@ def built_pack(tmp_repo: TmpRepo, fixture_data: dict) -> Any:
     config = tmp_repo.load(fixture_data)
     raw = write_fixture_raw(tmp_repo.raw_dir("testtown"))
     pack = tmp_repo.root / "game" / "maps" / "testtown"
-    run_build(config, "test", raw, pack, tmp_repo.root / "work", log=_quiet)
+    run_build(
+        config,
+        "test",
+        raw,
+        pack,
+        tmp_repo.root / "work",
+        map_dir=tmp_repo.map_dir("testtown"),
+        log=_quiet,
+    )
     return config, raw, pack
 
 
@@ -40,7 +48,15 @@ def test_failed_build_leaves_the_previous_pack_untouched(built_pack: Any) -> Non
     before = _snapshot(pack)
     (raw / "download-manifest.json").unlink()  # credits fail after all stages ran
     with pytest.raises(BuildError, match="not in the download manifest"):
-        run_build(config, "test", raw, pack, pack.parent.parent / "work", log=_quiet)
+        run_build(
+            config,
+            "test",
+            raw,
+            pack,
+            pack.parent.parent / "work",
+            map_dir=pack.parents[2] / "maps" / config.id,
+            log=_quiet,
+        )
     assert _snapshot(pack) == before
     assert sorted(p.name for p in pack.parent.iterdir()) == ["testtown"]  # no temp folders
 
@@ -58,7 +74,15 @@ def test_export_failure_leaves_the_previous_pack_untouched(
 
     monkeypatch.setattr(build, "export_glb", fail)
     with pytest.raises(OSError, match="disk full"):
-        run_build(config, "test", raw, pack, pack.parent.parent / "work", log=_quiet)
+        run_build(
+            config,
+            "test",
+            raw,
+            pack,
+            pack.parent.parent / "work",
+            map_dir=pack.parents[2] / "maps" / config.id,
+            log=_quiet,
+        )
     assert _snapshot(pack) == before
     assert sorted(p.name for p in pack.parent.iterdir()) == ["testtown"]
 

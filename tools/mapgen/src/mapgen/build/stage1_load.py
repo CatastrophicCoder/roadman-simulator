@@ -10,7 +10,11 @@ the in-area building-use records (their combined bounds plus `POINT_MARGIN_M`), 
 test area stays fast. With a building-use source, the ground points (class 2) around the
 in-area records are read too, for the MML-only buildings' lidar contradiction check
 (docs/specs/mml-only-buildings.md). Imagery files are only listed here (those overlapping
-the area); the export reads them per tile for the debug textures. Output in `01-load/`:
+the area); the export reads them per tile for the debug textures. The world edge's water
+(docs/specs/world-edge-pipeline.md) comes from a `water_areas` source when the map has
+one (areas and lines meeting the area), else from the OSM water areas clipped to the
+area and the OSM waterway lines; the OSM water relations left out are kept with what is
+known of their location. Output in `01-load/`:
 `footprints.geojson` (world coordinates), `dem.tif` (cropped) and `report.json`.
 """
 
@@ -38,6 +42,7 @@ from mapgen.sources.base import (
     IMAGERY,
     OSM_VECTOR,
     POINT_CLOUD,
+    WATER_AREAS,
     ElevationRaster,
     Footprint,
     Imagery,
@@ -47,6 +52,7 @@ from mapgen.sources.base import (
     PointCloud,
     RoadWay,
     SkippedFeature,
+    SkippedWater,
     SourceData,
     SourceLoadError,
     UseClassRule,
@@ -92,6 +98,16 @@ class LocalWater:
     id: str
     geometry: Polygon | MultiPolygon | LineString
     tags: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LocalLeftOut:
+    """A water feature the load stage left out, with its location in local coordinates
+    when anything is known (the member ways that could be read), else None."""
+
+    id: str
+    reason: str
+    geometry: BaseGeometry | None
 
 
 @dataclass(frozen=True)
@@ -166,6 +182,16 @@ class LoadResult:
     ground_points: PointCloud | None = None
     # Seconds spent in parts of the load (e.g. "load_ground_points"); never in a pack file.
     timings_s: dict[str, float] = field(default_factory=dict)
+    # The world edge's water: from the `water_areas` source (mode "water_areas"), else the
+    # OSM water (mode "osm", areas clipped to the area), else none. Areas and lines meet
+    # the area. `edge_water_source` is the map.yaml source name.
+    edge_water_mode: str = "none"
+    edge_water_source: str | None = None
+    edge_water_areas: list[LocalWater] = field(default_factory=list)
+    edge_water_lines: list[LocalWater] = field(default_factory=list)
+    edge_water_skipped: list[SkippedFeature] = field(default_factory=list)  # unreadable
+    # OSM water relations left out by the load stage (all of them, wherever they lie).
+    water_left_out: list[LocalLeftOut] = field(default_factory=list)
 
 
 def _geometry_to_local(geometry: BaseGeometry, crs: str, config: MapConfig) -> Any:
@@ -239,8 +265,14 @@ def run_load(
         world_area.min_x - m, world_area.min_y - m, world_area.max_x + m, world_area.max_y + m
     )
 
+    cache: dict[str, SourceData] = {}
+
     def load(source: SelectedSource) -> SourceData:
-        return load_bounded(source, read_bounds)
+        # A source providing several capabilities (e.g. building_use and water_areas) is
+        # read once.
+        if source.name not in cache:
+            cache[source.name] = load_bounded(source, read_bounds)
+        return cache[source.name]
 
     def load_bounded(
         source: SelectedSource, bounds: BBox, classes: tuple[int, ...] | None = None
@@ -267,6 +299,7 @@ def run_load(
     point_source = _one(config, POINT_CLOUD, required=False)
     imagery_source = _one(config, IMAGERY, required=False)
     building_use_source = _one(config, BUILDING_USE, required=False)
+    water_source = _one(config, WATER_AREAS, required=False)
 
     files: list[Path] = []
     skipped: list[SkippedFeature] = []
@@ -364,6 +397,47 @@ def run_load(
             "(mml_building and mml_overlap are null)"
         )
 
+    edge_mode = "none"
+    edge_source: str | None = None
+    edge_areas: list[LocalWater] = []
+    edge_lines: list[LocalWater] = []
+    edge_skipped: list[SkippedFeature] = []
+    if water_source is not None:
+        data_water = load(water_source)
+        files += [f for f in data_water.files if f not in files]
+        edge_mode, edge_source = "water_areas", water_source.name
+        edge_areas = [
+            local
+            for local in (water_to_local(w, config) for w in data_water.water_areas)
+            if local.geometry.intersects(area_box)
+        ]
+        edge_lines = [
+            local
+            for local in (water_to_local(w, config) for w in data_water.water_lines)
+            if local.geometry.intersects(area_box)
+        ]
+        edge_skipped = list(data_water.water_skipped)
+    elif vector_source is not None:
+        edge_mode, edge_source = "osm", vector_source.name
+        edge_areas = [
+            LocalWater(w.id, _polygonal(w.geometry.intersection(area_box)), dict(w.tags))
+            for w in water_areas
+            if w.geometry.intersects(area_box)
+            and not w.geometry.intersection(area_box).is_empty
+            and w.geometry.intersection(area_box).area > 0
+        ]
+        edge_lines = [w for w in water_lines if w.geometry.intersects(area_box)]
+    left_out = [
+        LocalLeftOut(
+            skip.id,
+            skip.reason,
+            _geometry_to_local(skip.geometry, skip.crs, config)
+            if isinstance(skip, SkippedWater) and skip.geometry is not None and skip.crs
+            else None,
+        )
+        for skip in water_skipped
+    ]
+
     points: PointCloud | None = None
     lidar_params: LidarParams | None = None
     # Imagery files overlapping the area (debug orthophoto textures). None without a source
@@ -453,6 +527,13 @@ def run_load(
             "lines": len(water_lines),
             "relations_left_out": len(water_skipped),
         },
+        "edge_water": {
+            "mode": edge_mode,
+            "source": edge_source,
+            "areas": len(edge_areas),
+            "lines": len(edge_lines),
+            "skipped": [{"id": s.id, "reason": s.reason} for s in edge_skipped],
+        },
         "pois": {"in_area": len(pois), "skipped": len(pois_skipped)},
         "landuse": {"in_area": len(landuse), "left_out": len(landuse_skipped)},
         "building_use": {
@@ -532,6 +613,12 @@ def run_load(
         building_use_source=building_use_source.name if building_use_source else None,
         ground_points=ground_points,
         timings_s=timings,
+        edge_water_mode=edge_mode,
+        edge_water_source=edge_source,
+        edge_water_areas=edge_areas,
+        edge_water_lines=edge_lines,
+        edge_water_skipped=edge_skipped,
+        water_left_out=left_out,
     )
 
 
@@ -595,6 +682,19 @@ def points_read_bounds(
         float(bounds[:, 3].max()) + margin_m,
     )
     return to_world(local, config)
+
+
+def _polygonal(geometry: BaseGeometry) -> Polygon | MultiPolygon:
+    """The polygonal parts of a clipped area (a clip can leave lines and points)."""
+    if isinstance(geometry, Polygon | MultiPolygon):
+        return geometry
+    parts: list[Polygon] = []
+    for part in getattr(geometry, "geoms", []):
+        if isinstance(part, Polygon) and part.area > 0:
+            parts.append(part)
+        elif isinstance(part, MultiPolygon):
+            parts += [g for g in part.geoms if g.area > 0]
+    return parts[0] if len(parts) == 1 else MultiPolygon(parts)
 
 
 def _area_polygon(area: BuildArea) -> Polygon:

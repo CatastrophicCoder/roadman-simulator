@@ -128,7 +128,16 @@ class Built:
 def _build(root: Path, config: MapConfig, raw: Path) -> Built:
     pack, work = root / "game" / "maps" / "testtown", root / "work"
     log: list[str] = []
-    run_build(config, "test", raw, pack, work, now=lambda: FIXED_NOW, log=log.append)
+    run_build(
+        config,
+        "test",
+        raw,
+        pack,
+        work,
+        map_dir=root / "maps" / config.id,
+        now=lambda: FIXED_NOW,
+        log=log.append,
+    )
     return Built(pack, work, log)
 
 

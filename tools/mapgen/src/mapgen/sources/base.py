@@ -29,6 +29,7 @@ BUILDINGS_3D = "buildings_3d"  # building footprints with measured heights
 POINT_CLOUD = "point_cloud"  # classified lidar points (building heights)
 IMAGERY = "imagery"  # north-up RGB aerial imagery (debug orthophoto textures)
 BUILDING_USE = "building_use"  # building polygons with a use class (building categories)
+WATER_AREAS = "water_areas"  # water areas and narrow waterway lines (the world edge)
 
 
 def utc_now() -> datetime:
@@ -308,6 +309,16 @@ class SkippedFeature:
 
     id: str
     reason: str
+
+
+@dataclass(frozen=True)
+class SkippedWater(SkippedFeature):
+    """A water feature left out (e.g. an OSM relation with an open ring or a missing
+    member), with what is known of where it lies: the member ways that could be read, in
+    `crs`. None when nothing could be located."""
+
+    geometry: BaseGeometry | None = None
+    crs: str | None = None
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ from mapgen.sources.base import (
     ELEVATION,
     IMAGERY,
     OSM_VECTOR,
+    WATER_AREAS,
     LoadContext,
     SourceAdapter,
     SourceLoadError,
@@ -93,7 +94,7 @@ def test_adapters_declare_capabilities() -> None:
     assert ELEVATION in MmlDem2mAdapter.provides
     assert BUILDINGS_3D in MmlBuildings3dAdapter.provides
     assert ADAPTERS["mml_orthophoto"].provides == frozenset({IMAGERY})
-    assert ADAPTERS["mml_topographic"].provides == frozenset({BUILDING_USE})
+    assert ADAPTERS["mml_topographic"].provides == frozenset({BUILDING_USE, WATER_AREAS})
 
 
 def test_sources_are_selected_by_capability_not_name(tmp_repo: TmpRepo, fixture_data: dict) -> None:

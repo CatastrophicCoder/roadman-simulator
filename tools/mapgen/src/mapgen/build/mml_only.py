@@ -366,10 +366,12 @@ def mml_only_report(
 
     `buildings` are the resolved buildings (with their place fields); only the added ones
     are looked at. `overlaps` are the added building ids that overlap a road or path.
+    `added` counts every selected record, including those the world edge then left out for
+    crossing the boundary (listed under `world_edge.dropped_buildings` instead).
     """
     added = selection.added
     by_id = {b.id: b for b in buildings}
-    added_buildings = [by_id[r.id] for r in added]
+    added_buildings = [by_id[r.id] for r in added if r.id in by_id]
     reasons = Counter(r.outcome for r in selection.records)
 
     cut_entries = sorted(

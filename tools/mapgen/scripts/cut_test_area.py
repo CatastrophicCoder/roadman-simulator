@@ -14,9 +14,11 @@ copied in as the raw folder):
   script). Contributor metadata (`user`, `uid`, `timestamp`, `changeset`, `version`) is
   removed; the ODbL `<note>` stays.
 - GeoPackage (Topographic Database): the `rakennus` records whose polygon meets the test
-  area, all columns, in a new GeoPackage written with `sqlite3` only (its
-  `gpkg_spatial_ref_sys`, `gpkg_contents` and `gpkg_geometry_columns` rows copied; no
-  spatial index, whose triggers need SpatiaLite functions).
+  area, and the water records (`jarvi`, `virtavesialue`, `virtavesikapea`) whose area or
+  line meets it, all columns, in a new GeoPackage written with `sqlite3` only (its
+  `gpkg_spatial_ref_sys` rows, and the `gpkg_contents` and `gpkg_geometry_columns` rows
+  of each copied table; no spatial index, whose triggers need SpatiaLite functions). A
+  table with no record in the test area is copied empty, so the build still finds it.
 - GeoTIFF: the test area plus stage 1's DEM margin, rounded outward to the cell grid,
   deflate-compressed.
 - LAS/LAZ: every point (all classes) inside the bounds stage 1 requests for the points.
@@ -56,7 +58,13 @@ from mapgen.config import MapConfig, load_map_config
 from mapgen.geo import BBox
 from mapgen.manifest import MANIFEST_NAME, SCHEMA_VERSION, load_entries
 from mapgen.sources.base import parse_isoformat, sha256_of
-from mapgen.sources.mml import GPKG_SUFFIXES, RAKENNUS_ID_PREFIX, RAKENNUS_TABLE, gpkg_wkb
+from mapgen.sources.mml import (
+    GPKG_SUFFIXES,
+    RAKENNUS_ID_PREFIX,
+    RAKENNUS_TABLE,
+    WATER_TABLES,
+    gpkg_wkb,
+)
 from mapgen.sources.osm import METADATA_ATTRIBUTES
 
 FIXTURES_DIR = paths.MAPGEN_DIR / "tests" / "fixtures" / "raw"
@@ -96,7 +104,10 @@ OSM_CONTENTS = (
     "features, land use areas and points of interest whose point, line or area meets it, "
     "with their member ways and all their nodes"
 )
-GPKG_CONTENTS = "Topographic Database buildings (rakennus) whose polygon meets the test area"
+GPKG_CONTENTS = (
+    "Topographic Database buildings (rakennus) whose polygon meets the test area, and "
+    "water areas (jarvi, virtavesialue) and narrow waterways (virtavesikapea) meeting it"
+)
 # GeoPackage tables copied as they are (their rows for the cut table only, where keyed).
 GPKG_META_TABLES = ("gpkg_spatial_ref_sys", "gpkg_contents", "gpkg_geometry_columns")
 
@@ -134,68 +145,78 @@ def cut_osm(source: Path, dest: Path, feature_ids: set[str]) -> None:
         handle.write("\n")
 
 
-def cut_gpkg(source: Path, dest: Path, table: str, ids: set[int]) -> int:
-    """A new GeoPackage with the rows of `table` whose `mtk_id` is in `ids` (all columns).
+def cut_gpkg(source: Path, dest: Path, tables: Mapping[str, set[int]]) -> dict[str, int]:
+    """A new GeoPackage with the rows of each table whose `mtk_id` is in its id set (all
+    columns), tables in the given order.
 
     Written with `sqlite3` only: the GeoPackage application id and user version, the
     tables `GPKG_META_TABLES` (all spatial reference systems, and the `gpkg_contents` and
-    `gpkg_geometry_columns` rows of `table`, with its extent recomputed) and `table` itself,
-    created from the source's own SQL. The spatial index and its triggers are left out
-    (they need SpatiaLite functions); they are optional in a GeoPackage. Returns the
-    number of rows.
+    `gpkg_geometry_columns` rows of each table, with its extent recomputed, or NULL for a
+    table left empty) and the tables themselves, created from the source's own SQL. The
+    spatial indexes and their triggers are left out (they need SpatiaLite functions); they
+    are optional in a GeoPackage. Returns the number of rows per table.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.unlink(missing_ok=True)
     src = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)
     out = sqlite3.connect(dest)
+    counts: dict[str, int] = {}
     try:
         application_id = src.execute("PRAGMA application_id").fetchone()[0]
         user_version = src.execute("PRAGMA user_version").fetchone()[0]
         out.execute(f"PRAGMA application_id = {int(application_id)}")
         out.execute(f"PRAGMA user_version = {int(user_version)}")
-        for name in (*GPKG_META_TABLES, table):
+        for name in (*GPKG_META_TABLES, *tables):
             sql = src.execute(
                 "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
             ).fetchone()
             if sql is None:
                 raise SystemExit(f"{source} has no table {name!r}")
             out.execute(sql[0])
-        columns = [row[1] for row in src.execute(f'PRAGMA table_info("{table}")')]
-        names = ", ".join(f'"{c}"' for c in columns)
-        marks = ", ".join("?" for _ in columns)
-        rows = [
-            row
-            for row in src.execute(f'SELECT {names} FROM "{table}" ORDER BY fid')
-            if row[columns.index("mtk_id")] in ids
-        ]
-        out.executemany(f'INSERT INTO "{table}" ({names}) VALUES ({marks})', rows)
-        for name, key in (
-            ("gpkg_spatial_ref_sys", None),
-            ("gpkg_contents", "table_name"),
-            ("gpkg_geometry_columns", "table_name"),
-        ):
-            meta_columns = [row[1] for row in src.execute(f"PRAGMA table_info({name})")]
-            query = f"SELECT * FROM {name}" + (f" WHERE {key} = ?" if key else "")
-            meta_rows = src.execute(query, (table,) if key else ()).fetchall()
-            out.executemany(
-                f"INSERT INTO {name} VALUES ({', '.join('?' for _ in meta_columns)})", meta_rows
-            )
-        geometry_column = src.execute(
-            "SELECT column_name FROM gpkg_geometry_columns WHERE table_name = ?", (table,)
-        ).fetchone()[0]
-        extent = _gpkg_extent([row[columns.index(geometry_column)] for row in rows])
-        if extent is not None:
+        meta_columns = {
+            name: [row[1] for row in src.execute(f"PRAGMA table_info({name})")]
+            for name in GPKG_META_TABLES
+        }
+        srs_rows = src.execute("SELECT * FROM gpkg_spatial_ref_sys").fetchall()
+        out.executemany(
+            "INSERT INTO gpkg_spatial_ref_sys VALUES "
+            f"({', '.join('?' for _ in meta_columns['gpkg_spatial_ref_sys'])})",
+            srs_rows,
+        )
+        for table, ids in tables.items():
+            columns = [row[1] for row in src.execute(f'PRAGMA table_info("{table}")')]
+            names = ", ".join(f'"{c}"' for c in columns)
+            marks = ", ".join("?" for _ in columns)
+            rows = [
+                row
+                for row in src.execute(f'SELECT {names} FROM "{table}" ORDER BY fid')
+                if row[columns.index("mtk_id")] in ids
+            ]
+            out.executemany(f'INSERT INTO "{table}" ({names}) VALUES ({marks})', rows)
+            counts[table] = len(rows)
+            for name in ("gpkg_contents", "gpkg_geometry_columns"):
+                meta_rows = src.execute(
+                    f"SELECT * FROM {name} WHERE table_name = ?", (table,)
+                ).fetchall()
+                out.executemany(
+                    f"INSERT INTO {name} VALUES ({', '.join('?' for _ in meta_columns[name])})",
+                    meta_rows,
+                )
+            geometry_column = src.execute(
+                "SELECT column_name FROM gpkg_geometry_columns WHERE table_name = ?", (table,)
+            ).fetchone()[0]
+            extent = _gpkg_extent([row[columns.index(geometry_column)] for row in rows])
             out.execute(
                 "UPDATE gpkg_contents SET min_x = ?, min_y = ?, max_x = ?, max_y = ? "
                 "WHERE table_name = ?",
-                (*extent, table),
+                (*(extent or (None, None, None, None)), table),
             )
         out.commit()
         out.execute("VACUUM")
     finally:
         src.close()
         out.close()
-    return len(rows)
+    return counts
 
 
 def _gpkg_extent(blobs: list[Any]) -> tuple[float, float, float, float] | None:
@@ -373,7 +394,8 @@ def _notice(map_id: str, entries: list[dict[str, Any]]) -> str:
         "interest whose point, line or area meets the test area with all their nodes "
         "(contributor metadata removed), the elevation model around the test area, the laser "
         "scanning points around those footprints, the Topographic Database buildings "
-        "(`rakennus`, all columns) that meet the test area, and the orthophoto over the test "
+        "(`rakennus`) and water (`jarvi`, `virtavesialue`, `virtavesikapea`; all columns) that "
+        "meet the test area, and the orthophoto over the test "
         "area (re-encoded lossy to keep it small). Each manifest entry records the cut bounds "
         "or contents and the checksum of the original file.",
         "",
@@ -403,6 +425,14 @@ def cut_test_area(config: MapConfig, raw_dir: Path, out_dir: Path) -> dict[str, 
         for r in loaded.building_use or []
         if r.id.startswith(RAKENNUS_ID_PREFIX) and _intersects(r.geometry, area)
     }
+    gpkg_ids: dict[str, set[int]] = {RAKENNUS_TABLE: rakennus_ids}
+    for table in WATER_TABLES:
+        gpkg_ids[table] = set()
+    if loaded.edge_water_mode == "water_areas":
+        for water in loaded.edge_water_areas + loaded.edge_water_lines:
+            table, _, number = water.id.removeprefix("mml:").partition("/")
+            if table in gpkg_ids and _intersects(water.geometry, area):
+                gpkg_ids[table].add(int(number))
 
     if out_dir.exists() and any(out_dir.iterdir()):
         if not (out_dir / MANIFEST_NAME).is_file():
@@ -428,8 +458,13 @@ def cut_test_area(config: MapConfig, raw_dir: Path, out_dir: Path) -> dict[str, 
                 "points_of_interest": len(poi_ids),
             }
         elif suffix in GPKG_SUFFIXES:
-            records = cut_gpkg(source, dest, RAKENNUS_TABLE, rakennus_ids)
-            cut = {"contents": GPKG_CONTENTS, "table": RAKENNUS_TABLE, "records": records}
+            counts = cut_gpkg(source, dest, gpkg_ids)
+            cut = {
+                "contents": GPKG_CONTENTS,
+                "table": RAKENNUS_TABLE,
+                "records": counts[RAKENNUS_TABLE],
+                "water_records": {t: counts[t] for t in WATER_TABLES},
+            }
         elif suffix in TIFF_SUFFIXES:
             cut_geotiff(source, dest, dem_bounds)
             cut = {"bounds": dem_bounds.as_list()}

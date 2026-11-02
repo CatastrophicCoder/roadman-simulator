@@ -59,7 +59,15 @@ def test_raw_test_area_build(tmp_path: Path) -> None:
     root = _tmp_repo(tmp_path)
     config = load_map_config(paths.map_config_path(root, MAP_ID))
     raw = paths.raw_dir(root, MAP_ID)
-    run_build(config, "test", raw, tmp_path / "pack", tmp_path / "work", log=lambda _: None)
+    run_build(
+        config,
+        "test",
+        raw,
+        tmp_path / "pack",
+        tmp_path / "work",
+        map_dir=paths.map_dir(root, MAP_ID),
+        log=lambda _: None,
+    )
     summary = check_pack(tmp_path / "pack", tmp_path / "work", config.roads)
     assert summary.tile_count == 4
     assert summary.building_count > 0
@@ -90,7 +98,9 @@ def full_build(tmp_path_factory: pytest.TempPathFactory) -> FullBuild:
     config = load_map_config(paths.map_config_path(root, MAP_ID))
     raw = paths.raw_dir(root, MAP_ID)
     pack, work = tmp_path / "pack", tmp_path / "work"
-    run_build(config, "full", raw, pack, work, log=lambda _: None)
+    run_build(
+        config, "full", raw, pack, work, map_dir=paths.map_dir(root, MAP_ID), log=lambda _: None
+    )
     return FullBuild(config, pack, work)
 
 
@@ -243,13 +253,16 @@ def test_ac19_fixture_has_every_highway_way_touching_the_test_area(tmp_path: Pat
 
 # The full build's counts as the implementation reported them (place-information spec,
 # criterion 5; compared there with the "Expected categories" preview).
-FULL_MATCHED = 1795  # OSM buildings matched to an MML record
-# All buildings, the 140 MML-only ones included (docs/specs/mml-only-buildings.md).
+# Since the world edge (docs/specs/world-edge-pipeline.md) the 37 buildings crossing the
+# build area's edge (5 OSM, 32 MML-only) are left out, so these counts are lower than the
+# place information spec's (1795 matched; 1501 residential, 279 garage_or_shed, ...).
+FULL_MATCHED = 1792  # OSM buildings matched to an MML record
+# All buildings, the MML-only ones included (docs/specs/mml-only-buildings.md).
 FULL_CATEGORY_COUNTS = {
-    "residential": 1501,
-    "garage_or_shed": 279,
-    "industrial": 80,
-    "unknown": 54,
+    "residential": 1475,
+    "garage_or_shed": 274,
+    "industrial": 77,
+    "unknown": 51,
     "commercial": 29,
     "retail": 22,
     "agricultural": 5,
@@ -259,13 +272,13 @@ FULL_CATEGORY_COUNTS = {
     "other": 0,
 }
 FULL_SOURCE_COUNTS = {
-    "mml_use_class": 1252,
-    "osm_landuse": 618,
+    "mml_use_class": 1222,
+    "osm_landuse": 614,
     "osm_building": 41,
     "osm_poi": 15,
     "osm_poi_area": 1,
     "override": 0,
-    "none": 54,
+    "none": 51,
 }
 
 
@@ -297,7 +310,9 @@ FULL_MML_ONLY = {
     "added_cut": 20,
     "not_added": {"outside": 0, "too_small": 4, "slivers": 23, "lidar_contradicts": 1},
 }
-FULL_MML_ONLY_LIDAR = {"mml_lidar": 133, "few_points": 5, "tree_cover": 2}
+# Heights of the added buildings the world edge keeps (32 of the 140 cross the build
+# area's edge and are left out; before the world edge: 133 lidar, 5 few points).
+FULL_MML_ONLY_LIDAR = {"mml_lidar": 103, "few_points": 3, "tree_cover": 2}
 
 
 def test_mml_only_ac13_full_build_reports_the_spec_counts(
@@ -322,9 +337,14 @@ def test_mml_only_ac13_full_build_reports_the_spec_counts(
     assert block["not_added_ids"]["lidar_contradicts"] == ["mml:rakennus/3000145173"]
     buildings = json.loads((full_build.pack / "buildings.json").read_text("utf-8"))["buildings"]
     ids = {b["id"] for b in buildings}
-    assert "mml:rakennus/339041253" in ids
+    edge = json.loads((full_build.work / "10-world-edge" / "report.json").read_text("utf-8"))
+    dropped = {d["id"] for d in edge["dropped_buildings"]}
+    # Added, but its wall lies on the build area's edge, so the world edge leaves it out.
+    assert "mml:rakennus/339041253" in dropped
+    assert "mml:rakennus/339041253" not in ids
     assert "mml:rakennus/3000145173" not in ids
-    assert sum(1 for i in ids if i.startswith("mml:")) == block["added"]
+    mml_dropped = sum(1 for i in dropped if i.startswith("mml:"))
+    assert sum(1 for i in ids if i.startswith("mml:")) == block["added"] - mml_dropped
     assert {k: block[k] for k in FULL_MML_ONLY} == FULL_MML_ONLY
     assert block["added_by_height_source"]["mml_lidar"] == FULL_MML_ONLY_LIDAR["mml_lidar"]
     rejected = block["added_lidar_rejected"]

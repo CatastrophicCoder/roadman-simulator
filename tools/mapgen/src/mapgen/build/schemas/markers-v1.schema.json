@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "markers-v1.schema.json",
+  "$defs": {
+    "LatLonPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "lat": {
+          "description": "latitude, degrees (WGS84)",
+          "maximum": 90,
+          "minimum": -90,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "description": "longitude, degrees (WGS84)",
+          "maximum": 180,
+          "minimum": -180,
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "LatLonPoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "spawn_area_wgs84": {
+      "description": "the spawn area: one polygon, without repeating the first point",
+      "items": {
+        "$ref": "#/$defs/LatLonPoint"
+      },
+      "minItems": 3,
+      "title": "Spawn Area Wgs84",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "spawn_area_wgs84"
+  ],
+  "title": "Markers",
+  "type": "object"
+}

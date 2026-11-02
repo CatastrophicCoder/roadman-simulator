@@ -11,7 +11,9 @@ from functools import lru_cache
 import numpy as np
 import shapely
 from pyproj import CRS, Transformer
+from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
+from shapely.validation import explain_validity
 
 WGS84 = "EPSG:4326"
 
@@ -174,3 +176,32 @@ def crs_urn(crs: str) -> str:
     if authority is None:
         raise ValueError(f"CRS {crs!r} has no authority code")
     return f"urn:ogc:def:crs:{authority[0]}::{authority[1]}"
+
+
+def wgs84_ring_to_local(
+    points: "list[tuple[float, float]]", crs: str, origin_x: float, origin_y: float
+) -> list[tuple[float, float]]:
+    """(lat, lon) points projected to `crs` and moved to local coordinates (x, n)."""
+    coords = np.array([(lon, lat) for lat, lon in points], dtype=float).reshape(-1, 2)
+    world = reproject_xy(coords, WGS84, crs)
+    return [(float(x - origin_x), float(y - origin_y)) for x, y in world]
+
+
+def polygon_problem(coords: "list[tuple[float, float]]") -> str | None:
+    """Why `coords` (a ring without its closing point) isn't a single valid, simple polygon
+    with at least 3 points and an area; None when it is one. Winding doesn't matter."""
+    if len(coords) < 3:
+        return f"a polygon needs at least 3 points, got {len(coords)}"
+    if coords[0] == coords[-1]:
+        return "the last point repeats the first; list each point once"
+    for i, (a, b) in enumerate(zip(coords, coords[1:] + coords[:1], strict=True)):
+        if a == b:
+            return f"points {i} and {(i + 1) % len(coords)} are the same"
+    polygon = Polygon(coords)
+    if polygon.area <= 0:
+        return "the polygon has no area"
+    if not polygon.exterior.is_simple:
+        return f"the polygon isn't simple ({explain_validity(polygon)})"
+    if not polygon.is_valid:
+        return f"the polygon isn't valid ({explain_validity(polygon)})"
+    return None

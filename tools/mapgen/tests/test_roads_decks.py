@@ -158,7 +158,16 @@ def build(root: Path, lidar: bool) -> dict[str, Any]:
         write_snippet_lidar(raw)
     logs: list[str] = []
     pack, work = root / "pack", root / "work"
-    run_build(config, "test", raw, pack, work, now=lambda: FIXED_NOW, log=logs.append)
+    run_build(
+        config,
+        "test",
+        raw,
+        pack,
+        work,
+        map_dir=root / "maps" / MAP_ID,
+        now=lambda: FIXED_NOW,
+        log=logs.append,
+    )
     return {
         "config": config,
         "pack": pack,
@@ -337,7 +346,9 @@ def somero_full(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     config = load_map_config(paths.map_config_path(root, "somero"))
     logs: list[str] = []
     pack, work = root / "pack", root / "work"
-    run_build(config, "full", link, pack, work, log=logs.append)
+    run_build(
+        config, "full", link, pack, work, map_dir=paths.map_dir(root, "somero"), log=logs.append
+    )
     return {
         "graph": json.loads((pack / "road_graph.json").read_text(encoding="utf-8")),
         "report": json.loads((work / "04-roads" / "report.json").read_text(encoding="utf-8")),

@@ -76,6 +76,11 @@ class RoadsResult:
     # 2D road and path surfaces and bridge deck footprints (local coordinates), e.g. to
     # list the buildings standing on a road.
     surface_footprints: list[BaseGeometry] = field(default_factory=list)
+    # The kind of each surface footprint: "road", "path" or "bridge".
+    surface_kinds: list[str] = field(default_factory=list)
+
+    def labelled_surfaces(self) -> list[tuple[str, BaseGeometry]]:
+        return list(zip(self.surface_kinds, self.surface_footprints, strict=True))
 
     @property
     def edge_count(self) -> int:
@@ -169,8 +174,15 @@ def build_roads(
     loaded: LoadResult,
     work_dir: Path,
     log: Callable[[str], None] = print,
+    *,
+    boundary: BaseGeometry,
 ) -> RoadsResult:
-    """Run stages 4 and 7. Writes `work_dir/04-roads/` and `work_dir/07-road-graph/`."""
+    """Run stages 4 and 7. Writes `work_dir/04-roads/` and `work_dir/07-road-graph/`.
+
+    `boundary` is the playable boundary polygon (local coordinates): road and path runs
+    that end at an area-edge cut are extended past it, and the surfaces are clipped to it,
+    so they reach the boundary across their whole width (docs/specs/world-edge-pipeline.md).
+    """
     offset = roads.surface_offset_m
     terrain = TerrainSurface(area, tiles, chunks)
     pieces, info = prepare_pieces(loaded, area, roads)
@@ -243,7 +255,7 @@ def build_roads(
     zones_road += [g.zone() for g in graded if drivable_end[g.edge.node]]
     zones_path = [r.zone() for r in ramps if not drivable_end[r.node]]
     zones_path += [g.zone() for g in graded if not drivable_end[g.edge.node]]
-    road, path = merged_surfaces(runs, decks, zones_road, zones_path)
+    road, path = merged_surfaces(runs, decks, zones_road, zones_path, clip=boundary)
     # Cut every surface at the ramped deck ends: no surface reaches under a deck end, so
     # the only surface meeting the end edge is the ramp (exactly at the deck's height).
     footprints = {k: deck_footprint(span) for span in bridges for k in span.end_keys()}
@@ -382,9 +394,16 @@ def build_roads(
         log(
             f"[roads] warning: the largest drivable component is under {CONNECTIVITY_THRESHOLD:.0%}"
         )
-    surface_footprints = [g for g in (road, path) if not g.is_empty]
-    surface_footprints += [deck_footprint(span) for span in bridges]
-    return RoadsResult(document, tile_nodes, report, graph_report, surface_footprints)
+    labelled = [(kind, g) for kind, g in (("road", road), ("path", path)) if not g.is_empty]
+    labelled += [("bridge", deck_footprint(span)) for span in bridges]
+    return RoadsResult(
+        document,
+        tile_nodes,
+        report,
+        graph_report,
+        [g for _, g in labelled],
+        [kind for kind, _ in labelled],
+    )
 
 
 _GRADED_KEYS = ("length_m", "nominal_length_m", "height_difference_m")
@@ -502,6 +521,27 @@ def _suspected(span: Span, config: MapConfig) -> dict[str, Any]:
     }
 
 
+def bridge_features(bridges: Sequence[Span]) -> list[tuple[BaseGeometry, dict[str, Any]]]:
+    """The `bridge` features of `04-roads/roads.geojson`: each span's `deck_footprint`, the
+    same shape stage 10 and the pack checks take as the deck's surface."""
+    features: list[tuple[BaseGeometry, dict[str, Any]]] = []
+    for span in bridges:
+        first = span.parts[0].piece.attrs
+        features.append(
+            (
+                deck_footprint(span),
+                {
+                    "surface": "bridge",
+                    "classes": sorted({p.piece.attrs.road_class for p in span.parts}),
+                    "layers": [first.layer],
+                    "osm_ways": [f"osm:way/{w}" for w in span.way_ids],
+                    "source": span.source,
+                },
+            )
+        )
+    return features
+
+
 def _write_stage(
     work_dir: Path,
     config: MapConfig,
@@ -535,22 +575,7 @@ def _write_stage(
                     },
                 )
             )
-    for span in bridges:
-        width = max(p.piece.attrs.width_m for p in span.parts)
-        outline = LineString(span.xy).buffer(width / 2, cap_style="flat")
-        first = span.parts[0].piece.attrs
-        features.append(
-            (
-                outline,
-                {
-                    "surface": "bridge",
-                    "classes": sorted({p.piece.attrs.road_class for p in span.parts}),
-                    "layers": [first.layer],
-                    "osm_ways": [f"osm:way/{w}" for w in span.way_ids],
-                    "source": span.source,
-                },
-            )
-        )
+    features += bridge_features(bridges)
     write_geojson(work_dir / "04-roads" / "roads.geojson", features, config.crs, origin)
     write_json(work_dir / "04-roads" / "report.json", report)
 

@@ -1,0 +1,586 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "boundary-v1.schema.json",
+  "$defs": {
+    "Cliff": {
+      "additionalProperties": false,
+      "properties": {
+        "ledge_m": {
+          "minimum": 0,
+          "title": "Ledge M",
+          "type": "number"
+        },
+        "bottom_y": {
+          "description": "(lowest boundary height) - cliff.depth_m",
+          "title": "Bottom Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "ledge_m",
+        "bottom_y"
+      ],
+      "title": "Cliff",
+      "type": "object"
+    },
+    "Fence": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "fence:<n>, in ring order",
+          "pattern": "^fence:[0-9]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "land",
+            "water"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "start": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Start",
+          "type": "array"
+        },
+        "end": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "End",
+          "type": "array"
+        },
+        "s_start": {
+          "minimum": 0,
+          "title": "S Start",
+          "type": "number"
+        },
+        "s_end": {
+          "minimum": 0,
+          "title": "S End",
+          "type": "number"
+        },
+        "outward": {
+          "description": "unit [x, 0, z] pointing out of the playable area",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Outward",
+          "type": "array"
+        },
+        "water_ids": {
+          "description": "water segments only: the water areas it crosses",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Water Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "start",
+        "end",
+        "s_start",
+        "s_end",
+        "outward"
+      ],
+      "title": "Fence",
+      "type": "object"
+    },
+    "Prism": {
+      "additionalProperties": false,
+      "properties": {
+        "footprint": {
+          "description": "convex quadrilateral of [x, z] points",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Footprint",
+          "type": "array"
+        }
+      },
+      "required": [
+        "footprint"
+      ],
+      "title": "Prism",
+      "type": "object"
+    },
+    "Ring": {
+      "additionalProperties": false,
+      "properties": {
+        "ring": {
+          "description": "[x, z] points in ring order, not closed (the last joins the first)",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 3,
+          "title": "Ring",
+          "type": "array"
+        },
+        "length_m": {
+          "exclusiveMinimum": 0,
+          "title": "Length M",
+          "type": "number"
+        },
+        "source": {
+          "description": "area: the build area rectangle; custom: world_edge.boundary_wgs84; test_area: the test-area square (every test build)",
+          "enum": [
+            "area",
+            "custom",
+            "test_area"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ring",
+        "length_m",
+        "source"
+      ],
+      "title": "Ring",
+      "type": "object"
+    },
+    "Roadblock": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "roadblock:<lowest node id>",
+          "title": "Id",
+          "type": "string"
+        },
+        "nodes": {
+          "description": "sorted by node id",
+          "items": {
+            "$ref": "#/$defs/RoadblockNode"
+          },
+          "minItems": 1,
+          "title": "Nodes",
+          "type": "array"
+        },
+        "class": {
+          "description": "the class of the widest edge",
+          "title": "Class",
+          "type": "string"
+        },
+        "drivable": {
+          "title": "Drivable",
+          "type": "boolean"
+        },
+        "walkable": {
+          "title": "Walkable",
+          "type": "boolean"
+        },
+        "width_m": {
+          "description": "the widest edge's width",
+          "exclusiveMinimum": 0,
+          "title": "Width M",
+          "type": "number"
+        },
+        "width_source": {
+          "enum": [
+            "osm",
+            "default"
+          ],
+          "title": "Width Source",
+          "type": "string"
+        },
+        "start": {
+          "description": "span start on the boundary",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Start",
+          "type": "array"
+        },
+        "end": {
+          "description": "span end on the boundary",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "End",
+          "type": "array"
+        },
+        "position": {
+          "description": "the span's midpoint on the ring",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Position",
+          "type": "array"
+        },
+        "yaw_deg": {
+          "description": "rotation about +Y that turns local +X along the ring",
+          "exclusiveMinimum": -180,
+          "maximum": 180,
+          "title": "Yaw Deg",
+          "type": "number"
+        },
+        "outward": {
+          "description": "unit [x, 0, z] pointing out of the playable area",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Outward",
+          "type": "array"
+        },
+        "s_start": {
+          "minimum": 0,
+          "title": "S Start",
+          "type": "number"
+        },
+        "s_end": {
+          "minimum": 0,
+          "title": "S End",
+          "type": "number"
+        },
+        "over_water": {
+          "title": "Over Water",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "nodes",
+        "class",
+        "drivable",
+        "walkable",
+        "width_m",
+        "width_source",
+        "start",
+        "end",
+        "position",
+        "yaw_deg",
+        "outward",
+        "s_start",
+        "s_end",
+        "over_water"
+      ],
+      "title": "Roadblock",
+      "type": "object"
+    },
+    "RoadblockNode": {
+      "additionalProperties": false,
+      "properties": {
+        "node": {
+          "description": "an area_edge node id of road_graph.json",
+          "title": "Node",
+          "type": "string"
+        },
+        "edge": {
+          "description": "its edge id",
+          "title": "Edge",
+          "type": "string"
+        },
+        "role": {
+          "description": "spawn_despawn for a drivable edge, turn_around for a walk-only edge",
+          "enum": [
+            "spawn_despawn",
+            "turn_around"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node",
+        "edge",
+        "role"
+      ],
+      "title": "RoadblockNode",
+      "type": "object"
+    },
+    "SpawnArea": {
+      "additionalProperties": false,
+      "properties": {
+        "polygon": {
+          "description": "[x, z] ring, not closed",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 3,
+          "title": "Polygon",
+          "type": "array"
+        },
+        "open_ground": {
+          "description": "polygons of closed [x, z] rings, exterior first",
+          "items": {
+            "items": {
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "minItems": 1,
+          "title": "Open Ground",
+          "type": "array"
+        },
+        "open_area_m2": {
+          "exclusiveMinimum": 0,
+          "title": "Open Area M2",
+          "type": "number"
+        }
+      },
+      "required": [
+        "polygon",
+        "open_ground",
+        "open_area_m2"
+      ],
+      "title": "SpawnArea",
+      "type": "object"
+    },
+    "VoidTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "bottom_y": {
+          "title": "Bottom Y",
+          "type": "number"
+        },
+        "top_y": {
+          "title": "Top Y",
+          "type": "number"
+        },
+        "prisms": {
+          "items": {
+            "$ref": "#/$defs/Prism"
+          },
+          "minItems": 1,
+          "title": "Prisms",
+          "type": "array"
+        }
+      },
+      "required": [
+        "bottom_y",
+        "top_y",
+        "prisms"
+      ],
+      "title": "VoidTrigger",
+      "type": "object"
+    },
+    "WaterCrossing": {
+      "additionalProperties": false,
+      "properties": {
+        "s_start": {
+          "minimum": 0,
+          "title": "S Start",
+          "type": "number"
+        },
+        "s_end": {
+          "minimum": 0,
+          "title": "S End",
+          "type": "number"
+        },
+        "source": {
+          "description": "the map.yaml source of the water areas",
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "water_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Water Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "s_start",
+        "s_end",
+        "source",
+        "water_ids"
+      ],
+      "title": "WaterCrossing",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "map_id": {
+      "title": "Map Id",
+      "type": "string"
+    },
+    "area": {
+      "enum": [
+        "full",
+        "test"
+      ],
+      "title": "Area",
+      "type": "string"
+    },
+    "boundary": {
+      "$ref": "#/$defs/Ring"
+    },
+    "roadblocks": {
+      "items": {
+        "$ref": "#/$defs/Roadblock"
+      },
+      "title": "Roadblocks",
+      "type": "array"
+    },
+    "fences": {
+      "items": {
+        "$ref": "#/$defs/Fence"
+      },
+      "title": "Fences",
+      "type": "array"
+    },
+    "cliff": {
+      "$ref": "#/$defs/Cliff"
+    },
+    "void_trigger": {
+      "$ref": "#/$defs/VoidTrigger"
+    },
+    "spawn_area": {
+      "$ref": "#/$defs/SpawnArea"
+    },
+    "water_crossings": {
+      "items": {
+        "$ref": "#/$defs/WaterCrossing"
+      },
+      "title": "Water Crossings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "map_id",
+    "area",
+    "boundary",
+    "roadblocks",
+    "fences",
+    "cliff",
+    "void_trigger",
+    "spawn_area",
+    "water_crossings"
+  ],
+  "title": "BoundaryDocument",
+  "type": "object"
+}

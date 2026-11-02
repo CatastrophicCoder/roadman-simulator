@@ -20,6 +20,11 @@ and rewritten after the roads stage with the added buildings standing on a road.
 With a `roads` block in map.yaml, the roads stage (stages 4 and 7) adds `road-col`,
 `path-col` and bridge deck nodes to the tiles and fills `road_graph.json`; without it,
 the map has no road meshes and an empty (valid) `road_graph.json`.
+`maps/<map-id>/markers.json` (the spawn area) is required and validated before the load
+stage. The world edge (stage 10, docs/specs/world-edge-pipeline.md) runs after the roads
+stage and writes `boundary.json`; buildings crossing the boundary (the build area
+rectangle, or the test-area square) are dropped before the buildings stage and listed in
+the reports.
 """
 
 import shutil
@@ -40,6 +45,7 @@ from mapgen.build.camera_presets import (
     read_camera_presets,
 )
 from mapgen.build.export_glb import AXES, TERRAIN_NODE, MeshNode, export_glb
+from mapgen.build.markers import MARKERS_NAME, MarkersError, read_markers
 from mapgen.build.mml_only import (
     MmlOnlySelection,
     mml_only_report,
@@ -90,6 +96,16 @@ from mapgen.build.roads.model import validate_file as validate_road_graph_file
 from mapgen.build.stage1_load import BuildError, run_load
 from mapgen.build.stage_io import write_geojson, write_json
 from mapgen.build.terrain import MeshTerrainBuilder, TerrainBuilder, TerrainChunk
+from mapgen.build.world_edge import (
+    STAGE_DIR as WORLD_EDGE_DIR,
+)
+from mapgen.build.world_edge import (
+    WorldEdgeError,
+    boundary_for,
+    build_world_edge,
+)
+from mapgen.build.world_edge.model import BOUNDARY_NAME, BOUNDARY_SCHEMA, BoundaryError
+from mapgen.build.world_edge.spawn import crossing_buildings
 from mapgen.config import MapConfig
 from mapgen.geo import BBox
 from mapgen.manifest import load_entries
@@ -97,7 +113,15 @@ from mapgen.sources.base import isoformat_utc, utc_now
 
 __all__ = ["BuildError", "BuildReport", "run_build"]
 
-STAGE_DIRS = ("01-load", "02-terrain", "03-buildings", "04-roads", "07-road-graph", "08-places")
+STAGE_DIRS = (
+    "01-load",
+    "02-terrain",
+    "03-buildings",
+    "04-roads",
+    "07-road-graph",
+    "08-places",
+    WORLD_EDGE_DIR,
+)
 
 
 @dataclass
@@ -122,6 +146,10 @@ class BuildReport:
     category_source_counts: dict[str, int] = field(default_factory=dict)
     poi_count: int = 0
     mml_only_added: int = 0  # buildings from building-use records no OSM building matched
+    dropped_buildings: int = 0  # buildings crossing the boundary, left out
+    roadblocks: int = 0
+    fences: int = 0
+    water_crossings: int = 0
 
 
 def _clear(folder: Path) -> None:
@@ -159,9 +187,9 @@ def run_build(
     `map_dir` is the map's config folder (`maps/<map-id>/`). Its optional
     `camera_presets.json` is validated before the slow stages and copied unchanged into
     the pack, and its optional `overrides/buildings.json` is validated before the slow
-    stages too. Without `map_dir`, the pack has no camera presets and no overrides. With
-    `release`, the `debug_only` sources are treated as disabled, even when their raw files
-    exist.
+    stages too. Its `markers.json` (the spawn area) is required, so a build without
+    `map_dir` fails. With `release`, the `debug_only` sources are treated as disabled,
+    even when their raw files exist.
     """
     if release:
         for name in config.debug_only_sources():
@@ -182,6 +210,16 @@ def run_build(
     except BuildingOverridesError as exc:
         raise BuildError(str(exc)) from exc
     area = build_area(config, area_name)
+    try:
+        boundary = boundary_for(config, area)
+    except WorldEdgeError as exc:
+        raise BuildError(str(exc)) from exc
+    if map_dir is None:
+        raise BuildError(f"no map folder: the build needs maps/{config.id}/{MARKERS_NAME}")
+    try:
+        _, spawn = read_markers(map_dir / MARKERS_NAME, config)
+    except MarkersError as exc:
+        raise BuildError(str(exc)) from exc
     tiles = area.tiles()
     report = BuildReport(config.id, area_name, out_dir, work_dir, tile_count=len(tiles))
     origin = (config.origin.x, config.origin.y)
@@ -242,8 +280,32 @@ def run_build(
             )
         added_footprints = selection.footprints()
         report.mml_only_added = len(added_footprints)
+        # No building may cross the boundary: with the build area or test-area square as
+        # the boundary, the crossing ones are left out (docs/specs/world-edge-pipeline.md).
+        crossing = crossing_buildings(
+            boundary.polygon(),
+            [(f.id, f.geometry) for f in [*loaded.footprints, *added_footprints]],
+            config.world_edge.building_clearance_m,
+        )
+        dropped = [
+            {
+                "id": c["id"],
+                "source": c["id"].split(":", 1)[0],
+                "area_outside_m2": round(c["area_outside_m2"], 3),
+                "distance_m": round(c["distance_m"], 3),
+            }
+            for c in crossing
+        ]
+        dropped_ids = {d["id"] for d in dropped}
+        kept_osm = [f for f in loaded.footprints if f.id not in dropped_ids]
+        added_footprints = [f for f in added_footprints if f.id not in dropped_ids]
+        report.dropped_buildings = len(dropped)
+        log(
+            f"[buildings] {len(dropped)} buildings crossing the boundary left out "
+            f"(clearance {config.world_edge.building_clearance_m:g} m)"
+        )
         buildings = resolve_buildings(
-            [*loaded.footprints, *added_footprints],
+            [*kept_osm, *added_footprints],
             loaded.heightfield,
             area,
             measured,
@@ -255,19 +317,25 @@ def run_build(
         places = build_places(
             config.id,
             area,
-            [*loaded.footprints, *added_footprints],
+            [*kept_osm, *added_footprints],
             loaded,
             loaded.heightfield,
             overrides,
             _display(overrides_file, map_dir) if overrides is not None else None,
             matches=matches,
-            mml_only=selection.records_by_id(),
+            mml_only={
+                bid: record
+                for bid, record in selection.records_by_id().items()
+                if bid not in dropped_ids
+            },
         )
         buildings = BuildingsResult(
             [replace(b, place=places.building_fields[b.id]) for b in buildings.buildings]
         )
         _write_buildings_geojson(work_dir / "03-buildings", buildings, config.crs, origin)
-        _write_buildings_report(work_dir / "03-buildings", buildings, places, selection, [])
+        _write_buildings_report(
+            work_dir / "03-buildings", buildings, places, selection, [], dropped
+        )
         _write_places_stage(work_dir / "08-places", places, config.crs, origin)
     building_report = buildings.report()
     report.building_count = building_report["building_count"]
@@ -293,6 +361,7 @@ def run_build(
                     loaded,
                     work_dir,
                     log=log,
+                    boundary=boundary.polygon(),
                 )
             except RoadGraphError as exc:
                 raise BuildError(str(exc)) from exc
@@ -310,7 +379,30 @@ def run_build(
             ((b.id, b.footprint) for b in buildings.buildings if b.id in added_ids),
             roads.surface_footprints,
         )
-        _write_buildings_report(work_dir / "03-buildings", buildings, places, selection, overlaps)
+        _write_buildings_report(
+            work_dir / "03-buildings", buildings, places, selection, overlaps, dropped
+        )
+
+    with stage("world_edge"):
+        try:
+            world = build_world_edge(
+                config,
+                area,
+                boundary,
+                road_graph,
+                roads.labelled_surfaces() if roads is not None else [],
+                loaded,
+                [(b.id, b.footprint) for b in buildings.buildings],
+                spawn,
+                work_dir,
+                dropped_buildings=dropped,
+                log=log,
+            )
+        except (WorldEdgeError, BoundaryError) as exc:
+            raise BuildError(str(exc)) from exc
+    report.roadblocks = len(world.document["roadblocks"])
+    report.fences = len(world.document["fences"])
+    report.water_crossings = len(world.document["water_crossings"])
 
     with stage("export"), ExitStack() as resources:
         by_tile = buildings.by_tile()
@@ -393,12 +485,13 @@ def run_build(
                 report.debug_textures = len(written)
                 log(f"[build] {len(written)} debug orthophoto textures in {ORTHOPHOTO_DIR}/")
             validate_road_graph_file(write_json(staging / ROAD_GRAPH_NAME, road_graph))
+            BOUNDARY_SCHEMA.validate_file(write_json(staging / BOUNDARY_NAME, world.document))
             if presets_bytes is not None:
                 (staging / PRESETS_NAME).write_bytes(presets_bytes)  # unchanged
             validate_manifest_file(write_json(staging / MANIFEST_NAME, document))
             # Every check on the staged pack; a failure leaves the previous pack untouched.
             start = time.perf_counter()
-            check_pack(staging, work_dir, config.roads)
+            check_pack(staging, work_dir, config.roads, world_edge=config.world_edge)
             report.timings_s["pack_checks"] = round(time.perf_counter() - start, 3)
             log(f"[build] pack checks: {report.timings_s['pack_checks']:.2f} s")
             swap_in(staging, out_dir)
@@ -410,6 +503,7 @@ def run_build(
             OrthophotoError,
             RoadGraphError,
             PlacesError,
+            BoundaryError,
         ) as exc:
             raise BuildError(str(exc)) from exc
         finally:
@@ -450,14 +544,17 @@ def _write_buildings_report(
     places: PlacesResult,
     selection: MmlOnlySelection,
     overlaps: Sequence[str],
+    dropped: Sequence[dict[str, Any]],
 ) -> None:
-    """`03-buildings/report.json`: heights, place statistics and the `mml_only` block."""
+    """`03-buildings/report.json`: heights, place statistics, the `mml_only` block and the
+    buildings left out for crossing the boundary (`world_edge.dropped_buildings`)."""
     write_json(
         folder / "report.json",
         {
             **buildings.report(),
             **places.building_report,
             "mml_only": mml_only_report(selection, buildings.buildings, overlaps),
+            "world_edge": {"dropped_buildings": list(dropped)},
         },
     )
 

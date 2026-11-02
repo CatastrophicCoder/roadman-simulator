@@ -210,7 +210,16 @@ def build_snippets(root: Path, osm: Osm, dem: Callable[..., np.ndarray] | None) 
         write_dem(raw / "mml" / "dem_2m" / "plane.tif", dem)
     logs: list[str] = []
     pack, work = root / "pack", root / "work"
-    report = run_build(config, "test", raw, pack, work, now=lambda: FIXED_NOW, log=logs.append)
+    report = run_build(
+        config,
+        "test",
+        raw,
+        pack,
+        work,
+        map_dir=root / "maps" / MAP_ID,
+        now=lambda: FIXED_NOW,
+        log=logs.append,
+    )
     graph = json.loads((pack / "road_graph.json").read_text(encoding="utf-8"))
     roads_report = json.loads((work / "04-roads" / "report.json").read_text(encoding="utf-8"))
     return SnippetBuild(config, pack, work, report, logs, graph, roads_report)
@@ -534,7 +543,8 @@ def _bridges_osm() -> Osm:
         {"type": "multipolygon", "natural": "water"},
     )
     # A water relation that can't be closed: a member way is missing (left out, reported).
-    osm.way(2010, [(130.0, -145.0), (140.0, -145.0)], {})
+    # Away from the test-area edge: near it, the world edge would fail the build.
+    osm.way(2010, [(60.0, -110.0), (70.0, -110.0)], {})
     osm.relations[BROKEN_REL] = (
         [(2010, "outer"), (2999, "outer")],
         {"type": "multipolygon", "natural": "water"},

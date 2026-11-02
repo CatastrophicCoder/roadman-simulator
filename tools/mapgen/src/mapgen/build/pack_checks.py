@@ -35,6 +35,18 @@ stage output in the work folder, so they test what the game will load.
   with an `mml:` id has `mml_building` equal to its id and `mml_overlap` 1.0, and no
   `mml:` footprint overlaps an `osm:` footprint by `OVERLAP_M2` or more (footprints from
   `03-buildings/buildings.geojson`).
+- World edge (docs/specs/world-edge-pipeline.md, `check_world_edge`): `boundary.json`
+  matches its committed schema, map id and area; every `area_edge` node is in exactly one
+  roadblock with the role of its edge; roadblocks are at least the merge distance apart;
+  roadblocks and fences close the ring (ends within 1 mm, lengths add up within 1 mm); no
+  fence touches a road graph edge (1 mm); no fence runs over the ring stretch of a road,
+  path or deck surface (`04-roads/roads.geojson`) by more than 1 mm, except the stretches
+  listed as touched without a crossing; fences over water (more than 1 mm) are water
+  fences and water fences lie in water; fence ends are at `Heightfield.sample` (1 mm),
+  no longer than `fence.max_segment_m` and land fences within the terrain deviation; no
+  building crosses the boundary; 10,000 sampled points of the void band lie in a prism
+  and no prism reaches over the playable area; the spawn area is inside the test area and
+  its open ground passes the spawn check.
 
 Heights are sampled on the actual triangles (the tiles' terrain meshes), not a grid.
 """
@@ -42,6 +54,7 @@ Heights are sampled on the actual triangles (the tiles' terrain meshes), not a g
 import json
 import re
 import struct
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,7 +70,7 @@ from mapgen.build.export_glb import TERRAIN_NODE, from_gltf
 from mapgen.build.pack_manifest import committed_schema
 from mapgen.build.places.categories import CATEGORIES, CATEGORY_SOURCES, NAME_SOURCES
 from mapgen.build.places.model import BUILDINGS_SCHEMA, POIS_NAME, POIS_SCHEMA, PlacesError
-from mapgen.config import RoadsConfig
+from mapgen.config import RoadsConfig, WorldEdgeConfig
 
 TOLERANCE = 1e-6
 MM = 1e-3  # criteria 8, 9, 10, 11: 1 mm
@@ -251,11 +264,20 @@ class PackSummary:
     building_count: int
     roads: "RoadSummary | None" = None
     poi_count: int = 0
+    roadblocks: int = 0
 
 
-def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None) -> PackSummary:
+def check_pack(
+    pack_dir: Path,
+    work_dir: Path,
+    roads: RoadsConfig | None = None,
+    *,
+    world_edge: WorldEdgeConfig | None = None,
+) -> PackSummary:
     """Every check. A map with a `roads` block also gets the road checks (`check_roads`);
-    without one, `road_graph.json` must be empty and the tiles have no road meshes."""
+    without one, `road_graph.json` must be empty and the tiles have no road meshes.
+    `world_edge` is the map's world edge config; None takes the values the build recorded
+    in `10-world-edge/report.json`."""
     manifest = _json(pack_dir / "manifest.json")
     try:
         jsonschema.validate(manifest, committed_schema())
@@ -324,10 +346,16 @@ def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None)
             low = ~np.isnan(z) & (z < base - 1e-3)
             _require(not low.any(), f"{names[int(owner[low][0])] if low.any() else ''} floats")
     mml_only = sum(1 for b in buildings if b["id"].startswith(MML_ID_PREFIX))
+    edge_report = _json(work_dir / WORLD_EDGE_DIR / "report.json")
+    dropped_osm = sum(
+        1 for d in edge_report["dropped_buildings"] if d["id"].startswith(OSM_ID_PREFIX)
+    )
     _require(
-        load_report["footprints"]["in_area"] + mml_only == glb_buildings == len(buildings),
-        "building counts differ between the load report (plus the MML-only buildings), "
-        "the tiles and buildings.json",
+        load_report["footprints"]["in_area"] - dropped_osm + mml_only
+        == glb_buildings
+        == len(buildings),
+        "building counts differ between the load report (minus the OSM buildings crossing "
+        "the boundary, plus the MML-only buildings), the tiles and buildings.json",
     )
     check_mml_only(buildings, geometries)
     bounds = (
@@ -346,7 +374,8 @@ def check_pack(pack_dir: Path, work_dir: Path, roads: RoadsConfig | None = None)
         for tid, (_, meshes) in tiles.items():
             extra = [n for n in meshes.nodes if n in ROAD_SURFACES or BRIDGE_NODE.match(n)]
             _require(not extra, f"no roads block, but {tid} has {extra}")
-    return PackSummary(len(manifest["tiles"]), glb_buildings, road_summary, poi_count)
+    roadblocks = check_world_edge(pack_dir, work_dir, manifest, world_edge)
+    return PackSummary(len(manifest["tiles"]), glb_buildings, road_summary, poi_count, roadblocks)
 
 
 def check_mml_only(buildings: Sequence[dict[str, Any]], geometries: dict[str, BaseGeometry]) -> int:
@@ -727,6 +756,19 @@ def _check_tile_edges(tiles: dict[str, Any]) -> int:
     return shared
 
 
+def work_heightfield(work_dir: Path, origin: tuple[float, float]) -> Any:
+    """The build's `Heightfield`, rebuilt from the stage-1 DEM (`01-load/dem.tif`)."""
+    import rasterio
+
+    from mapgen.build.heightfield import heightfield_from_raster
+    from mapgen.sources.base import ElevationRaster
+
+    with rasterio.open(work_dir / "01-load" / "dem.tif") as src:
+        raster = ElevationRaster(src.read(1), src.transform, str(src.crs))
+    heightfield, _ = heightfield_from_raster(raster, *origin)
+    return heightfield
+
+
 class _DemTerrain:
     """Criterion 13b: tile terrain vertices built from the stage-1 DEM alone (float32)."""
 
@@ -740,14 +782,7 @@ class _DemTerrain:
         from mapgen.geo import BBox
 
         if self._heightfield is None:
-            import rasterio
-
-            from mapgen.build.heightfield import heightfield_from_raster
-            from mapgen.sources.base import ElevationRaster
-
-            with rasterio.open(self.work_dir / "01-load" / "dem.tif") as src:
-                raster = ElevationRaster(src.read(1), src.transform, str(src.crs))
-            self._heightfield, _ = heightfield_from_raster(raster, *self.origin)
+            self._heightfield = work_heightfield(self.work_dir, self.origin)
         i, j = (int(v) for v in re.findall(r"-?\d+", tile["id"]))
         chunk = MeshTerrainBuilder().build_tile(
             self._heightfield, Tile(i, j, BBox(*tile["bounds_local"]))
@@ -1133,3 +1168,291 @@ def check_roads(
         len(deck_edges),
         max_grade,
     )
+
+
+# World edge (docs/specs/world-edge-pipeline.md).
+
+WORLD_EDGE_DIR = "10-world-edge"
+BAND_SAMPLES = 10_000  # criterion 15: sampled points of the void band
+AREA_TOLERANCE_M2 = 0.01  # spawn check: open ground area and obstacle overlap
+RADIUS_TOLERANCE_M = 0.02  # spawn check: the largest clear disc (its own precision 0.01 m)
+
+
+def _local_xz(point: Sequence[float]) -> tuple[float, float]:
+    """A Godot [x, z] or [x, y, z] point as local (x, n)."""
+    return (float(point[0]), -float(point[-1]))
+
+
+def _work_features(path: Path, origin: np.ndarray) -> list[tuple[dict[str, Any], BaseGeometry]]:
+    """The features of a stage GeoJSON (world coordinates) moved to local coordinates."""
+    if not path.is_file():
+        return []
+    result = []
+    for feature in _json(path)["features"]:
+        geometry = shapely.transform(shape(feature["geometry"]), lambda c: c - origin)
+        result.append((feature["properties"], geometry))
+    return result
+
+
+def _ring_overlap(length: float, a0: float, b0: float, a1: float, b1: float) -> float:
+    """The length two circular stretches of a ring `length` long share (0 when apart)."""
+    return max(0.0, *(min(b0, b1 + k * length) - max(a0, a1 + k * length) for k in (-1, 0, 1)))
+
+
+def check_world_edge(
+    pack_dir: Path,
+    work_dir: Path,
+    manifest: dict[str, Any],
+    config: WorldEdgeConfig | None = None,
+) -> int:
+    """The world edge checks on a staged pack; returns the number of roadblocks."""
+    from mapgen.build.world_edge.fences import max_deviation
+    from mapgen.build.world_edge.model import BOUNDARY_NAME, BOUNDARY_SCHEMA, BoundaryError
+    from mapgen.build.world_edge.ring import Ring, interval_gap
+    from mapgen.build.world_edge.spawn import clear_radius, crossing_buildings
+    from mapgen.build.world_edge.void import (
+        band_samples,
+        footprint_problems,
+        point_in_quads,
+        quads_overlapping,
+    )
+
+    path = pack_dir / BOUNDARY_NAME
+    _require(path.is_file(), f"{BOUNDARY_NAME} is missing")
+    document = _json(path)
+    try:
+        BOUNDARY_SCHEMA.validate(document, BOUNDARY_NAME)
+    except BoundaryError as exc:
+        raise PackCheckError(str(exc)) from exc
+    _require(
+        (document["map_id"], document["area"]) == (manifest["map_id"], manifest["area"]),
+        f"{BOUNDARY_NAME}: map_id/area differ from the manifest",
+    )
+    report = _json(work_dir / WORLD_EDGE_DIR / "report.json")
+    cfg = config or WorldEdgeConfig.model_validate(report["config"])
+    origin = np.array([manifest["origin"]["x"], manifest["origin"]["y"]])
+
+    points = [_local_xz(p) for p in document["boundary"]["ring"]]
+    ring = Ring.from_coords(points)
+    _require(
+        np.allclose(ring.xy, np.array(points), atol=UM),
+        "boundary ring isn't counter-clockwise from its lowest-x, lowest-n vertex",
+    )
+    _require(abs(ring.length - document["boundary"]["length_m"]) <= MM, "boundary length_m is off")
+    polygon = ring.polygon()
+
+    # Roadblocks and roles (criteria 4-6).
+    graph = _json(pack_dir / "road_graph.json")
+    edge_nodes = {n["id"] for n in graph["nodes"] if n["kind"] == "area_edge"}
+    edges = {e["id"]: e for e in graph["edges"]}
+    roadblocks = document["roadblocks"]
+    seen = Counter(n["node"] for rb in roadblocks for n in rb["nodes"])
+    twice = sorted(k for k, v in seen.items() if v > 1)
+    _require(not twice, f"area_edge nodes in more than one roadblock: {twice[:5]}")
+    missing = sorted(edge_nodes - set(seen))
+    _require(not missing, f"area_edge nodes in no roadblock: {missing[:5]}")
+    extra = sorted(set(seen) - edge_nodes)
+    _require(not extra, f"roadblock nodes that aren't area_edge nodes: {extra[:5]}")
+    for rb in roadblocks:
+        for item in rb["nodes"]:
+            edge = edges.get(item["edge"])
+            _require(
+                edge is not None and item["node"] in (edge["from"], edge["to"]),
+                f"{rb['id']}: {item['edge']} isn't the edge of {item['node']}",
+            )
+            role = "spawn_despawn" if edge["drivable"] else "turn_around"
+            _require(item["role"] == role, f"{rb['id']}: {item['node']} has role {item['role']}")
+    spans = sorted((rb["s_start"], rb["s_end"]) for rb in roadblocks)
+    if len(spans) > 1:
+        for k, first in enumerate(spans):
+            second = spans[(k + 1) % len(spans)]
+            gap = interval_gap(first, second, ring.length)
+            _require(
+                gap >= cfg.roadblock.merge_distance_m - MM,
+                f"roadblocks at s {first} and {second} are {gap:.3f} m apart",
+            )
+
+    # Closed loop (criterion 7).
+    items = sorted(
+        [(rb["s_start"], rb["s_end"], rb["start"], rb["end"], rb["id"]) for rb in roadblocks]
+        + [(f["s_start"], f["s_end"], f["start"], f["end"], f["id"]) for f in document["fences"]]
+    )
+    _require(items, "no roadblocks or fences")
+    for item in items:
+        _require(
+            0.0 <= item[0] < ring.length and item[1] > item[0],
+            f"{item[4]}: s_start {item[0]} isn't in [0, {ring.length}) or s_end isn't after it",
+        )
+    for k, item in enumerate(items):
+        following = items[(k + 1) % len(items)]
+        end, start = np.array(_local_xz(item[3])), np.array(_local_xz(following[2]))
+        _require(
+            float(np.hypot(*(end - start))) <= MM,
+            f"{item[4]} doesn't end where {following[4]} starts",
+        )
+    total = sum(item[1] - item[0] for item in items)
+    _require(abs(total - ring.length) <= MM, f"items cover {total:.6f} m of {ring.length:.6f}")
+
+    # Fences: road graph edges, water, heights and lengths (criteria 8, 9, 12).
+    fences = document["fences"]
+    lines = [LineString([_local_xz(f["start"]), _local_xz(f["end"])]) for f in fences]
+    edge_lines = [LineString([_local_xz(p) for p in e["points"]]) for e in graph["edges"]]
+    if edge_lines and lines:
+        tree = shapely.STRtree(edge_lines)
+        for fence, line in zip(fences, lines, strict=True):
+            hits = tree.query(line, predicate="dwithin", distance=MM)
+            _require(
+                len(hits) == 0,
+                f"{fence['id']} crosses road graph edge {graph['edges'][int(hits[0])]['id']}"
+                if len(hits)
+                else "",
+            )
+    # Fences off the road and path surfaces on the ring (criterion 8): a fence overlaps
+    # the ring stretches of stage 4's merged surfaces (bridge decks included) by at most
+    # 1 mm, except over the stretches the report lists as touched without a crossing,
+    # which the fence runs over.
+    surfaces = [
+        g
+        for props, g in _work_features(work_dir / "04-roads" / "roads.geojson", origin)
+        if props.get("surface") in ("road", "path", "bridge")
+    ]
+    touched = [(t["s_start"], t["s_end"]) for t in report.get("touched_without_crossing", [])]
+    stretches = ring.intervals(shapely.union_all(surfaces)) if surfaces else []
+    for a, b in stretches:
+        if any(_ring_overlap(ring.length, a, b, *t) >= (b - a) - MM for t in touched):
+            continue
+        for fence in fences:
+            overlap = _ring_overlap(ring.length, a, b, fence["s_start"], fence["s_end"])
+            _require(
+                overlap <= MM,
+                f"{fence['id']} runs {overlap:.4f} m over road or path surface at s "
+                f"{a:.3f}..{b:.3f}",
+            )
+
+    features = _work_features(work_dir / WORLD_EDGE_DIR / "boundary.geojson", origin)
+    water_geoms = [g for props, g in features if props.get("kind") == "water_area"]
+    water = shapely.union_all(water_geoms) if water_geoms else None
+    for fence, line in zip(fences, lines, strict=True):
+        if water is not None:
+            overlap = line.intersection(water).length
+            _require(
+                overlap <= MM or fence["type"] == "water",
+                f"{fence['id']} is over water for {overlap:.3f} m but is {fence['type']}",
+            )
+        if fence["type"] == "water":
+            outside = line.length if water is None else line.difference(water).length
+            _require(outside <= MM, f"{fence['id']} is water but {outside:.3f} m is on land")
+    if water is not None:
+        for rb in roadblocks:
+            stretch = ring.path_line(rb["s_start"], rb["s_end"])
+            _require(
+                stretch.intersection(water).length <= MM or rb["over_water"],
+                f"{rb['id']} spans water but over_water is false",
+            )
+    heightfield = work_heightfield(work_dir, (float(origin[0]), float(origin[1])))
+    for fence, line in zip(fences, lines, strict=True):
+        for point in (fence["start"], fence["end"]):
+            x, n = _local_xz(point)
+            z = float(heightfield.sample(x, n))
+            _require(abs(point[1] - z) <= MM, f"{fence['id']} end at {point[1]} != terrain {z}")
+        _require(
+            line.length <= cfg.fence.max_segment_m + MM,
+            f"{fence['id']} is {line.length:.3f} m long",
+        )
+        if fence["type"] == "land":
+            deviation, _ = max_deviation(heightfield, line.coords[0], line.coords[-1])
+            _require(
+                deviation <= cfg.fence.max_terrain_deviation_m + MM,
+                f"{fence['id']}: terrain {deviation:.3f} m from its line",
+            )
+
+    # Buildings (criterion 16).
+    buildings = _json(pack_dir / "buildings.json")["buildings"]
+    footprints = {
+        props["id"]: geometry
+        for props, geometry in _work_features(
+            work_dir / "03-buildings" / "buildings.geojson", origin
+        )
+    }
+    crossing = crossing_buildings(
+        polygon,
+        [(b["id"], footprints[b["id"]]) for b in buildings],
+        max(cfg.building_clearance_m - UM, 0.0),
+    )
+    _require(
+        not crossing,
+        "buildings crossing the boundary: "
+        + ", ".join(f"{c['id']} ({c['distance_m']:.3f} m)" for c in crossing[:5]),
+    )
+
+    # Void trigger (criterion 15).
+    void = document["void_trigger"]
+    quads = [[_local_xz(p) for p in prism["footprint"]] for prism in void["prisms"]]
+    _require(
+        abs(void["bottom_y"] - (document["cliff"]["bottom_y"] - cfg.void.width_m)) <= MM,
+        "void bottom_y isn't the cliff bottom minus void.width_m",
+    )
+    bad_footprints = footprint_problems(quads)
+    _require(
+        not bad_footprints,
+        f"{len(bad_footprints)} void footprints aren't convex quads: {bad_footprints[:3]}",
+    )
+    samples = band_samples(ring, cfg.void.inner_offset_m, cfg.void.width_m, BAND_SAMPLES)
+    inside = point_in_quads(quads, samples)
+    _require(
+        inside.all(),
+        f"{int((~inside).sum())} void band samples lie in no prism, e.g. "
+        f"{samples[~inside][:1].tolist()}",
+    )
+    overlapping = quads_overlapping(polygon, quads)
+    _require(not overlapping, f"void prisms {overlapping[:5]} reach over the playable area")
+
+    # Spawn area (criterion 19).
+    spawn_doc = document["spawn_area"]
+    spawn = shapely.Polygon([_local_xz(p) for p in spawn_doc["polygon"]])
+    test_area = shapely.box(*report["test_area_local"])
+    _require(test_area.covers(spawn), "the spawn area isn't inside the test area")
+    ground = shapely.union_all(
+        [
+            shapely.Polygon(
+                [_local_xz(p) for p in rings[0]], [[_local_xz(p) for p in r] for r in rings[1:]]
+            )
+            for rings in spawn_doc["open_ground"]
+        ]
+    )
+    _require(
+        abs(ground.area - spawn_doc["open_area_m2"]) <= AREA_TOLERANCE_M2,
+        "spawn open_area_m2 isn't the open ground's area",
+    )
+    _require(
+        ground.area >= cfg.spawn.min_open_area_m2,
+        f"spawn open ground {ground.area:.1f} m² is under {cfg.spawn.min_open_area_m2:g}",
+    )
+    radius = clear_radius(ground)
+    _require(
+        radius >= cfg.spawn.min_clear_radius_m - RADIUS_TOLERANCE_M,
+        f"spawn open ground fits only a disc of r {radius:.2f} m",
+    )
+    _require(
+        ground.difference(spawn).area <= AREA_TOLERANCE_M2, "open ground outside the spawn area"
+    )
+    inner = polygon.buffer(-cfg.spawn.min_boundary_distance_m)
+    _require(
+        ground.difference(inner).area <= AREA_TOLERANCE_M2,
+        "open ground closer to the boundary than spawn.min_boundary_distance_m",
+    )
+    kept = {b["id"] for b in buildings}
+    obstacles = [g for fid, g in footprints.items() if fid in kept]
+    obstacles += water_geoms
+    obstacles += [
+        g
+        for props, g in _work_features(work_dir / "04-roads" / "roads.geojson", origin)
+        if props.get("surface") in ("road", "path", "bridge")
+    ]
+    if obstacles:
+        grown = shapely.union_all([g.buffer(cfg.spawn.obstacle_buffer_m - MM) for g in obstacles])
+        overlap = ground.intersection(grown).area
+        _require(
+            overlap <= AREA_TOLERANCE_M2, f"open ground overlaps obstacles by {overlap:.3f} m²"
+        )
+    return len(roadblocks)

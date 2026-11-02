@@ -5,6 +5,15 @@ its inferred bridge spans) is buffered to `width_m / 2`. `road` is the union of 
 drivable ones, `path` the union of the others minus `road`. Ends that meet a bridge deck
 get flat caps, so the ground surface doesn't run onto the deck; other ends are round.
 
+An end at an area-edge cut (the boundary) is extended past the boundary along its last
+segment and the merged surfaces are clipped to the boundary polygon, so the surface
+reaches the boundary across its whole width at any crossing angle (a flat cap at the cut
+node would leave one side short at an angle). The extension is as long as the boundary
+needs (the farthest point of the boundary polygon in front of the cap, plus
+`EDGE_EXTENSION_MARGIN_M`), at most `MAX_EDGE_EXTENSION_WIDTHS` road widths: that covers
+crossings down to about 7° to the boundary; at shallower angles the far side stops short.
+The graph's `area_edge` node stays on the boundary.
+
 Draping cuts the merged polygons along the actual triangles of each tile's terrain chunk
 (not an assumed grid). Each piece is triangulated with earcut and lies in that triangle's
 plane plus `surface_offset_m`, so the surface is parallel to the terrain mesh everywhere.
@@ -30,6 +39,11 @@ from mapgen.build.terrain import TerrainChunk
 
 QUAD_SEGS = 4  # buffer segments per quarter circle (low-poly round caps and joins)
 MIN_AREA = 1e-9  # m²; smaller polygon pieces and triangles are dropped
+EDGE_EXTENSION_MARGIN_M = 0.1  # an area-edge end runs this far past the boundary, then clipped
+# At most this many road widths past the cut: atan(0.5 / 4) ≈ 7.1° is the shallowest
+# crossing whose whole width still reaches a straight boundary.
+MAX_EDGE_EXTENSION_WIDTHS = 4.0
+TOUCH_M = 1e-9  # metres: a sweep piece this close to the cap line starts at it
 
 
 def plane_z(tri: np.ndarray, pts: np.ndarray) -> np.ndarray:
@@ -143,13 +157,18 @@ class TerrainSurface:
 
 @dataclass(frozen=True)
 class GroundRun:
-    """A ground part of a piece: vertices `start..end`, with a flat or round cap per end."""
+    """A ground part of a piece: vertices `start..end`, with a flat or round cap per end.
+
+    `edge_start` / `edge_end`: that end is an area-edge cut (on the boundary), so with a
+    clip polygon it is extended past the boundary (see the module docstring)."""
 
     piece: Piece
     start: int
     end: int
     flat_start: bool
     flat_end: bool
+    edge_start: bool = False
+    edge_end: bool = False
 
     @property
     def xy(self) -> np.ndarray:
@@ -160,7 +179,8 @@ def ground_runs(pieces: Sequence[Piece], bridge_end_keys: set[str]) -> list[Grou
     """The parts of every piece outside its decks, except tunnels in the graph only (a
     tunnel under a deck is draped like any ground way).
 
-    An end gets a flat cap when it meets a bridge span or is an area-edge cut.
+    An end gets a flat cap when it meets a bridge span or is an area-edge cut; an
+    area-edge end is also marked for the extension past the boundary.
     """
     runs: list[GroundRun] = []
     for piece in pieces:
@@ -171,26 +191,92 @@ def ground_runs(pieces: Sequence[Piece], bridge_end_keys: set[str]) -> list[Grou
         for s, e, _ in sorted(piece.decks):
             bounds += [s, e]
         bounds.append(n - 1)
-        flat = [piece.at_area_edge(i) or key in bridge_end_keys for i, key in enumerate(piece.keys)]
+        edge = [piece.at_area_edge(i) for i in range(n)]
+        flat = [edge[i] or key in bridge_end_keys for i, key in enumerate(piece.keys)]
         for a, b in zip(bounds[0::2], bounds[1::2], strict=True):
             if b > a:
-                runs.append(GroundRun(piece, a, b, flat[a], flat[b]))
+                runs.append(GroundRun(piece, a, b, flat[a], flat[b], edge[a], edge[b]))
     return runs
 
 
-def buffer_run(run: GroundRun, decks: Mapping[str, BaseGeometry] | None = None) -> BaseGeometry:
+def edge_extension(
+    end: np.ndarray, direction: np.ndarray, half: float, clip: BaseGeometry
+) -> float:
+    """How far an area-edge end at `end` (on the boundary of `clip`), leaving along
+    `direction`, must run on so its flat cap clears the boundary across its whole width.
+
+    The cap line swept forward is cut by `clip`; the pieces that start at the stretch of
+    the cap line inside `clip` through `end` are the surface still inside, and the
+    extension is the farthest of them plus `EDGE_EXTENSION_MARGIN_M`, at most
+    `MAX_EDGE_EXTENSION_WIDTHS` widths. Parts of `clip` across a notch don't count.
+    """
+    d = np.asarray(direction, dtype=float)
+    d = d / float(np.hypot(*d))
+    perp = np.array([-d[1], d[0]])
+    limit = MAX_EDGE_EXTENSION_WIDTHS * 2 * half
+    left, right = end + half * perp, end - half * perp
+    sweep = Polygon([left, right, right + limit * d, left + limit * d])
+    at_end = Point(end)
+    cap_parts = shapely.get_parts(shapely.intersection(LineString([left, right]), clip))
+    cap = [g for g in cap_parts if not g.is_empty and g.distance(at_end) <= TOUCH_M]
+    need = 0.0
+    for piece in _polygons(shapely.intersection(sweep, clip)):
+        if not any(piece.distance(c) <= TOUCH_M for c in cap):
+            continue  # inside again beyond a notch: not this end's surface
+        coords = np.asarray(piece.exterior.coords)
+        need = max(need, float(((coords - end) @ d).max()))
+    return min(need + EDGE_EXTENSION_MARGIN_M, limit)
+
+
+def _extended(run: GroundRun, clip: BaseGeometry) -> np.ndarray:
+    """The run's centre line with each area-edge end extended past the boundary (along
+    its last segment of non-zero length; an end without one isn't extended)."""
+    half = run.piece.attrs.width_m / 2
+
+    def beyond(points: np.ndarray) -> np.ndarray | None:
+        end = points[-1]
+        for previous in points[-2::-1]:
+            d = end - previous
+            length = float(np.hypot(*d))
+            if length > 0:
+                d = d / length
+                return end + edge_extension(end, d, half, clip) * d
+        return None
+
+    xy = run.xy
+    if run.edge_start and (point := beyond(xy[::-1])) is not None:
+        xy = np.vstack([point, xy])
+    if run.edge_end and (point := beyond(xy)) is not None:
+        xy = np.vstack([xy, point])
+    return xy
+
+
+def buffer_run(
+    run: GroundRun,
+    decks: Mapping[str, BaseGeometry] | None = None,
+    clip: BaseGeometry | None = None,
+) -> BaseGeometry:
     """The run buffered to half its width, with its caps.
 
     A run that ends at a node inside a bridge span (`decks`: node key -> the footprint of
     the decks there) loses the part under that deck, so it doesn't run beneath it.
+
+    With a `clip` polygon (the boundary), an area-edge end is extended past the boundary
+    (`edge_extension`) and the shape is cut to `clip`, keeping the pieces that hold the
+    run's centre line (an extension that re-enters the polygon beyond a notch is dropped).
     """
     half = run.piece.attrs.width_m / 2
-    xy = run.xy
+    extend = clip is not None and (run.edge_start or run.edge_end)
+    xy = _extended(run, clip) if extend and clip is not None else run.xy
     shapes = [LineString(xy).buffer(half, cap_style="flat", quad_segs=QUAD_SEGS)]
     for flat_cap, point in ((run.flat_start, xy[0]), (run.flat_end, xy[-1])):
         if not flat_cap:
             shapes.append(Point(point).buffer(half, quad_segs=QUAD_SEGS))
     shape = shapely.union_all(shapes)
+    if extend and clip is not None:
+        centre = LineString(run.xy)
+        kept = [p for p in _polygons(shapely.intersection(shape, clip)) if p.intersects(centre)]
+        shape = shapely.union_all(kept) if kept else MultiPolygon()
     for i in (run.start, run.end):
         deck = (decks or {}).get(run.piece.keys[i])
         if deck is not None:
@@ -203,20 +289,25 @@ def merged_surfaces(
     decks: Mapping[str, BaseGeometry] | None = None,
     extra_road: Sequence[BaseGeometry] = (),
     extra_path: Sequence[BaseGeometry] = (),
+    clip: BaseGeometry | None = None,
 ) -> tuple[BaseGeometry, BaseGeometry]:
     """(road, path): the union of the drivable runs, and of the others minus road.
 
-    `decks` is passed to `buffer_run`. `extra_road` / `extra_path` (the ramp zones beyond
-    drivable / other deck ends) are added to the unions.
+    `decks` and `clip` are passed to `buffer_run`. `extra_road` / `extra_path` (the ramp
+    zones beyond drivable / other deck ends) are added to the unions. With `clip` (the
+    boundary polygon), both surfaces are cut to it, so they end on the boundary.
     """
     ordered = sorted(runs, key=lambda r: (r.piece.way_id, r.piece.index, r.start))
     road = shapely.union_all(
-        [buffer_run(r, decks) for r in ordered if r.piece.attrs.drivable] + list(extra_road)
+        [buffer_run(r, decks, clip) for r in ordered if r.piece.attrs.drivable] + list(extra_road)
     )
     path = shapely.union_all(
-        [buffer_run(r, decks) for r in ordered if not r.piece.attrs.drivable] + list(extra_path)
+        [buffer_run(r, decks, clip) for r in ordered if not r.piece.attrs.drivable]
+        + list(extra_path)
     )
     path = path.difference(road)
+    if clip is not None:
+        road, path = road.intersection(clip), path.intersection(clip)
     return _polygonal(road), _polygonal(path)
 
 

@@ -127,7 +127,10 @@ def test_ac8_test_area_counts_from_the_fixture(somero_area: SomeroArea) -> None:
     load = _json(somero_area.work / "01-load" / "report.json")
     buildings = _json(somero_area.pack / "buildings.json")["buildings"]
     osm = [b for b in buildings if b["id"].startswith("osm:")]
-    assert len(osm) == load["footprints"]["in_area"]
+    # Buildings crossing the test-area square are left out (world edge).
+    dropped = _json(somero_area.work / "10-world-edge" / "report.json")["dropped_buildings"]
+    dropped_osm = [d for d in dropped if d["id"].startswith("osm:")]
+    assert len(osm) == load["footprints"]["in_area"] - len(dropped_osm)
     # The one MML-only building of the test area (docs/specs/mml-only-buildings.md).
     assert [b["id"] for b in buildings if not b["id"].startswith("osm:")] == [
         "mml:rakennus/339002621"
@@ -332,7 +335,15 @@ def test_ac10_a_failed_place_check_fails_the_build_and_leaves_the_previous_pack(
     with pytest.raises(
         BuildError, match="pack check failed: .*(doesn't link back|isn't a building)"
     ):
-        run_build(area.config, "test", raw, area.pack, area.work, log=lambda _: None)
+        run_build(
+            area.config,
+            "test",
+            raw,
+            area.pack,
+            area.work,
+            map_dir=paths.map_dir(area.root, "somero"),
+            log=lambda _: None,
+        )
     assert _tree(area.pack) == before
     leftovers = [p.name for p in area.pack.parent.iterdir() if p.name != area.pack.name]
     assert leftovers == []
@@ -450,6 +461,9 @@ def test_ac13_fixture_has_no_contributor_metadata() -> None:
         con.close()
     assert tables <= {
         "rakennus",
+        "jarvi",
+        "virtavesialue",
+        "virtavesikapea",
         "gpkg_spatial_ref_sys",
         "gpkg_contents",
         "gpkg_geometry_columns",

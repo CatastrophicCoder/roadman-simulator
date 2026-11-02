@@ -347,6 +347,7 @@ class BuildingOverrides(_StrictJsonModel):
 class CommittedSchema:
     model: type[BaseModel]
     file: str
+    error: type[Exception] = PlacesError  # raised by `validate`
 
     def path(self) -> Path:
         return Path(str(resources.files("mapgen.build").joinpath("schemas", self.file)))
@@ -373,9 +374,9 @@ class CommittedSchema:
             self.model.model_validate_json(json.dumps(document))  # JSON mode: arrays
             jsonschema.validate(document, self.committed())
         except jsonschema.ValidationError as exc:
-            raise PlacesError(f"{what} does not match {self.file}: {exc.message}") from exc
+            raise self.error(f"{what} does not match {self.file}: {exc.message}") from exc
         except PydanticValidationError as exc:
-            raise PlacesError(f"invalid {what}: {exc}") from exc
+            raise self.error(f"invalid {what}: {exc}") from exc
 
     def validate_file(self, path: Path) -> None:
         self.validate(json.loads(path.read_text(encoding="utf-8")), path.name)

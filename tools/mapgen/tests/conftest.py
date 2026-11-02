@@ -16,6 +16,9 @@ from mapgen.http import HttpError
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOMERO_YAML = REPO_ROOT / "maps" / "somero" / "map.yaml"  # only for the smoke test
 FIXTURE_YAML = Path(__file__).resolve().parent / "fixtures" / "maps" / "testtown" / "map.yaml"
+# The testtown spawn area (x 40..120, n 95..130 local), inside the test area and clear of
+# the fixture's buildings, roads and water.
+FIXTURE_MARKERS = FIXTURE_YAML.parent / "markers.json"
 FIXED_NOW = datetime(2026, 10, 27, 12, 0, 0, tzinfo=UTC)
 FAKE_KEY = "s3cr3t-test-key-0123456789"
 
@@ -91,11 +94,20 @@ def fixture_data() -> dict[str, Any]:
 class TmpRepo:
     root: Path
 
-    def write_map(self, data: Mapping[str, Any], folder: str | None = None) -> Path:
+    def write_map(
+        self, data: Mapping[str, Any], folder: str | None = None, *, markers: bool = True
+    ) -> Path:
+        """Write map.yaml, and (unless `markers` is False or the folder has one) a copy of
+        the testtown fixture's markers.json."""
         path = self.root / "maps" / (folder or str(data["id"])) / "map.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(dict(data), sort_keys=False), encoding="utf-8")
+        if markers and not (path.parent / "markers.json").exists():
+            (path.parent / "markers.json").write_bytes(FIXTURE_MARKERS.read_bytes())
         return path
+
+    def map_dir(self, map_id: str) -> Path:
+        return self.root / "maps" / map_id
 
     def load(self, data: Mapping[str, Any], folder: str | None = None) -> MapConfig:
         return load_map_config(self.write_map(data, folder))
@@ -305,6 +317,7 @@ def fixture_build(tmp_path_factory: pytest.TempPathFactory) -> FixtureBuild:
     map_yaml = root / "maps" / "testtown" / "map.yaml"
     map_yaml.parent.mkdir(parents=True)
     shutil.copyfile(FIXTURE_YAML, map_yaml)
+    shutil.copyfile(FIXTURE_MARKERS, map_yaml.parent / "markers.json")
     (root / "tools" / "mapgen").mkdir(parents=True)
     raw = write_fixture_raw(root / "tools" / "mapgen" / "data" / "raw" / "testtown")
     pack = root / "game" / "maps" / "testtown"
@@ -315,6 +328,7 @@ def fixture_build(tmp_path_factory: pytest.TempPathFactory) -> FixtureBuild:
         raw,
         pack,
         work,
+        map_dir=map_yaml.parent,
         now=lambda: FIXED_NOW,
         log=lambda _: None,
     )
@@ -423,6 +437,27 @@ def somero_area(tmp_path_factory: pytest.TempPathFactory) -> SomeroArea:
     return build_somero_fixture(tmp_path_factory.mktemp("somero-area"))
 
 
+def write_markers(
+    map_dir: Path, ring_local: Any, origin: tuple[float, float] = FIXTURE_ORIGIN
+) -> Path:
+    """`map_dir/markers.json` with a spawn area given in local (x, n) metres."""
+    import json
+
+    from mapgen.geo import map_to_wgs84
+
+    points = []
+    for x, y in ring_local:
+        lon, lat = map_to_wgs84(x + origin[0], y + origin[1], "EPSG:3067")
+        points.append({"lat": round(lat, 7), "lon": round(lon, 7)})
+    path = map_dir / "markers.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"schema_version": 1, "spawn_area_wgs84": points}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 # A synthetic MML Topographic Database GeoPackage (table `rakennus`), written with sqlite3.
 
 GPKG_APPLICATION_ID = 0x47504B47  # "GPKG"
@@ -462,8 +497,12 @@ def write_rakennus_gpkg(
     srs_id: int = 3067,
     organization: str = "EPSG",
     table: str = "rakennus",
+    water: Mapping[str, list[tuple[int, Any]]] | None = None,
 ) -> Path:
-    """A GeoPackage with one feature table (default `rakennus`) of building polygons.
+    """A GeoPackage with one feature table (default `rakennus`) of building polygons, and
+    the water tables the `mml_topographic` adapter reads (`jarvi`, `virtavesialue`,
+    `virtavesikapea`), empty unless `water` gives their (mtk_id, geometry) rows. A table
+    named None in `water` (`{"jarvi": None}`) is left out.
 
     Each row: `mtk_id`, the polygon in the table's CRS (shapely geometry, a ready blob as
     bytes, or None for no geometry), `kohdeluokka` and `kayttotarkoitus`. Also writes the
@@ -522,6 +561,30 @@ def write_rakennus_gpkg(
                 "kerrosluku) VALUES (?, ?, ?, ?, 1)",
                 (blob, mtk_id, feature_class, use_class),
             )
+        tables = {"jarvi": "POLYGON", "virtavesialue": "POLYGON", "virtavesikapea": "LINESTRING"}
+        for name, kind in tables.items():
+            water_rows = (water or {}).get(name, [])
+            if water_rows is None:
+                continue
+            con.execute(
+                "INSERT INTO gpkg_contents VALUES (?, 'features', ?, '', "
+                "'2026-10-29T00:00:00Z', NULL, NULL, NULL, NULL, ?)",
+                (name, name, srs_id),
+            )
+            con.execute(
+                "INSERT INTO gpkg_geometry_columns VALUES (?, 'geom', ?, ?, 0, 0)",
+                (name, kind, srs_id),
+            )
+            con.execute(
+                f"CREATE TABLE {name} (fid INTEGER PRIMARY KEY AUTOINCREMENT, geom {kind}, "
+                "mtk_id INTEGER, kohdeluokka MEDIUMINT)"
+            )
+            for mtk_id, geometry in water_rows:
+                blob = geometry if isinstance(geometry, bytes) else gpkg_blob(geometry, srs_id)
+                con.execute(
+                    f"INSERT INTO {name} (geom, mtk_id, kohdeluokka) VALUES (?, ?, 1)",
+                    (blob, mtk_id),
+                )
         con.commit()
     finally:
         con.close()

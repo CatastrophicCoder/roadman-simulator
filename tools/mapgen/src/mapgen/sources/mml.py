@@ -8,7 +8,8 @@ Without a key, each MML source prints the manual download steps for MML's
 Karttapaikka file service and registers any files already in its raw folder.
 
 For builds, the DEM adapter loads its GeoTIFFs (mosaicked and warped to the map CRS),
-the lidar adapter loads the non-ground points of its LAZ files, the orthophoto adapter
+the lidar adapter loads the non-ground points of its LAZ files, the topographic adapter
+loads the buildings and the water of its GeoPackages, the orthophoto adapter
 lists the image files that overlap the area (the build reads them per tile for the debug
 textures), and the 3D buildings adapter is a stub until its file format is confirmed.
 """
@@ -39,7 +40,7 @@ from rasterio.merge import merge
 from rasterio.transform import Affine
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import transform_bounds
-from shapely.geometry import MultiPoint
+from shapely.geometry import LineString, MultiLineString, MultiPoint
 from shapely.geometry.base import BaseGeometry
 
 from mapgen import tm35
@@ -51,6 +52,7 @@ from mapgen.sources.base import (
     ELEVATION,
     IMAGERY,
     POINT_CLOUD,
+    WATER_AREAS,
     AdapterOptions,
     BuildingUseRecord,
     DownloadContext,
@@ -60,11 +62,14 @@ from mapgen.sources.base import (
     LoadContext,
     PointCloud,
     SkippedBuildingUse,
+    SkippedFeature,
     SourceAdapter,
     SourceData,
     SourceError,
     SourceLoadError,
     UseClassRule,
+    WaterArea,
+    WaterLine,
     valid_area,
 )
 
@@ -756,6 +761,83 @@ def read_rakennus(path: Path) -> tuple[list[BuildingUseRecord], list[SkippedBuil
     return records, skipped
 
 
+# Topographic Database water (docs/specs/world-edge-pipeline.md): lakes and wide rivers as
+# areas, narrow streams as lines. Ids are "mml:<table>/<mtk_id>".
+WATER_AREA_TABLES = ("jarvi", "virtavesialue")
+WATER_LINE_TABLES = ("virtavesikapea",)
+WATER_TABLES = (*WATER_AREA_TABLES, *WATER_LINE_TABLES)
+
+
+def _table_rows(con: sqlite3.Connection, path: Path, table: str) -> tuple[str, list[Any]]:
+    """The table's CRS and its (geometry blob, mtk_id) rows by mtk_id; `GpkgError` when the
+    file has no such table."""
+    exists = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    if exists is None:
+        raise GpkgError(f"{path} has no table {table!r}")
+    crs = _table_crs(con, table)
+    column = con.execute(
+        "SELECT column_name FROM gpkg_geometry_columns WHERE table_name = ?", (table,)
+    ).fetchone()[0]
+    rows = con.execute(f'SELECT "{column}", mtk_id FROM "{table}" ORDER BY mtk_id').fetchall()
+    return crs, rows
+
+
+def _parse_blob(blob: Any) -> BaseGeometry | None:
+    """The 2D shapely geometry of a GeoPackage blob (None for an empty one)."""
+    wkb = gpkg_wkb(bytes(blob))
+    if wkb is None:
+        return None
+    return shapely.force_2d(shapely.from_wkb(wkb))
+
+
+def read_water(path: Path) -> tuple[list[WaterArea], list[WaterLine], list[SkippedFeature]]:
+    """The water of a Topographic Database GeoPackage: areas from `WATER_AREA_TABLES`
+    (repaired with `make_valid`), lines from `WATER_LINE_TABLES` (a multi-line is split
+    into its parts, all with the record's id). Unreadable or empty records are skipped
+    with a reason. Raises `GpkgError` when a table is missing, naming it and the file."""
+    con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        tables = {table: _table_rows(con, path, table) for table in WATER_TABLES}
+    except sqlite3.DatabaseError as exc:
+        raise GpkgError(f"cannot read {path}: {exc}") from exc
+    finally:
+        con.close()
+    areas: list[WaterArea] = []
+    lines: list[WaterLine] = []
+    skipped: list[SkippedFeature] = []
+    for table, (crs, rows) in tables.items():
+        for blob, mtk_id in rows:
+            fid = f"mml:{table}/{mtk_id}"
+            if blob is None:
+                skipped.append(SkippedFeature(fid, "no geometry"))
+                continue
+            try:
+                shape = _parse_blob(blob)
+            except (GpkgError, shapely.errors.GEOSException, ValueError) as exc:
+                skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+                continue
+            if shape is None or shape.is_empty:
+                skipped.append(SkippedFeature(fid, "empty geometry"))
+                continue
+            tags = {"mml_table": table}
+            if table in WATER_AREA_TABLES:
+                area = valid_area(shape)
+                if area is None:
+                    skipped.append(SkippedFeature(fid, "polygon has no area after repair"))
+                    continue
+                areas.append(WaterArea(fid, area, crs, tags))
+            else:
+                parts = list(shape.geoms) if isinstance(shape, MultiLineString) else [shape]
+                good = [g for g in parts if isinstance(g, LineString) and g.length > 0]
+                if not good:
+                    skipped.append(SkippedFeature(fid, f"not a line ({shape.geom_type})"))
+                    continue
+                lines += [WaterLine(fid, g, crs, tags) for g in good]
+    return areas, lines, skipped
+
+
 class MmlTopographicAdapter(MmlBBoxAdapter):
     name = "mml_topographic"
     Options = TopographicOptions
@@ -763,16 +845,17 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
     product_name = "Maastotietokanta (Topographic Database)"
     layer = "topographic"
     default_process_id = "maastotietokanta_bbox"
-    provides = frozenset({BUILDING_USE})
+    provides = frozenset({BUILDING_USE, WATER_AREAS})
 
     def load(self, ctx: LoadContext) -> SourceData:
-        """The buildings (`rakennus`) of every GeoPackage in `mml/topographic/`.
+        """The buildings (`rakennus`) and the water (`jarvi`, `virtavesialue` and
+        `virtavesikapea`) of every GeoPackage in `mml/topographic/`.
 
-        Fails without a GeoPackage (with the download hint) or when one has no
-        `rakennus` table. A building in several files is kept once (the first file, by
+        Fails without a GeoPackage (with the download hint) or when one lacks any of
+        those tables. A building in several files is kept once (the first file, by
         name). Skipped records are kept once too (the first file), and not at all when
-        another file has a good record with the same id. The build reprojects the
-        records and drops those outside the area.
+        another file has a good record with the same id. Water records are kept once by
+        id too. The build reprojects the records and drops those outside the area.
         """
         folder = ctx.raw_dir / "mml" / self.layer
         files = [p for p in list_files(folder) if p.suffix.lower() in GPKG_SUFFIXES]
@@ -783,19 +866,38 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
             )
         records: dict[str, BuildingUseRecord] = {}
         skipped: dict[str, SkippedBuildingUse] = {}
+        water_areas: dict[str, WaterArea] = {}
+        water_lines: dict[str, list[WaterLine]] = {}
+        water_skipped: dict[str, SkippedFeature] = {}
         for path in files:
             try:
                 found, bad = read_rakennus(path)
+                areas, lines, bad_water = read_water(path)
             except GpkgError as exc:
                 raise SourceLoadError(f"[{ctx.source_name}] {exc}") from exc
             for record in found:
                 records.setdefault(record.id, record)
             for skip in bad:
                 skipped.setdefault(skip.id, skip)
+            for area in areas:
+                water_areas.setdefault(area.id, area)
+            by_id: dict[str, list[WaterLine]] = {}
+            for line in lines:
+                by_id.setdefault(line.id, []).append(line)
+            for fid, parts in by_id.items():
+                water_lines.setdefault(fid, parts)
+            for skip_water in bad_water:
+                water_skipped.setdefault(skip_water.id, skip_water)
+        known = set(water_areas) | set(water_lines)
         return SourceData(
             files=files,
             building_use=sorted(records.values(), key=_record_order),
             building_use_skipped=[s for s in skipped.values() if s.id not in records],
+            water_areas=sorted(water_areas.values(), key=_feature_order),
+            water_lines=[
+                line for fid in sorted(water_lines, key=_id_order) for line in water_lines[fid]
+            ],
+            water_skipped=[s for s in water_skipped.values() if s.id not in known],
         )
 
     def extra_inputs(self, options: MmlBBoxOptions) -> dict[str, Any]:
@@ -811,6 +913,15 @@ class MmlTopographicAdapter(MmlBBoxAdapter):
 def _record_order(record: BuildingUseRecord) -> tuple[int, str]:
     number = record.id.rsplit("/", 1)[-1]
     return (int(number) if number.isdigit() else -1, record.id)
+
+
+def _id_order(fid: str) -> tuple[str, int, str]:
+    table, _, number = fid.rpartition("/")
+    return (table, int(number) if number.isdigit() else -1, fid)
+
+
+def _feature_order(feature: WaterArea) -> tuple[str, int, str]:
+    return _id_order(feature.id)
 
 
 # Processes that take TM35 map sheet names.

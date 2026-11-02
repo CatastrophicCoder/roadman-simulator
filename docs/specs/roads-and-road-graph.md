@@ -139,6 +139,7 @@ The road graph defines a shared name format for map features. The place-informat
 - **Surfaces.** Each included way that is neither a bridge nor a tunnel is buffered to `width_m / 2` on each side. The buffered shapes are merged per surface type, so overlaps at intersections don't z-fight:
   - `road`: the union of all drivable ways;
   - `path`: the union of the non-drivable ways, minus the `road` surface.
+  - At an `area_edge` cut the surface runs past the boundary along the way's last segment and is clipped along the boundary, so it reaches the boundary across its whole width at any crossing angle (amended 2026-11-02, see "Amendments"). The `area_edge` node stays on the boundary.
 - **Draping.** The merged polygons are cut along the terrain mesh's triangle edges (the DEM grid lines and each cell's diagonal, taken from the same code that builds the terrain mesh). Each piece is triangulated inside its terrain triangle and gets that triangle's plane height plus `surface_offset_m`. The road surface is therefore parallel to the terrain mesh everywhere, exactly `surface_offset_m` above it, and the terrain can't poke through between DEM points. Proposed offset: 0.05 m. That is enough to avoid z-fighting with Godot 4's reversed-Z depth buffer at street level, and low enough that wheels don't visibly step at road edges. It is tunable in `map.yaml`.
 - **Collision.** Road and path surfaces get collision, so the car drives on the visible surface: node names `road-col` and `path-col`, one each per tile.
 - **Tiles.** Surfaces are split at tile edges and written into each tile's `.glb`, unlike buildings, which are never split. Vertices on a shared tile edge are identical in both tiles, so there are no gaps.
@@ -324,6 +325,15 @@ The implementation records an ADR (0012) for the `roads` block in `map.yaml`, th
 | 24 | gdUnit4 for the toggle, screenshots via `/verify`, and a playtest drive through the centre, over the origin bridge and along the cycleway under it |
 
 The test-area fixture must be recreated with roads before the pytest and gdUnit4 build tests can run in CI.
+
+## Amendments
+
+- 2026-11-02, decided by the user during the world edge pipeline (`docs/specs/world-edge-pipeline.md`, slice (a)): a ground run that ended at an `area_edge` cut used to get a flat cap perpendicular to the way at the cut node. Where a way crosses the boundary at an angle, one side of that cap stays inside the area, so the surface reached only part of the boundary stretch it crosses (at 20°, a 5.5 m road reached about 8 m of the 16.1 m it crosses), and roadblock spans built from it fell short. Now:
+  - Each run ending at an `area_edge` cut is extended past the node along its last segment, as far as the boundary needs: the farthest point of the boundary polygon in front of the flat cap (only the part connected to the cut node, not across a notch), plus 0.1 m. The extension is at most 4 road widths, which covers crossings down to about 7° to a straight boundary; at shallower angles the far side stops short of the boundary.
+  - Each extended run is cut to the boundary polygon, keeping only the parts that hold its centre line, and the merged `road` and `path` surfaces are then clipped to the boundary polygon. The clip polygon is the playable boundary passed into stage 4 (today the build area or the test-area square; later a custom polygon), not the bounding box.
+  - `road_graph.json` doesn't change: the `area_edge` nodes stay on the boundary, and the graph never follows the extension.
+  - The world edge's roadblock spans are therefore the merged surface's stretch of the boundary plus `roadblock.clearance_m`. A surface edge lying on the boundary within floating-point noise counts as covering it (10 µm).
+  - Bridge decks cut by the area edge keep their flat end at the cut.
 
 ## Open questions
 

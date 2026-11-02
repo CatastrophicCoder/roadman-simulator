@@ -141,7 +141,16 @@ class LidarBuild:
 
 def _build(root: Path, config: MapConfig, raw: Path) -> tuple[Path, Path]:
     pack, work = root / "pack", root / "work"
-    run_build(config, "test", raw, pack, work, now=lambda: FIXED_NOW, log=lambda _: None)
+    run_build(
+        config,
+        "test",
+        raw,
+        pack,
+        work,
+        map_dir=root / "maps" / config.id,
+        now=lambda: FIXED_NOW,
+        log=lambda _: None,
+    )
     return pack, work
 
 
@@ -496,7 +505,11 @@ def test_ac2_fixture_area_gets_lidar_heights_for_95_percent(
     buildings = list(_buildings(somero_fixture_build.pack).values())
     cut = _json(SOMERO_FIXTURE / "download-manifest.json")["files"]
     (osm,) = [e for e in cut if e["source"] == "osm"]
-    assert len(buildings) == osm["request"]["test_area_cut"]["footprints"]
+    # Footprints crossing the test-area square are left out (world edge).
+    dropped = _json(somero_fixture_build.work / "10-world-edge" / "report.json")
+    assert len(buildings) == osm["request"]["test_area_cut"]["footprints"] - len(
+        dropped["dropped_buildings"]
+    )
     lidar = [b for b in buildings if b["height_source"] == "mml_lidar"]
     assert len(lidar) >= 0.95 * len(buildings)
     for building in buildings:
@@ -524,13 +537,14 @@ def test_ac2_fixture_report_lists_sources_and_every_reason(
     assert set(lidar["rejected_counts"]) == {"few_points", "tree_cover", "too_low", "too_high"}
     assert lidar["buildings_checked"] == report["building_count"]
     assert sum(lidar["buffer_counts"].values()) == report["height_source_counts"]["mml_lidar"]
-    # Reference counts of the committed fixture (60 footprints, no rejections).
-    assert report["building_count"] == 60
-    assert report["height_source_counts"]["mml_lidar"] == 60
+    # Reference counts of the committed fixture (60 footprints, of which 6 cross the
+    # test-area square and are left out; no rejections).
+    assert report["building_count"] == 54
+    assert report["height_source_counts"]["mml_lidar"] == 54
     assert lidar["rejected_counts"] == dict.fromkeys(
         ("few_points", "tree_cover", "too_low", "too_high"), 0
     )
-    assert lidar["buffer_counts"] == {"1.0": 56, "0.5": 3, "0.0": 1}
+    assert lidar["buffer_counts"] == {"1.0": 50, "0.5": 3, "0.0": 1}
     assert lidar["single_returns"] == 0
 
 

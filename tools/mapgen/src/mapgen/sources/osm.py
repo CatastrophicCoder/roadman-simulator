@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pydantic import Field
 from shapely.errors import GEOSException
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
 from mapgen.geo import WGS84
@@ -34,6 +34,7 @@ from mapgen.sources.base import (
     PoiFeature,
     RoadWay,
     SkippedFeature,
+    SkippedWater,
     SourceAdapter,
     SourceData,
     SourceError,
@@ -431,6 +432,22 @@ def read_osm_water(path: Path) -> OsmWater:
     return osm_water(parse_osm(path))
 
 
+def _member_lines(
+    relation: _Relation, ways: dict[int, _Way], nodes: dict[int, Coord]
+) -> MultiLineString | None:
+    """The member ways of a relation as lines, through the nodes the data has; None when no
+    member way has two such nodes."""
+    lines = []
+    for kind, ref, _ in relation.members:
+        way = ways.get(ref) if kind == "way" else None
+        if way is None:
+            continue
+        coords = [nodes[n] for n in way.refs if n in nodes]
+        if len(coords) >= 2:
+            lines.append(LineString(coords))
+    return MultiLineString(lines) if lines else None
+
+
 def osm_water(data: OsmData) -> OsmWater:
     """Water areas and waterway lines, used to find roads that cross water.
 
@@ -438,7 +455,9 @@ def osm_water(data: OsmData) -> OsmWater:
     `waterway=riverbank`, with rings joined and repaired as for buildings. A relation that
     can't be closed completely (missing member ways or open rings, typically cut at the
     bbox edge; ADR 0005) is left out and listed in `skipped`: with a ring missing, an
-    island could look like water. Lines are the other ways with a `waterway` tag, whatever
+    island could look like water. Each left-out relation keeps the lines of its member
+    ways that could be read (`SkippedWater.geometry`), so the world edge can tell whether
+    it lies near the boundary. Lines are the other ways with a `waterway` tag, whatever
     its value; the build picks the values that imply a bridge.
     """
     nodes, ways = data.nodes, data.ways
@@ -448,21 +467,26 @@ def osm_water(data: OsmData) -> OsmWater:
         if not is_water_area(relation.tags):
             continue
         fid = f"osm:relation/{rel_id}"
+        located = _member_lines(relation, ways, nodes)
         if relation.tags.get("type") != "multipolygon":
             kind = relation.tags.get("type", "")
-            result.skipped.append(SkippedFeature(fid, f"unsupported relation type {kind!r}"))
+            reason = f"unsupported relation type {kind!r}"
+            result.skipped.append(SkippedWater(fid, reason, located, WGS84 if located else None))
             continue
         try:
             built = _relation_geometry(relation, ways, nodes)
         except (GEOSException, ValueError) as exc:
-            result.skipped.append(SkippedFeature(fid, f"geometry error: {exc}"))
+            reason = f"geometry error: {exc}"
+            result.skipped.append(SkippedWater(fid, reason, located, WGS84 if located else None))
             continue
         if built.geometry is None:
-            result.skipped.append(SkippedFeature(fid, built.reason))
+            result.skipped.append(
+                SkippedWater(fid, built.reason, located, WGS84 if located else None)
+            )
             continue
         if built.partial:
             reason = "incomplete multipolygon: " + ", ".join(built.partial)
-            result.skipped.append(SkippedFeature(fid, reason))
+            result.skipped.append(SkippedWater(fid, reason, located, WGS84 if located else None))
             continue
         result.areas.append(WaterArea(fid, built.geometry, WGS84, dict(relation.tags)))
         member_ways |= {ref for kind, ref, _ in relation.members if kind == "way"}

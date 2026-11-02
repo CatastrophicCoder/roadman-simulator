@@ -178,7 +178,15 @@ def test_build_fails_when_a_read_file_has_no_licence(
     raw = write_fixture_raw(tmp_repo.raw_dir("testtown"))
     (raw / "download-manifest.json").unlink()
     with pytest.raises(BuildError, match="not in the download manifest"):
-        run_build(config, "test", raw, tmp_path / "pack", tmp_path / "work", log=lambda _: None)
+        run_build(
+            config,
+            "test",
+            raw,
+            tmp_path / "pack",
+            tmp_path / "work",
+            map_dir=tmp_repo.map_dir("testtown"),
+            log=lambda _: None,
+        )
 
 
 def test_build_without_raw_data_exits_with_failure(
