@@ -4,6 +4,8 @@ Builds the closed edge of the playable area from the boundary ring: roadblocks w
 road graph's `area_edge` nodes are, land and water fences along the rest, the cliff's
 bottom height, the void trigger prisms and the spawn area check, and returns the
 `boundary.json` document. Writes `10-world-edge/report.json` and `boundary.geojson`.
+The cliff meshes are built afterwards from that document and the written tiles' terrain
+(`cliff.py`, called by `run_build`), which adds the `cliff` block to the report.
 
 Every part is a function of a `Ring` and plain inputs (surfaces, graph, heightfield,
 water), so it works for any simple ring. `boundary_for` picks the ring: the test-area

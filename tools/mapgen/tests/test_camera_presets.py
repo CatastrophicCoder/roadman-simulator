@@ -204,10 +204,17 @@ def test_committed_schema_matches_the_model() -> None:
 
 def test_somero_presets_are_valid() -> None:
     presets = parse_camera_presets(SOMERO_PRESETS.read_bytes(), SOMERO_PRESETS).presets
-    assert {"overview", "centre-street-level"} <= set(presets)
-    assert all(p.ground_relative for p in presets.values())
+    assert {"overview", "centre-street-level", "world-edge"} <= set(presets)
+    # Every preset is ground-relative except world-edge, which looks back at the boundary
+    # from outside the build area, where there is no terrain: its heights are absolute.
+    assert [name for name, p in presets.items() if not p.ground_relative] == ["world-edge"]
     street = presets["centre-street-level"]
     assert street.position[1] == pytest.approx(1.7)
+    from mapgen.build.area import build_area
+
+    area = build_area(load_map_config(REPO_ROOT / "maps" / "somero" / "map.yaml"), "full")
+    x, _, z = presets["world-edge"].position
+    assert not area.bounds.contains_point(x, -z)
 
 
 # Build

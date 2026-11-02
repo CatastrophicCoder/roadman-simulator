@@ -52,6 +52,21 @@ stage output in the work folder, so they test what the game will load.
   10,000 sampled points of the void band lie in a prism and no prism reaches over the
   playable area; the spawn area is inside the test area and its open ground passes the
   spawn check.
+- Cliff (`check_cliff`, criterion 14): the tiles the boundary passes through are
+  found from geometry (`boundary_tiles`: a written tile whose bounds meet the ring in a
+  straight stretch over 1 mm whose midpoint, moved 1 mm into the playable area, lies in
+  them), and exactly these have an `edge_cliff-col` node; every written tile has an
+  `edge_bottom` cap at `cliff.bottom_y`, facing down; every ledge stretch on the ring lies
+  on the playable side of its own tile (or of no written tile); the faces share no
+  vertices, every vertex normal is its face's unit normal and faces sharing an edge and a
+  normal are planar; the ledge's inner edges (its up-facing triangles' edges on the ring)
+  cover the whole ring with no gap over 1 mm; every roadblock and fence end has a ledge
+  vertex at its height (1 mm); no part of the ledge lies more than 1 mm inside the
+  playable area; the lowest cliff vertex is at `cliff.bottom_y` (1 mm); the caps cover the
+  playable area plus the ledge (within each tile's bounds and as a whole, without
+  overlaps; float32 slack 0.2 mm times the outline length); and the face reaches
+  `cliff.bottom_y` all along the cap's outline (samples every 0.5 m within 1 mm of a
+  vertical face's bottom edge).
 - Custom boundary polygon (`check_custom_boundary`, only when `boundary.json` has
   `source` "custom"): every terrain triangle, road graph node and edge polyline, POI
   position and outline, and kept building centroid lies inside the polygon grown by 1 mm.
@@ -70,12 +85,12 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jsonschema
 import numpy as np
 import shapely
-from shapely.geometry import LineString, shape
+from shapely.geometry import LineString, Polygon, shape
 from shapely.geometry.base import BaseGeometry
 
 from mapgen.build.export_glb import TERRAIN_NODE, from_gltf
@@ -83,6 +98,9 @@ from mapgen.build.pack_manifest import committed_schema
 from mapgen.build.places.categories import CATEGORIES, CATEGORY_SOURCES, NAME_SOURCES
 from mapgen.build.places.model import BUILDINGS_SCHEMA, POIS_NAME, POIS_SCHEMA, PlacesError
 from mapgen.config import RoadsConfig, WorldEdgeConfig
+
+if TYPE_CHECKING:
+    from mapgen.build.world_edge.ring import Ring
 
 TOLERANCE = 1e-6
 MM = 1e-3  # criteria 8, 9, 10, 11: 1 mm
@@ -136,10 +154,12 @@ def _require(condition: Any, message: Any) -> None:
 
 @dataclass
 class TileMeshes:
-    """A tile .glb read back: node name -> (local vertices, faces)."""
+    """A tile .glb read back: node name -> (local vertices, faces), and the local unit
+    vertex normals of the nodes that store them."""
 
     nodes: dict[str, tuple[np.ndarray, np.ndarray]]
     names: list[str] = field(default_factory=list)  # every glTF node name, duplicates kept
+    normals: dict[str, np.ndarray] = field(default_factory=dict)
 
     def buildings(self) -> list[str]:
         return [n for n in self.nodes if n.startswith("bld_") and not n.endswith("-colonly")]
@@ -208,23 +228,32 @@ def read_glb_meshes(path: Path) -> TileMeshes:
         return array.reshape(acc["count"], width) if width > 1 else array
 
     nodes: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    normals: dict[str, np.ndarray] = {}
     names = [str(node.get("name", "")) for node in gltf.get("nodes", [])]
     for node in gltf.get("nodes", []):
         if "mesh" not in node:
             continue
+        name = str(node.get("name", ""))
         primitive = gltf["meshes"][node["mesh"]]["primitives"][0]
         vertices = accessor(primitive["attributes"]["POSITION"]).astype(float)
+        stored = primitive["attributes"].get("NORMAL")
+        normal = None if stored is None else accessor(stored).astype(float)
         if "matrix" in node:
             m = np.array(node["matrix"], dtype=float).reshape(4, 4).T
             vertices = vertices @ m[:3, :3].T + m[:3, 3]
+            if normal is not None:
+                normal = normal @ np.linalg.inv(m[:3, :3])  # the inverse transpose
+                normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-300)
         _require(
             "rotation" not in node and "scale" not in node, f"{path}: unexpected node transform"
         )
         if "translation" in node:
             vertices = vertices + np.array(node["translation"], dtype=float)
         faces = accessor(primitive["indices"]).astype(np.int64).reshape(-1, 3)
-        nodes[str(node.get("name", ""))] = (from_gltf(vertices), faces)
-    return TileMeshes(nodes, names)
+        nodes[name] = (from_gltf(vertices), faces)
+        if normal is not None:
+            normals[name] = from_gltf(normal)
+    return TileMeshes(nodes, names, normals)
 
 
 class TriangleSampler:
@@ -416,6 +445,7 @@ def check_pack(
             extra = [n for n in meshes.nodes if n in ROAD_SURFACES or BRIDGE_NODE.match(n)]
             _require(not extra, f"no roads block, but {tid} has {extra}")
     roadblocks = check_world_edge(pack_dir, work_dir, manifest, world_edge)
+    check_cliff(pack_dir, manifest, tiles)
     check_custom_boundary(pack_dir, work_dir, manifest, tiles)
     return PackSummary(len(manifest["tiles"]), glb_buildings, road_summary, poi_count, roadblocks)
 
@@ -1551,6 +1581,303 @@ def check_world_edge(
             overlap <= AREA_TOLERANCE_M2, f"open ground overlaps obstacles by {overlap:.3f} m²"
         )
     return len(roadblocks)
+
+
+CLIFF_ON_RING_M = 2e-4  # float32 positions near 1 km are off by up to 6e-5 m
+CLIFF_INWARD_M = 1e-3  # a ring stretch's tile: its midpoint moved this far inward
+CLIFF_SAMPLE_M = 0.5  # spacing of the samples along the cap's outline (face check)
+# A stored normal is within CLIFF_NORMAL_TOLERANCE + 2 * CLIFF_ON_RING_M / h of the float32
+# face's normal, h the face's smallest altitude: moving a vertex by d turns the face by
+# at most about d / h. Faces with h under CLIFF_NORMAL_MIN_ALTITUDE_M aren't compared
+# (thin skirt slivers have no float32 direction to speak of).
+CLIFF_NORMAL_TOLERANCE = 1e-3
+CLIFF_NORMAL_MIN_ALTITUDE_M = 0.01
+
+
+def _circular_gaps(intervals: list[tuple[float, float]], length: float) -> float:
+    """The largest stretch of a ring `length` long that no interval (a, b), a < b,
+    covers."""
+    if not intervals:
+        return length
+    spans = sorted((a % length, a % length + (b - a)) for a, b in intervals)
+    largest = 0.0
+    reach = spans[0][1]
+    for a, b in spans[1:]:
+        largest = max(largest, a - reach)
+        reach = max(reach, b)
+    return max(largest, spans[0][0] + length - reach)
+
+
+def boundary_tiles(ring: "Ring", manifest_tiles: Sequence[dict[str, Any]]) -> list[str]:
+    """The written tiles the boundary passes through, from geometry alone: a tile whose
+    `bounds_local` box (closed) meets the ring in a straight stretch longer than 1 mm
+    whose midpoint, moved `CLIFF_INWARD_M` into the playable area, lies in the box. So a
+    stretch on a grid line between two tiles (or on the build area's edge) counts only
+    for the tile on its playable side. Sorted."""
+    line = ring.line()
+    result = []
+    for tile in manifest_tiles:
+        tile_box = shapely.box(*tile["bounds_local"])
+        shapely.prepare(tile_box)
+        hit = shapely.intersection(line, tile_box)
+        for part in shapely.get_parts(hit):
+            if part.geom_type != "LineString":  # a point where the ring only touches the box
+                continue
+            coords = np.asarray(part.coords)
+            mids = (coords[:-1] + coords[1:]) / 2
+            lengths = np.hypot(*np.diff(coords, axis=0).T)
+            if any(
+                tile_box.covers(shapely.Point(_inward(ring, mid)))
+                for mid, length in zip(mids, lengths, strict=True)
+                if length > MM
+            ):
+                result.append(str(tile["id"]))
+                break
+    return sorted(result)
+
+
+def _inward(ring: "Ring", point: np.ndarray) -> np.ndarray:
+    """`point` (on the ring) moved `CLIFF_INWARD_M` into the playable area, square to the
+    ring segment it lies on."""
+    s = ring.project(float(point[0]), float(point[1]))
+    return np.asarray(point - ring.normal(ring.segment_index(s)) * CLIFF_INWARD_M)
+
+
+def _flat_shading(tid: str, name: str, meshes: TileMeshes, down: bool) -> None:
+    """Every vertex normal of a node is its face's unit normal, the same for the three
+    vertices (within float32 rounding of the positions, see `CLIFF_NORMAL_TOLERANCE`);
+    with `down` every normal is (0, 0, -1)."""
+    vertices, faces = meshes.nodes[name]
+    normals = meshes.normals.get(name)
+    _require(normals is not None and len(normals) == len(vertices), f"{tid}/{name} has no normals")
+    per_face = normals[faces]
+    _require(
+        np.array_equal(per_face, np.repeat(per_face[:, :1], 3, axis=1)),
+        f"{tid}/{name}: the vertices of a face have different normals",
+    )
+    normal = per_face[:, 0]
+    _require(
+        np.allclose(np.linalg.norm(normal, axis=1), 1.0, atol=1e-6),
+        f"{tid}/{name}: a normal isn't a unit vector",
+    )
+    if down:
+        _require(
+            np.allclose(normal, [0.0, 0.0, -1.0], atol=1e-6), f"{tid}/{name} doesn't face down"
+        )
+    tri = vertices[faces]
+    cross = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    length = np.linalg.norm(cross, axis=1)
+    longest = np.linalg.norm(tri - np.roll(tri, 1, axis=1), axis=2).max(axis=1)
+    altitude = length / np.maximum(longest, 1e-300)
+    sound = altitude >= CLIFF_NORMAL_MIN_ALTITUDE_M
+    if sound.any():
+        off = np.linalg.norm(cross[sound] / length[sound, None] - normal[sound], axis=1)
+        allowed = CLIFF_NORMAL_TOLERANCE + 2 * CLIFF_ON_RING_M / altitude[sound]
+        worst = int(np.argmax(off - allowed))
+        _require(
+            off[worst] <= allowed[worst],
+            f"{tid}/{name}: a vertex normal is {off[worst]:.4f} off its face normal "
+            f"(allowed {allowed[worst]:.4f}) at {np.round(tri[sound][worst, 0], 3).tolist()}",
+        )
+
+
+def _planar(tid: str, name: str, meshes: TileMeshes) -> None:
+    """Triangles sharing an edge and a normal are one planar face (within float32)."""
+    vertices, faces = meshes.nodes[name]
+    normal = meshes.normals[name][faces[:, 0]]
+    tri = vertices[faces]
+    # Every edge as its two float32 end points (bit patterns) in a fixed order, so the two
+    # triangles sharing an edge give the same key.
+    ends = tri.astype(np.float32)[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2, 3)
+    bits = ends.view(np.uint32)
+    first, second = bits[:, 0], bits[:, 1]
+    rows = np.arange(len(bits))
+    differ = np.argmax(first != second, axis=1)
+    flip = first[rows, differ] > second[rows, differ]
+    keyed = np.where(flip[:, None, None], bits[:, ::-1], bits).reshape(len(bits), 6)
+    owner = np.repeat(np.arange(len(tri)), 3)
+    _, inverse, counts = np.unique(keyed, axis=0, return_inverse=True, return_counts=True)
+    shared = counts[inverse.ravel()] == 2
+    by_edge = np.argsort(inverse.ravel()[shared], kind="stable")
+    pairs = owner[shared][by_edge].reshape(-1, 2)
+    same = np.all(np.abs(normal[pairs[:, 0]] - normal[pairs[:, 1]]) <= 1e-9, axis=1)
+    pairs = pairs[same]
+    if len(pairs) == 0:
+        return
+    offset = np.abs(
+        np.einsum("kij,kj->ki", tri[pairs[:, 1]] - tri[pairs[:, 0], :1], normal[pairs[:, 0]])
+    ).max(axis=1)
+    worst = int(np.argmax(offset))
+    _require(
+        offset[worst] <= CLIFF_ON_RING_M,
+        f"{tid}/{name}: a face isn't planar ({offset[worst]:.4f} m off at "
+        f"{np.round(tri[pairs[worst, 1], 0], 3).tolist()})",
+    )
+
+
+def check_cliff(
+    pack_dir: Path, manifest: dict[str, Any], tiles: dict[str, Any] | None = None
+) -> int:
+    """The cliff checks (criterion 14) on a pack; returns the number of tiles with an
+    `edge_cliff-col` node."""
+    from mapgen.build.world_edge.cliff import BOTTOM_NODE, CLIFF_NODE
+    from mapgen.build.world_edge.ring import Ring
+
+    document = _json(pack_dir / "boundary.json")
+    ring = Ring.from_coords([_local_xz(p) for p in document["boundary"]["ring"]])
+    bottom = float(document["cliff"]["bottom_y"])
+    if tiles is None:
+        tiles = {t["id"]: (t, read_glb_meshes(pack_dir / t["file"])) for t in manifest["tiles"]}
+    written = {t["id"] for t in manifest["tiles"]}
+    boxes = {t["id"]: shapely.box(*t["bounds_local"]) for t in manifest["tiles"]}
+    through = boundary_tiles(ring, manifest["tiles"])
+    missing = [tid for tid in through if CLIFF_NODE not in tiles[tid][1].nodes]
+    _require(
+        not missing,
+        f"tile(s) the boundary passes through without {CLIFF_NODE}: {missing[:5]}",
+    )
+    extra = sorted(
+        tid for tid in written if CLIFF_NODE in tiles[tid][1].nodes and tid not in through
+    )
+    _require(not extra, f"{CLIFF_NODE} in tile(s) the boundary doesn't pass through: {extra[:5]}")
+    no_cap = sorted(tid for tid in written if BOTTOM_NODE not in tiles[tid][1].nodes)
+    _require(not no_cap, f"tile(s) without {BOTTOM_NODE}: {no_cap[:5]}")
+
+    polygon = ring.polygon()
+    shapely.prepare(polygon)
+    line = ring.line()
+    shapely.prepare(line)
+    written_boxes = shapely.STRtree([boxes[tid] for tid in sorted(written)])
+    lowest = np.inf
+    ledge_points: list[np.ndarray] = []
+    ledge_triangles: list[np.ndarray] = []
+    cap_triangles: dict[str, np.ndarray] = {}
+    bottom_edges: list[np.ndarray] = []
+    covered: list[tuple[float, float]] = []
+    for tid in sorted(tiles):
+        meshes = tiles[tid][1]
+        for name in (CLIFF_NODE, BOTTOM_NODE):
+            if name not in meshes.nodes:
+                continue
+            vertices, faces = meshes.nodes[name]
+            _require(
+                len(faces) > 0 and np.array_equal(np.sort(faces.ravel()), np.arange(faces.size)),
+                f"{tid}/{name}: faces share vertices (or don't use every vertex once)",
+            )
+            _flat_shading(tid, name, meshes, down=name == BOTTOM_NODE)
+            lowest = min(lowest, float(vertices[:, 2].min()))
+            tri = vertices[faces]
+            if name == BOTTOM_NODE:
+                off = np.abs(vertices[:, 2] - bottom).max()
+                _require(off <= MM, f"{tid}/{BOTTOM_NODE} is {off:.4f} m off cliff.bottom_y")
+                cap_triangles[tid] = tri
+                continue
+            _planar(tid, name, meshes)
+            stored = meshes.normals[name][faces[:, 0]]
+            vertical = np.abs(stored[:, 2]) < 1e-6
+            low = np.abs(tri[vertical, :, 2] - bottom) <= CLIFF_ON_RING_M
+            for a, b in ((0, 1), (1, 2), (2, 0)):
+                both = low[:, a] & low[:, b]
+                bottom_edges.append(tri[vertical][both][:, [a, b], :2])
+            cross = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+            length = np.linalg.norm(cross, axis=1)
+            up = cross[:, 2] > 0.5 * np.where(length > 0, length, 1.0)
+            ledge = tri[up]
+            ledge_triangles.append(ledge)
+            ledge_points.append(ledge.reshape(-1, 3))
+            inside = shapely.get_coordinates(
+                shapely.intersection(shapely.polygons(ledge[:, :, :2]), polygon)
+            )
+            depth = (
+                float(shapely.distance(shapely.points(inside), line).max()) if len(inside) else 0
+            )
+            _require(
+                depth <= MM,
+                f"{tid}/{CLIFF_NODE}: the ledge reaches {depth:.4f} m over the playable area",
+            )
+            for k0, k1 in ((0, 1), (1, 2), (2, 0)):
+                a, b = ledge[:, k0, :2], ledge[:, k1, :2]
+                on = (shapely.distance(shapely.points(a), line) <= CLIFF_ON_RING_M) & (
+                    shapely.distance(shapely.points(b), line) <= CLIFF_ON_RING_M
+                )
+                on &= shapely.distance(shapely.points((a + b) / 2), line) <= CLIFF_ON_RING_M
+                for p, q in zip(a[on], b[on], strict=True):
+                    s_p, s_q = ring.project(*p), ring.project(*q)
+                    if abs(s_q - s_p) > ring.length / 2:
+                        s_p, s_q = (
+                            (s_p + ring.length, s_q) if s_p < s_q else (s_p, s_q + ring.length)
+                        )
+                    covered.append((min(s_p, s_q), max(s_p, s_q)))
+                    # The ledge belongs to the tile on the playable side of its stretch (or,
+                    # where that tile isn't written, to some tile the boundary passes through).
+                    if float(np.hypot(*(q - p))) <= MM:
+                        continue
+                    point = shapely.Point(_inward(ring, (p + q) / 2))
+                    if boxes[tid].covers(point):
+                        continue
+                    _require(
+                        len(written_boxes.query(point, predicate="intersects")) == 0,
+                        f"{tid}/{CLIFF_NODE}: ledge on the boundary at "
+                        f"{np.round((p + q) / 2, 3).tolist()} belongs to another tile",
+                    )
+    gap = _circular_gaps(covered, ring.length)
+    _require(gap <= MM, f"the cliff ledge leaves a {gap:.4f} m gap along the boundary")
+    _require(
+        abs(lowest - bottom) <= MM,
+        f"the lowest cliff vertex is at {lowest:.4f}, not cliff.bottom_y {bottom}",
+    )
+
+    # The ledge's inner edge is at every roadblock and fence end's height.
+    points = np.concatenate(ledge_points) if ledge_points else np.zeros((0, 3))
+    tree = shapely.STRtree(shapely.points(points[:, :2]))
+    for item in [*document["roadblocks"], *document["fences"]]:
+        for end in (item["start"], item["end"]):
+            x, n = _local_xz(end)
+            near = tree.query(shapely.Point(x, n), predicate="dwithin", distance=MM)
+            heights = points[near, 2] if len(near) else np.zeros(0)
+            _require(
+                len(heights) and np.abs(heights - end[1]).min() <= MM,
+                f"{item['id']}: no ledge vertex at its end ({x:.3f}, {n:.3f}) at height {end[1]}",
+            )
+
+    # The cap covers the slab (the playable area plus the ledge): within each written
+    # tile's bounds, and as a whole (the outer cells reach past the build area under the
+    # ledge), without overlaps. Float32 positions move the outlines by CLIFF_ON_RING_M.
+    ledge_all = np.concatenate(ledge_triangles) if ledge_triangles else np.zeros((0, 3, 3))
+    slab = shapely.union_all([polygon, *shapely.polygons(ledge_all[:, :, :2])])
+    cap_parts = {tid: shapely.polygons(tri[:, :, :2]) for tid, tri in cap_triangles.items()}
+    for tid in sorted(cap_parts):
+        expected = shapely.intersection(slab, boxes[tid])
+        missing_area = shapely.difference(expected, shapely.union_all(cap_parts[tid])).area
+        _require(
+            missing_area <= expected.length * CLIFF_ON_RING_M,
+            f"{tid}/{BOTTOM_NODE} leaves {missing_area:.4f} m² of the slab in the tile uncovered",
+        )
+    every_cap = np.concatenate(list(cap_parts.values()))
+    caps = shapely.union_all(every_cap)
+    tolerance = slab.length * CLIFF_ON_RING_M
+    off = caps.symmetric_difference(slab).area
+    _require(off <= tolerance, f"the bottom cap differs from the slab by {off:.4f} m²")
+    overlap = float(shapely.area(every_cap).sum()) - caps.area
+    _require(overlap <= tolerance, f"the bottom cap overlaps itself by {overlap:.4f} m²")
+
+    # The face reaches bottom_y all along the cap's outline.
+    edges = np.concatenate(bottom_edges) if bottom_edges else np.zeros((0, 2, 2))
+    face_tree = shapely.STRtree(shapely.linestrings(edges))
+    outline = [g.exterior for g in shapely.get_parts(caps)]
+    outline += [r for g in shapely.get_parts(caps) for r in g.interiors if Polygon(r).area > 0.01]
+    for outline_ring in outline:
+        distances = np.arange(0.0, outline_ring.length, CLIFF_SAMPLE_M)
+        samples = shapely.line_interpolate_point(outline_ring, distances)
+        near = face_tree.query(samples, predicate="dwithin", distance=MM)
+        bare = np.setdiff1d(np.arange(len(samples)), near[0])
+        _require(
+            len(bare) == 0,
+            f"the cliff face doesn't reach cliff.bottom_y along the cap's outline at "
+            f"{len(bare)} of {len(samples)} samples, first at "
+            f"{np.round(shapely.get_coordinates(samples[bare[:1]]), 3).tolist()}",
+        )
+    return sum(1 for _, meshes in tiles.values() if CLIFF_NODE in meshes.nodes)
 
 
 def check_custom_boundary(

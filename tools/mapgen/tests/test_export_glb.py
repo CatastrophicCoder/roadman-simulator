@@ -8,7 +8,9 @@ from mapgen.build.export_glb import (
     ExportError,
     MeshNode,
     export_glb,
+    flat_shaded,
     from_gltf,
+    read_glb_json,
     read_glb_node_names,
     to_gltf,
 )
@@ -64,3 +66,57 @@ def test_nan_vertices_are_rejected(tmp_path: Path) -> None:
     bad[0, 2] = np.nan
     with pytest.raises(ExportError, match="NaN"):
         export_glb(tmp_path / "t.glb", [MeshNode("a", bad, QUAD_FACES)])
+
+
+# Flat-shaded nodes (the world edge cliff): two triangles of one vertical quad and one
+# of a sloped ledge, each with its own face normal.
+FLAT = np.array(
+    [
+        [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 5.0]],
+        [[0.0, 0.0, 0.0], [10.0, 0.0, 5.0], [0.0, 0.0, 5.0]],
+        [[0.0, 0.0, 5.0], [10.0, 0.0, 5.0], [10.0, 2.0, 5.5]],
+    ]
+)
+
+
+def _face_normals(triangles: np.ndarray) -> np.ndarray:
+    cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    return cross / np.linalg.norm(cross, axis=1, keepdims=True)
+
+
+def test_flat_shaded_nodes_share_no_vertices_and_keep_their_face_normals(tmp_path: Path) -> None:
+    normals = _face_normals(FLAT)
+    node = flat_shaded("edge_cliff-col", FLAT, normals, "edge_cliff")
+    path = export_glb(tmp_path / "t.glb", [MeshNode("terrain-col", QUAD, QUAD_FACES), node])
+    stored = glb_primitive(path, "edge_cliff-col")
+    assert stored["indices"].ravel().tolist() == list(range(9))
+    assert np.allclose(from_gltf(stored["POSITION"]), FLAT.reshape(-1, 3), atol=1e-6)
+    assert np.array_equal(
+        stored["NORMAL"], to_gltf(np.repeat(normals, 3, axis=0)).astype(np.float32)
+    )
+    assert "TEXCOORD_0" not in stored
+    gltf = read_glb_json(path)
+    (mesh_node,) = [n for n in gltf["nodes"] if n.get("name") == "edge_cliff-col"]
+    primitive = gltf["meshes"][mesh_node["mesh"]]["primitives"][0]
+    assert gltf["materials"][primitive["material"]]["name"] == "edge_cliff"
+
+
+def test_flat_shaded_normals_are_written_as_given_not_recomputed(tmp_path: Path) -> None:
+    """A normal that isn't the face's own (here: every face pointing east) is stored as
+    it is: the exporter never recomputes given normals."""
+    east = np.tile([1.0, 0.0, 0.0], (len(FLAT), 1))
+    path = export_glb(tmp_path / "t.glb", [flat_shaded("edge_cliff-col", FLAT, east)])
+    assert np.allclose(glb_primitive(path, "edge_cliff-col")["NORMAL"], [[1.0, 0.0, 0.0]] * 9)
+
+
+def test_flat_shaded_needs_one_normal_per_triangle() -> None:
+    with pytest.raises(ExportError, match="3 triangles but 2 normals"):
+        flat_shaded("edge_cliff-col", FLAT, _face_normals(FLAT)[:2])
+
+
+def test_invalid_given_normals_are_rejected(tmp_path: Path) -> None:
+    bad = np.full((4, 3), np.nan)
+    with pytest.raises(ExportError, match="invalid normals"):
+        export_glb(tmp_path / "t.glb", [MeshNode("terrain-col", QUAD, QUAD_FACES, bad)])
+    with pytest.raises(ExportError, match="invalid normals"):
+        export_glb(tmp_path / "t.glb", [MeshNode("terrain-col", QUAD, QUAD_FACES, bad[:2])])

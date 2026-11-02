@@ -29,6 +29,10 @@ the reports. A full build of a map with a custom boundary polygon
 instead: building and POI centroids, road ways, surfaces and the terrain mesh, which is
 cut along it (`terrain/clip.py`). The tile grid stays the build area's, but a tile with no
 terrain inside the polygon isn't written. A building the polygon crosses fails the build.
+The cliff (`world_edge/cliff.py`) is built from `boundary.json`'s ring, roadblocks, fences
+and cliff values and the written tiles' terrain edge: every written tile the boundary
+passes through gets an `edge_cliff-col` node (ledge, face, seams and skirt) and every
+written tile an `edge_bottom` cap, both flat-shaded with the material `edge_cliff`.
 """
 
 import shutil
@@ -44,7 +48,7 @@ import shapely
 from shapely.geometry import Polygon
 
 from mapgen import __version__
-from mapgen.build.area import AreaName, Tile, build_area
+from mapgen.build.area import AreaName, BuildArea, Tile, build_area
 from mapgen.build.buildings import BuildingsResult, match_measured_heights, resolve_buildings
 from mapgen.build.camera_presets import (
     PRESETS_NAME,
@@ -113,7 +117,16 @@ from mapgen.build.world_edge import (
     boundary_for,
     build_world_edge,
 )
+from mapgen.build.world_edge.cliff import (
+    Cliff,
+    CliffError,
+    Tiling,
+    build_cliff,
+    ring_items,
+    ring_profile,
+)
 from mapgen.build.world_edge.model import BOUNDARY_NAME, BOUNDARY_SCHEMA, BoundaryError
+from mapgen.build.world_edge.ring import Ring
 from mapgen.build.world_edge.spawn import crossing_buildings
 from mapgen.config import MapConfig
 from mapgen.geo import BBox
@@ -442,6 +455,18 @@ def run_build(
     report.fences = len(world.document["fences"])
     report.water_crossings = len(world.document["water_crossings"])
 
+    with stage("cliff"):
+        cliff = _build_cliff(config, area, boundary.ring, world.document, tiles, chunks)
+        world.report["cliff"] = cliff.report
+        write_json(work_dir / WORLD_EDGE_DIR / "report.json", world.report)
+        triangles = cliff.report["triangles"]
+        log(
+            f"[world-edge] cliff: {triangles['edge_cliff']} triangles in edge_cliff-col "
+            f"(ledge {triangles['ledge']}, face {triangles['face']}, seam "
+            f"{triangles['seam']}, skirt {triangles['skirt']}), {triangles['edge_bottom']} "
+            f"in edge_bottom, {len(cliff.nodes)} tiles"
+        )
+
     with stage("export"), ExitStack() as resources:
         by_tile = buildings.by_tile()
         unknown = set(by_tile) - {t.id for t in tiles}
@@ -506,6 +531,7 @@ def run_build(
                         nodes.append(MeshNode(name, vertices, faces))
                 if roads is not None:
                     nodes += roads.tile_nodes.get(tile.id, [])
+                nodes += cliff.nodes.get(tile.id, [])
                 export_glb(staging / TILES_DIR / f"{tile.id}.glb", nodes)
             BUILDINGS_SCHEMA.validate_file(
                 write_json(
@@ -549,6 +575,34 @@ def run_build(
 
     write_json(work_dir / "timings.json", report.timings_s)
     return report
+
+
+def _build_cliff(
+    config: MapConfig,
+    area: BuildArea,
+    ring: Ring,
+    document: dict[str, Any],
+    tiles: Sequence[Tile],
+    chunks: dict[str, TerrainChunk],
+) -> Cliff:
+    """The cliff ledge, face and bottom cap of every written tile, from `boundary.json`'s
+    ring, roadblocks, fences and `cliff` values and the written tiles' terrain edge."""
+    tiling = Tiling(
+        float(config.tile_size_m),
+        {t.id: t.bounds for t in area.tiles()},
+        frozenset(t.id for t in tiles),
+    )
+    try:
+        return build_cliff(
+            ring,
+            ring_items(document),
+            document["cliff"]["ledge_m"],
+            document["cliff"]["bottom_y"],
+            ring_profile(ring, [chunks[t.id] for t in tiles]),
+            tiling,
+        )
+    except CliffError as exc:
+        raise BuildError(f"world edge cliff: {exc}") from exc
 
 
 def _cut_report(cuts: Sequence[tuple[str, CutStats]], written: set[str]) -> dict[str, Any]:

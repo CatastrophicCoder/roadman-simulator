@@ -3,10 +3,13 @@
 Axes (glTF is Y-up): local east -> +X, up -> +Y, north -> -Z. Node names carry Godot's
 import suffixes: "terrain-col" (visual plus collision), "bld_<id>" (visual),
 "bld_<id>_c<k>-colonly" (collision only, k = 0.. per footprint part), and "road-col", "path-col" and
-"bridge_osm_way_<id>-col" (road surfaces and bridge decks, visual plus collision). After
-writing, the node names are read back from the file, because exporters may rename
-duplicates. A node can carry TEXCOORD_0 (the terrain does; buildings don't) and a plain
-named material (road surfaces and decks).
+"bridge_osm_way_<id>-col" (road surfaces and bridge decks, visual plus collision), and
+"edge_cliff-col" and "edge_bottom" (the world edge's cliff and bottom cap). After writing,
+the node names are read back from the file, because exporters may rename duplicates. A
+node can carry TEXCOORD_0 (the terrain does; buildings don't) and a plain named material
+(road surfaces, decks and the cliff). A flat-shaded node (`flat_shaded`, the cliff) has
+three vertices of its own per triangle, each with the triangle's normal, so no two faces
+share a vertex. Given normals are written as they are, never recomputed, and read back.
 """
 
 import json
@@ -43,6 +46,26 @@ class MeshNode:
     uv: np.ndarray | None = None
     # Name of a plain glTF material (the game replaces it); None: no material unless UVs.
     material: str | None = None
+
+
+def flat_shaded(
+    name: str, triangles: np.ndarray, normals: np.ndarray, material: str | None = None
+) -> MeshNode:
+    """A flat-shaded node from (m, 3, 3) local triangles and their (m, 3) unit face
+    normals: every triangle gets three vertices of its own carrying its normal, so faces
+    share no vertices. No UVs."""
+    tris = np.asarray(triangles, dtype=float).reshape(-1, 3, 3)
+    face_normals = np.asarray(normals, dtype=float).reshape(-1, 3)
+    if len(tris) != len(face_normals):
+        raise ExportError(f"node {name}: {len(tris)} triangles but {len(face_normals)} normals")
+    return MeshNode(
+        name,
+        tris.reshape(-1, 3),
+        np.arange(3 * len(tris), dtype=np.int64).reshape(-1, 3),
+        np.repeat(face_normals, 3, axis=0),
+        None,
+        material,
+    )
 
 
 def to_gltf(vertices: np.ndarray) -> np.ndarray:
@@ -97,6 +120,11 @@ def export_glb(path: Path, nodes: Sequence[MeshNode]) -> Path:
         vertices = to_gltf(node.vertices)
         if not np.all(np.isfinite(vertices)):
             raise ExportError(f"{path.name}: node {node.name} has NaN or infinite vertices")
+        if node.normals is not None and (
+            np.shape(node.normals) != np.shape(node.vertices)
+            or not np.all(np.isfinite(node.normals))
+        ):
+            raise ExportError(f"{path.name}: node {node.name} has invalid normals")
         normals = (
             vertex_normals(vertices, node.faces) if node.normals is None else to_gltf(node.normals)
         )
@@ -134,12 +162,14 @@ def export_glb(path: Path, nodes: Sequence[MeshNode]) -> Path:
 
 
 _COMPONENTS = {5123: "<u2", 5125: "<u4", 5126: "<f4"}
-_WIDTHS = {"SCALAR": 1, "VEC3": 3}
+_WIDTHS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3}
 
 
 def check_written(path: Path, nodes: Sequence[MeshNode]) -> None:
     """Read each mesh's positions and indices back from the file and compare them with
-    what was written (positions as float32 in glTF axes, indices exactly)."""
+    what was written (positions as float32 in glTF axes, indices exactly). A node with
+    given normals must have them stored unchanged (float32), and a node without UVs no
+    TEXCOORD_0."""
     data = path.read_bytes()
     json_len = struct.unpack_from("<I", data, 12)[0]
     gltf = json.loads(data[20 : 20 + json_len])
@@ -169,3 +199,11 @@ def check_written(path: Path, nodes: Sequence[MeshNode]) -> None:
         faces = np.asarray(node.faces)
         if indices.shape != faces.shape or not np.array_equal(indices, faces):
             raise ExportError(f"{path.name}: node {node.name}: indices differ when read back")
+        attributes = primitive["attributes"]
+        if node.normals is not None:
+            stored = accessor(attributes["NORMAL"]) if "NORMAL" in attributes else None
+            given = to_gltf(node.normals).astype(np.float32)
+            if stored is None or stored.shape != given.shape or not np.array_equal(stored, given):
+                raise ExportError(f"{path.name}: node {node.name}: normals differ when read back")
+        if node.uv is None and "TEXCOORD_0" in attributes:
+            raise ExportError(f"{path.name}: node {node.name}: UVs written without any given")

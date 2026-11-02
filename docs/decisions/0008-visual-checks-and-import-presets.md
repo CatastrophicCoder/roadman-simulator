@@ -38,3 +38,7 @@ The game now loads map packs (ADR 0006). Two things have to be settled for that 
 - Screenshots on macOS briefly show a window, and can't run over SSH without a logged-in session.
 - Screenshots from the opengl3 fallback aren't comparable with Forward+ ones.
 - With a test-area pack, presets outside the area are N/A rather than failures.
+
+## Amendment (2026-11-02): presets outside the loaded tiles
+
+Exit code 2 also covers a preset whose look-at point lies outside the loaded tiles' geometry (the x/z union of the tile meshes' AABBs, cliff overhang included), whether or not it is ground-relative, so an absolute-height preset such as `world-edge` (ADR 0015) is N/A on a test-area pack instead of rendering empty sky. The `--inspect` run's N/A when its centre ray hits nothing is the third case. The camera itself may be outside the tiles.

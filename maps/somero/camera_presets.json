@@ -24,6 +24,12 @@
       "look_at": [43.6, 1.7, 411.9],
       "fov": 70,
       "ground_relative": true
+    },
+    "world-edge": {
+      "position": [-285.4, 99.3, -1201.0],
+      "look_at": [-325.4, 72.3, -1173.0],
+      "fov": 70,
+      "ground_relative": false
     }
   }
 }

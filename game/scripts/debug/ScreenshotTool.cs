@@ -304,6 +304,21 @@ public partial class ScreenshotTool : Node
             return;
         }
 
+        // ADR 0008: with a test-area pack, a preset outside the area is N/A. Every tile loaded (checked in
+        // OnMapLoaded), so a look-at point beyond their meshes looks at no map: the image would show empty sky.
+        var extent = loader.LoadedGeometryExtent();
+        if (!PresetPlacement.LooksAtLoadedTiles(preset, extent))
+        {
+            var range = extent is { } e
+                ? FormattableString.Invariant($"x {e.MinX:0.#}..{e.MaxX:0.#}, z {e.MinZ:0.#}..{e.MaxZ:0.#}")
+                : "no tile meshes";
+            var lookAt = FormattableString.Invariant($"x {preset.LookAt.X}, z {preset.LookAt.Z}");
+            GD.Print(
+                $"N/A: outside built area (preset '{preset.Name}' looks at {lookAt}, outside the loaded tiles' meshes: {range})");
+            Finish(ScreenshotExitCode.OutsideBuiltArea, null);
+            return;
+        }
+
         var placement = PresetPlacement.Resolve(preset, (x, z) => loader.TerrainHeightAt((float)x, (float)z));
         if (placement.IsOutsideBuiltArea)
         {
@@ -334,7 +349,7 @@ public partial class ScreenshotTool : Node
             return;
         }
 
-        if (Request.Inspect && Inspector.SelectedBuilding is null)
+        if (Request.Inspect && Inspector!.SelectedBuilding is null)
         {
             Finish(
                 ScreenshotExitCode.Error,

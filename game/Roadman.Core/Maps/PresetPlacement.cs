@@ -33,6 +33,19 @@ public static class PresetPlacement
         terrainHitY is { } ground ? HeightResolution.At(ground + relativeHeight) : HeightResolution.OutsideBuiltArea;
 
     /// <summary>
+    /// Whether a preset looks at the loaded map: its look-at x/z lies inside <paramref name="loadedExtent"/>, the
+    /// x/z extent of the loaded tiles' meshes (edges included). Only x and z count, so ground-relative and absolute
+    /// presets are treated alike. A null extent (no tile meshes at all) contains nothing.
+    /// </summary>
+    /// <param name="preset">The preset.</param>
+    /// <param name="loadedExtent">The union of the loaded tiles' mesh extents, or null when there are none.</param>
+    public static bool LooksAtLoadedTiles(CameraPreset preset, PlanExtent? loadedExtent)
+    {
+        ArgumentNullException.ThrowIfNull(preset);
+        return loadedExtent is { } extent && extent.Contains(preset.LookAt.X, preset.LookAt.Z);
+    }
+
+    /// <summary>
     /// Resolves a preset's position and look-at point.
     /// An absolute preset is returned as is, without probing the terrain.
     /// For a ground-relative preset, no terrain under the position gives <see cref="PresetResolution.OutsideBuiltArea"/>.

@@ -1,9 +1,10 @@
-"""World edge, slices (a) and (b): the acceptance criteria on whole builds.
+"""World edge, slices (a) to (c): the acceptance criteria on whole builds.
 
 Criterion numbers (`acN`) refer to docs/specs/world-edge-pipeline.md. Slice (a) covers
 criteria 1-13, 15, 16 (default rectangle only), 18, 19 and 21; slice (b) the custom
-polygon (17 and the custom half of 16). The cliff meshes (14, 20) come later. The unit
-tests on synthetic rings are in test_world_edge.py; this file adds what they don't cover.
+polygon (17 and the custom half of 16); slice (c) the cliff meshes (14; 20 is the
+screenshot). The unit tests on synthetic rings are in test_world_edge.py and
+test_world_edge_cliff.py; this file adds what they don't cover.
 
 Four kinds of build, all fast:
 
@@ -50,6 +51,7 @@ from conftest import (
     SomeroArea,
     TmpRepo,
     build_somero_fixture,
+    glb_primitive,
     lidar_entry,
     read_tile,
     write_fixture_raw,
@@ -59,7 +61,7 @@ from conftest import (
 from mapgen import paths
 from mapgen.build import BuildError, BuildReport, run_build
 from mapgen.build.buildings import node_name
-from mapgen.build.export_glb import TERRAIN_NODE, read_glb_node_names
+from mapgen.build.export_glb import TERRAIN_NODE, from_gltf, read_glb_node_names
 from mapgen.build.markers import MARKERS_SCHEMA
 from mapgen.build.pack_checks import (
     PackCheckError,
@@ -2065,3 +2067,630 @@ def test_ac21_each_world_edge_pack_check_catches_a_corrupted_boundary_json(
     (pack / "boundary.json").write_text(json.dumps(document), encoding="utf-8")
     with pytest.raises(PackCheckError, match=message):
         check_world_edge(pack, work, manifest, cfg)
+
+
+# AC14: the cliff meshes (slice (c))
+#
+# Read back from the tiles of three builds: the Somero test area (the test-area square),
+# `edge_custom` (a custom polygon with convex and concave corners, one tile not written)
+# and `edge_rect` (the build area rectangle over the same data). Expected values come
+# from boundary.json (ring, roadblocks, fences, cliff) and the terrain meshes in the
+# same tiles. Positions are float32 in the GLB: about 6e-5 m at 1 km, so geometric
+# checks allow FLOAT32_M.
+
+FLOAT32_M = 2e-4
+CLIFF_BUILDS = ["somero", "edge_custom", "edge_rect"]
+
+
+@dataclass
+class CliffNode:
+    """A flat-shaded node read back: per-triangle local positions and vertex normals."""
+
+    triangles: np.ndarray  # (m, 3, 3) x east, n north, z up
+    normals: np.ndarray  # (m, 3, 3)
+    indices: np.ndarray  # (m, 3) as stored
+
+
+@dataclass
+class CliffPack:
+    name: str
+    pack: Path
+    manifest: dict[str, Any]
+    doc: dict[str, Any]
+    cliff: dict[str, CliffNode]  # tile id -> edge_cliff-col
+    caps: dict[str, CliffNode]  # tile id -> edge_bottom
+    terrain: dict[str, tuple[np.ndarray, np.ndarray]]
+    names: dict[str, list[str]]
+
+    @property
+    def ring(self) -> DocRing:
+        return DocRing.of(self.doc)
+
+    @property
+    def bottom(self) -> float:
+        return float(self.doc["cliff"]["bottom_y"])
+
+    @property
+    def ledge_m(self) -> float:
+        return float(self.doc["cliff"]["ledge_m"])
+
+    def all(self, nodes: dict[str, CliffNode]) -> CliffNode:
+        parts = list(nodes.values())
+        return CliffNode(
+            np.concatenate([p.triangles for p in parts]),
+            np.concatenate([p.normals for p in parts]),
+            np.concatenate([p.indices for p in parts]),
+        )
+
+    def ledge(self) -> np.ndarray:
+        """The up-facing (ledge) triangles of every tile's edge_cliff-col."""
+        node = self.all(self.cliff)
+        return node.triangles[node.normals[:, 0, 2] > 0.5]
+
+
+def _cliff_node(path: Path, name: str) -> CliffNode | None:
+    if name not in read_glb_node_names(path):
+        return None
+    stored = glb_primitive(path, name)
+    assert "TEXCOORD_0" not in stored, f"{path.name}/{name} has UVs"
+    indices = np.asarray(stored["indices"], dtype=np.int64)
+    positions = from_gltf(stored["POSITION"])
+    normals = from_gltf(stored["NORMAL"])
+    return CliffNode(positions[indices], normals[indices], indices)
+
+
+def _cliff_pack(name: str, pack: Path) -> CliffPack:
+    from mapgen.build.world_edge.cliff import BOTTOM_NODE, CLIFF_NODE
+
+    manifest = _json(pack / "manifest.json")
+    cliff: dict[str, CliffNode] = {}
+    caps: dict[str, CliffNode] = {}
+    terrain = {}
+    names = {}
+    for tile in manifest["tiles"]:
+        path = pack / tile["file"]
+        names[tile["id"]] = read_glb_node_names(path)
+        for nodes, wanted in ((cliff, CLIFF_NODE), (caps, BOTTOM_NODE)):
+            node = _cliff_node(path, wanted)
+            if node is not None:
+                nodes[tile["id"]] = node
+        terrain[tile["id"]] = read_glb_meshes(path).nodes[TERRAIN_NODE]
+    return CliffPack(
+        name, pack, manifest, _json(pack / "boundary.json"), cliff, caps, terrain, names
+    )
+
+
+@pytest.fixture(params=CLIFF_BUILDS)
+def cliff_pack(request: pytest.FixtureRequest) -> CliffPack:
+    if request.param == "somero":
+        return _cliff_pack("somero", request.getfixturevalue("somero_area").pack)
+    edge: EdgeMap = request.getfixturevalue(f"{request.param}_build")
+    return _cliff_pack(request.param, edge.pack)
+
+
+def _geometric_normals(triangles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    area = np.linalg.norm(cross, axis=1) / 2
+    return cross / np.where(area > 0, 2 * area, 1.0)[:, None], area
+
+
+def _through(ring_coords: Sequence[Sequence[float]], tiles: Sequence[dict[str, Any]]) -> set[str]:
+    """The tiles the boundary passes through (spec amendment, slice (c)): a tile whose
+    bounds meet the ring in a straight stretch longer than 1 mm, on the stretch's playable
+    side: of the two points 1 mm to either side of the stretch's midpoint, the one inside
+    the ring lies in the tile's bounds. A stretch on a grid line counts only for the tile
+    inside the ring."""
+    polygon = Polygon(ring_coords)
+    line = LineString([*ring_coords, ring_coords[0]])
+    result = set()
+    for tile in tiles:
+        bounds = box(*tile["bounds_local"])
+        for part in shapely.get_parts(line.intersection(bounds)):
+            if part.geom_type != "LineString":
+                continue
+            coords = np.asarray(part.coords)
+            for a, b in zip(coords[:-1], coords[1:], strict=True):
+                length = float(np.hypot(*(b - a)))
+                if length <= MM:
+                    continue
+                side = np.array([a[1] - b[1], b[0] - a[0]]) / length * MM
+                mid = (a + b) / 2
+                inward = [Point(q) for q in (mid + side, mid - side) if polygon.contains(Point(q))]
+                if len(inward) == 1 and bounds.covers(inward[0]):
+                    result.add(str(tile["id"]))
+    return result
+
+
+def test_ac14_every_tile_the_boundary_passes_through_has_the_cliff_and_every_tile_a_cap(
+    cliff_pack: CliffPack,
+) -> None:
+    from mapgen.build.pack_checks import boundary_tiles, check_import_names
+
+    through = _through(cliff_pack.ring.coords, cliff_pack.manifest["tiles"])
+    assert through and set(cliff_pack.cliff) == through
+    ring = Ring.from_coords(cliff_pack.ring.coords)
+    assert boundary_tiles(ring, cliff_pack.manifest["tiles"]) == sorted(through)
+    assert set(cliff_pack.caps) == {t["id"] for t in cliff_pack.manifest["tiles"]}
+    for tid, names in cliff_pack.names.items():
+        check_import_names(tid, names)  # edge_cliff-col and edge_bottom import as themselves
+        assert names.count("edge_bottom") == 1 and names.count("edge_cliff-col") <= 1
+    if cliff_pack.name == "edge_custom":
+        assert OUTSIDE_TILE not in cliff_pack.names  # not written, so no cliff either
+
+
+def test_ac14_faces_are_planar_flat_shaded_and_share_no_vertices(cliff_pack: CliffPack) -> None:
+    for nodes in (cliff_pack.cliff, cliff_pack.caps):
+        for tid, node in nodes.items():
+            assert np.array_equal(node.indices.ravel(), np.arange(node.indices.size)), tid
+            # One normal per face, a unit vector...
+            assert np.array_equal(node.normals, np.repeat(node.normals[:, :1], 3, axis=1)), tid
+            normal = node.normals[:, 0]
+            assert np.allclose(np.linalg.norm(normal, axis=1), 1.0, atol=1e-6), tid
+            # ... that is the face's own normal (well-conditioned faces; thin skirt
+            # slivers lose their direction to float32 positions).
+            geometric, area = _geometric_normals(node.triangles)
+            big = area > 0.01
+            assert np.abs(geometric[big] - normal[big]).max() < 1e-3, tid
+            # Triangles sharing an edge and a normal are one planar face.
+            edges: dict[bytes, list[int]] = {}
+            for k, tri in enumerate(node.triangles.astype(np.float32)):
+                for a, b in ((0, 1), (1, 2), (2, 0)):
+                    key = b"".join(sorted((tri[a].tobytes(), tri[b].tobytes())))
+                    edges.setdefault(key, []).append(k)
+            for pair in edges.values():
+                if len(pair) != 2 or not np.allclose(normal[pair[0]], normal[pair[1]]):
+                    continue
+                first, second = node.triangles[pair[0]], node.triangles[pair[1]]
+                offset = np.abs((second - first[0]) @ normal[pair[0]]).max()
+                assert offset <= FLOAT32_M, (tid, pair, offset)
+
+
+def test_ac14_the_face_reaches_bottom_y_all_around_the_slab(cliff_pack: CliffPack) -> None:
+    node = cliff_pack.all(cliff_pack.cliff)
+    bottom = cliff_pack.bottom
+    assert node.triangles[:, :, 2].min() == pytest.approx(bottom, abs=FLOAT32_M)
+    vertical = np.abs(node.normals[:, 0, 2]) < 1e-6
+    at_bottom = np.abs(node.triangles[:, :, 2] - bottom) <= FLOAT32_M
+    bottom_edges = [
+        LineString([t[a, :2], t[b, :2]])
+        for t, low in zip(node.triangles[vertical], at_bottom[vertical], strict=True)
+        for a, b in ((0, 1), (1, 2), (2, 0))
+        if low[a] and low[b]
+    ]
+    caps = shapely.union_all(shapely.polygons(cliff_pack.all(cliff_pack.caps).triangles[:, :, :2]))
+    outline = [g.exterior for g in shapely.get_parts(caps)]
+    outline += [r for g in shapely.get_parts(caps) for r in g.interiors if Polygon(r).area > 0.01]
+    tree = shapely.STRtree(bottom_edges)
+    for ring in outline:
+        samples = [ring.interpolate(d) for d in np.arange(0.0, ring.length, 0.5)]
+        near = tree.query(samples, predicate="dwithin", distance=MM)
+        assert set(near[0]) == set(range(len(samples))), "a stretch of the cap has no face"
+
+
+def test_ac14_every_written_tile_has_a_cap_at_bottom_y_facing_down(cliff_pack: CliffPack) -> None:
+    for tid, cap in cliff_pack.caps.items():
+        assert np.abs(cap.triangles[:, :, 2] - cliff_pack.bottom).max() <= FLOAT32_M, tid
+        assert np.array_equal(cap.normals[:, 0], np.tile([0.0, 0.0, -1.0], (len(cap.normals), 1)))
+        geometric, area = _geometric_normals(cap.triangles)
+        assert (geometric[area > 0.01, 2] < 0).all(), tid  # float32 may flip a sliver
+    caps = shapely.union_all(shapely.polygons(cliff_pack.all(cliff_pack.caps).triangles[:, :, :2]))
+    ledge = shapely.union_all(shapely.polygons(cliff_pack.ledge()[:, :, :2]))
+    slab = shapely.union_all([cliff_pack.ring.polygon, ledge])
+    assert caps.symmetric_difference(slab).area < 0.01 * slab.length * FLOAT32_M / MM
+
+
+def _ring_segments(triangles: np.ndarray, line: LineString) -> np.ndarray:
+    """Every triangle edge (k, 2, 3) whose ends and midpoint lie on the ring."""
+    edges = np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])
+    on = np.ones(len(edges), dtype=bool)
+    for points in (edges[:, 0, :2], edges[:, 1, :2], edges[:, :, :2].mean(axis=1)):
+        on &= shapely.distance(shapely.points(points), line) <= FLOAT32_M
+    return edges[on]
+
+
+def _segment_distance(points: np.ndarray, segments: np.ndarray) -> np.ndarray:
+    """3D distance from each point to the nearest segment (candidates within 1 mm in 2D)."""
+    tree = shapely.STRtree(shapely.linestrings(segments[:, :, :2]))
+    hits = tree.query(shapely.points(points[:, :2]), predicate="dwithin", distance=MM)
+    best = np.full(len(points), np.inf)
+    a, b = segments[hits[1], 0], segments[hits[1], 1]
+    d = b - a
+    p = points[hits[0]]
+    t = np.clip(((p - a) * d).sum(axis=1) / np.maximum((d**2).sum(axis=1), 1e-300), 0, 1)
+    np.minimum.at(best, hits[0], np.linalg.norm(a + d * t[:, None] - p, axis=1))
+    return best
+
+
+def test_ac14_the_ledge_inner_edge_is_on_the_ring_at_the_fence_and_roadblock_heights(
+    cliff_pack: CliffPack,
+) -> None:
+    from mapgen.build.pack_checks import TriangleSampler
+
+    ring = Ring.from_coords(cliff_pack.ring.coords)
+    ledge = cliff_pack.ledge()
+    vertices = ledge.reshape(-1, 3)
+    sampler = TriangleSampler(vertices, np.arange(len(vertices)).reshape(-1, 3))
+    for item in _items(cliff_pack.doc):
+        for end in (item["start"], item["end"]):
+            x, n = _local(end)
+            gap = np.hypot(vertices[:, 0] - x, vertices[:, 1] - n)
+            close = gap <= MM
+            assert close.any() and np.abs(vertices[close, 2] - end[1]).min() <= MM, item["id"]
+        # Between its ends the ledge's inner edge runs straight from height to height.
+        for fraction in (0.25, 0.5, 0.75):
+            s = item["s_start"] + fraction * (item["s_end"] - item["s_start"])
+            x, n = ring.point_at(s)
+            expected = item["start"][1] + fraction * (item["end"][1] - item["start"][1])
+            (height,) = sampler.height(np.array([[x, n]]), distance=FLOAT32_M)
+            assert height == pytest.approx(expected, abs=MM), (item["id"], fraction)
+
+
+def test_ac14_the_terrain_edge_meets_the_cliff_mesh_within_1_mm(cliff_pack: CliffPack) -> None:
+    """Every terrain vertex and edge midpoint on the ring (the build area or tile edge of a
+    rectangle, the cut edge of a custom polygon) lies on an edge of the cliff mesh."""
+    line = cliff_pack.ring.line
+    cliff_edges = _ring_segments(cliff_pack.all(cliff_pack.cliff).triangles, line)
+    checked = 0
+    for vertices, faces in cliff_pack.terrain.values():
+        on = _ring_segments(np.asarray(vertices)[np.asarray(faces)], line)
+        if len(on) == 0:
+            continue
+        points = np.concatenate([on[:, 0], on.mean(axis=1)])
+        distance = _segment_distance(points, cliff_edges)
+        assert distance.max() <= MM, points[np.argmax(distance)]
+        checked += len(points)
+    assert checked > cliff_pack.ring.length / 2  # at least one point per 2 m
+
+
+def test_ac14_the_ledge_is_ledge_m_wide_with_mitred_and_trimmed_corners(
+    cliff_pack: CliffPack,
+) -> None:
+    from mapgen.build.world_edge.cliff import MITRE_LIMIT
+
+    ring = Ring.from_coords(cliff_pack.ring.coords)
+    polygon, line, width = ring.polygon(), ring.line(), cliff_pack.ledge_m
+    ledge = cliff_pack.ledge()
+    shapes = shapely.polygons(ledge[:, :, :2])
+    union = shapely.union_all(shapes)
+    # Not over the playable area, and not over itself.
+    inside = shapely.get_coordinates(shapely.intersection(shapes, polygon))
+    assert len(inside) == 0 or shapely.distance(shapely.points(inside), line).max() <= FLOAT32_M
+    assert float(shapely.area(shapes).sum()) == pytest.approx(union.area, abs=0.01)
+    # ledge_m wide along every segment, away from its corners.
+    covered = union.buffer(FLOAT32_M)
+    clear = 2 * MITRE_LIMIT * width
+    for i in range(ring.n):
+        a, _ = ring.segment(i)
+        length = float(ring.cum[i + 1] - ring.cum[i])
+        for u in np.arange(clear, length - clear, 5.0):
+            p = a + ring.direction(i) * u
+            for offset, expect in ((width - MM, True), (width + MM, False)):
+                q = Point(p + ring.normal(i) * offset)
+                if not expect and line.distance(q) < width + MM / 2:
+                    continue  # another stretch of the ring is closer
+                assert covered.contains(q) == expect, (i, u, offset)
+    # Convex corners reach the mitre point; concave ones are cut along the bisector.
+    corners = 0
+    lengths = np.diff(ring.cum)
+    for v in range(ring.n):
+        if min(lengths[v], lengths[v - 1]) < clear:
+            continue
+        n0, n1 = ring.normal(v - 1), ring.normal(v)
+        m = (n0 + n1) / np.hypot(*(n0 + n1))
+        tip = ring.xy[v] + m * width / float(np.dot(m, n0))
+        d0, d1 = ring.direction(v - 1), ring.direction(v)
+        convex = d0[0] * d1[1] - d0[1] * d1[0] > 0
+        if convex and width / float(np.dot(m, n0)) > MITRE_LIMIT * width:
+            continue
+        assert np.hypot(*(ledge.reshape(-1, 3)[:, :2] - tip).T).min() <= FLOAT32_M, v
+        if not convex:
+            # No ledge triangle reaches across the bisector (beyond float32 noise).
+            bisector = LineString([ring.xy[v], tip])
+            inner = shapely.buffer(shapes, -FLOAT32_M)
+            assert shapely.length(shapely.intersection(inner, bisector)).max() == 0, v
+        corners += 1
+    assert corners >= 4
+
+
+def test_ac14_a_stretch_on_a_grid_line_counts_only_for_the_tile_inside() -> None:
+    """A 50 m square on 50 m tiles: its east edge lies on x = 50, on the bounds of both
+    tile_x0_y0 and tile_x1_y0, but only tile_x0_y0 is on its playable side. tile_x1_y0
+    meets the ring only along that line (and its corners), so it isn't passed through."""
+    from mapgen.build.pack_checks import boundary_tiles
+
+    coords = [(0.0, 0.0), (50.0, 0.0), (50.0, 50.0), (0.0, 50.0)]
+    tiles = [
+        {"id": "tile_x0_y0", "bounds_local": [0.0, 0.0, 50.0, 50.0]},
+        {"id": "tile_x1_y0", "bounds_local": [50.0, 0.0, 100.0, 50.0]},
+        {"id": "tile_x0_y1", "bounds_local": [0.0, 50.0, 50.0, 100.0]},
+    ]
+    assert _through(coords, tiles) == {"tile_x0_y0"}
+    assert boundary_tiles(Ring.from_coords(coords), tiles) == ["tile_x0_y0"]
+
+
+def _first_ring_tile(pack: Path, manifest: dict[str, Any]) -> str:
+    doc = _json(pack / "boundary.json")
+    return sorted(_through([_local(p) for p in doc["boundary"]["ring"]], manifest["tiles"]))[0]
+
+
+def _ledge_on_ring(pack: Path, vertices: np.ndarray, faces: np.ndarray) -> int:
+    """The index of the ledge triangle with the longest edge on the ring."""
+    doc = _json(pack / "boundary.json")
+    line = DocRing.of(doc).line
+    tri = vertices[faces]
+    normal, _ = _geometric_normals(tri)
+    best, index = 0.0, -1
+    for k in np.flatnonzero(normal[:, 2] > 0.5):
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            ends = [Point(tri[k, a, :2]), Point(tri[k, b, :2])]
+            if all(line.distance(e) <= FLOAT32_M for e in ends):
+                length = float(np.hypot(*(tri[k, a, :2] - tri[k, b, :2])))
+                if length > best:
+                    best, index = length, int(k)
+    assert index >= 0
+    return index
+
+
+def _drop_triangle(meshes: Any, name: str, k: int) -> None:
+    """Triangle k of a flat-shaded node (vertices 3k..3k+2) and its normals removed."""
+    vertices, _ = meshes.nodes[name]
+    rows = [3 * k, 3 * k + 1, 3 * k + 2]
+    kept = np.delete(vertices, rows, axis=0)
+    meshes.nodes[name] = (kept, np.arange(len(kept)).reshape(-1, 3))
+    meshes.normals[name] = np.delete(meshes.normals[name], rows, axis=0)
+
+
+def _no_cliff(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    del tiles[tid][1].nodes["edge_cliff-col"]
+
+
+def _no_cap(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    del tiles[tid][1].nodes["edge_bottom"]
+
+
+def _shared_vertex(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    vertices, faces = tiles[tid][1].nodes["edge_cliff-col"]
+    faces = faces.copy()
+    faces[1, 0] = faces[0, 0]
+    tiles[tid][1].nodes["edge_cliff-col"] = (vertices, faces)
+
+
+def _ledge_gap(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    vertices, faces = tiles[tid][1].nodes["edge_cliff-col"]
+    _drop_triangle(tiles[tid][1], "edge_cliff-col", _ledge_on_ring(pack, vertices, faces))
+
+
+def _no_face(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    """The face triangle with the longest bottom edge removed, so one stretch of the
+    slab's outline has no face down to bottom_y."""
+    meshes = tiles[tid][1]
+    vertices, faces = meshes.nodes["edge_cliff-col"]
+    bottom = float(_json(pack / "boundary.json")["cliff"]["bottom_y"])
+    tri = vertices[faces]
+    low = np.abs(tri[:, :, 2] - bottom) <= FLOAT32_M
+    best, index = 0.0, -1
+    for k in np.flatnonzero(low.sum(axis=1) == 2):
+        a, b = tri[k, low[k], :2]
+        if (length := float(np.hypot(*(a - b)))) > best:
+            best, index = length, int(k)
+    assert best > 1.0
+    _drop_triangle(meshes, "edge_cliff-col", index)
+
+
+def _no_cap_triangle(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    meshes = tiles[tid][1]
+    _, area = _geometric_normals(meshes.nodes["edge_bottom"][0].reshape(-1, 3, 3))
+    _drop_triangle(meshes, "edge_bottom", int(np.argmax(area)))
+
+
+def _tilted_normal(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    """The three vertex normals of the largest cliff triangle tilted by about 0.1 rad."""
+    meshes = tiles[tid][1]
+    vertices, faces = meshes.nodes["edge_cliff-col"]
+    _, area = _geometric_normals(vertices[faces])
+    k = int(np.argmax(area))
+    normals = meshes.normals["edge_cliff-col"].copy()
+    tilted = normals[faces[k, 0]] + np.array([0.1, 0.1, 0.1])
+    normals[faces[k]] = tilted / np.linalg.norm(tilted)
+    meshes.normals["edge_cliff-col"] = normals
+
+
+def _one_normal_off(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    """One vertex normal of the largest cap triangle tilted: a smooth-shaded vertex."""
+    meshes = tiles[tid][1]
+    vertices, faces = meshes.nodes["edge_bottom"]
+    _, area = _geometric_normals(vertices[faces])
+    normals = meshes.normals["edge_bottom"].copy()
+    tilted = normals[faces[int(np.argmax(area)), 0]] + np.array([0.1, 0.0, 0.0])
+    normals[faces[int(np.argmax(area)), 0]] = tilted / np.linalg.norm(tilted)
+    meshes.normals["edge_bottom"] = normals
+
+
+def _cliff_moved_to_the_neighbour(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    """The tile's edge_cliff-col also copied into another tile the boundary passes
+    through, as if the build had assigned its pieces to both."""
+    manifest = _json(pack / "manifest.json")
+    doc = _json(pack / "boundary.json")
+    through = sorted(_through([_local(p) for p in doc["boundary"]["ring"]], manifest["tiles"]))
+    other = next(t for t in through if t != tid)
+    source, target = tiles[tid][1], tiles[other][1]
+    v0, _ = target.nodes["edge_cliff-col"]
+    v1, _ = source.nodes["edge_cliff-col"]
+    merged = np.concatenate([v0, v1])
+    target.nodes["edge_cliff-col"] = (merged, np.arange(len(merged)).reshape(-1, 3))
+    target.normals["edge_cliff-col"] = np.concatenate(
+        [target.normals["edge_cliff-col"], source.normals["edge_cliff-col"]]
+    )
+
+
+def _moved(meshes: Any, name: str, vertices: np.ndarray, changed: np.ndarray) -> None:
+    """`vertices` stored for the node, with the normals of every triangle using a
+    `changed` vertex set to its new face normal (as a build writing these positions
+    would), so only the check under test sees the change."""
+    _, faces = meshes.nodes[name]
+    meshes.nodes[name] = (vertices, faces)
+    normals = meshes.normals[name].copy()
+    touched = np.flatnonzero(changed[faces].any(axis=1))
+    geometric, _ = _geometric_normals(vertices[faces[touched]])
+    normals[faces[touched]] = geometric[:, None, :]
+    meshes.normals[name] = normals
+
+
+def _below_bottom(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    vertices, faces = tiles[tid][1].nodes["edge_cliff-col"]
+    vertices = vertices.copy()
+    lowest = int(np.argmin(vertices[:, 2]))
+    vertices[lowest, 2] -= 0.01
+    _moved(tiles[tid][1], "edge_cliff-col", vertices, np.arange(len(vertices)) == lowest)
+
+
+def _ledge_height(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    """Every ledge vertex at one fence or roadblock end raised by 1 cm."""
+    vertices, faces = tiles[tid][1].nodes["edge_cliff-col"]
+    k = _ledge_on_ring(pack, vertices, faces)
+    corner = vertices[faces[k, 0]]
+    doc = _json(pack / "boundary.json")
+    ends = np.array([_local(e) for i in _items(doc) for e in (i["start"], i["end"])])
+    x, n = ends[np.argmin(np.hypot(*(ends - corner[:2]).T))]
+    normal, _ = _geometric_normals(vertices[faces])
+    up = np.repeat(normal[:, 2] > 0.5, 3)
+    at = up & (np.hypot(vertices[:, 0] - x, vertices[:, 1] - n) <= MM)
+    vertices = vertices.copy()
+    vertices[at, 2] += 0.01
+    _moved(tiles[tid][1], "edge_cliff-col", vertices, at)
+
+
+def _over_playable(pack: Path, tiles: dict[str, Any], tid: str) -> None:
+    """A ledge vertex on the ring moved 1 cm into the playable area."""
+    vertices, faces = tiles[tid][1].nodes["edge_cliff-col"]
+    k = _ledge_on_ring(pack, vertices, faces)
+    ring = Ring.from_coords(DocRing.of(_json(pack / "boundary.json")).coords)
+    vertices = vertices.copy()
+    changed = np.zeros(len(vertices), dtype=bool)
+    for index in faces[k]:
+        x, n = vertices[index, :2]
+        if ring.line().distance(Point(x, n)) <= FLOAT32_M:
+            normal = ring.normal(ring.segment_index(ring.project(float(x), float(n))))
+            vertices[index, :2] -= normal * 0.01
+            changed[index] = True
+            break
+    _moved(tiles[tid][1], "edge_cliff-col", vertices, changed)
+
+
+CLIFF_CORRUPTIONS: dict[str, tuple[Callable[[Path, dict[str, Any], str], None], str]] = {
+    "no-edge-cliff-in-a-ring-tile": (_no_cliff, "passes through without edge_cliff-col"),
+    "no-cap": (_no_cap, "without edge_bottom"),
+    "shared-vertex": (_shared_vertex, "faces share vertices"),
+    "gap-in-the-ledge": (_ledge_gap, "gap along the boundary"),
+    "vertex-below-bottom-y": (_below_bottom, "lowest cliff vertex"),
+    "ledge-off-a-fence-end-height": (_ledge_height, "no ledge vertex at its end"),
+    "ledge-over-the-playable-area": (_over_playable, r"reaches 0\.01\d* m over the playable"),
+    "missing-face-triangle": (_no_face, "face doesn't reach cliff.bottom_y"),
+    "missing-cap-triangle": (_no_cap_triangle, "edge_bottom leaves .* m² of the slab"),
+    "vertex-normals-off-their-face": (_tilted_normal, r"vertex normal is 0\.1\d* off its face"),
+    "one-vertex-normal-off": (_one_normal_off, "vertices of a face have different normals"),
+    "ledge-also-in-another-tile": (_cliff_moved_to_the_neighbour, "belongs to another tile"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(CLIFF_CORRUPTIONS))
+def test_ac14_each_cliff_pack_check_catches_a_corrupted_tile(
+    case: str, somero_area: SomeroArea
+) -> None:
+    from mapgen.build.pack_checks import check_cliff
+
+    mutate, message = CLIFF_CORRUPTIONS[case]
+    pack = somero_area.pack
+    manifest = _json(pack / "manifest.json")
+    tiles = {t["id"]: (t, read_glb_meshes(pack / t["file"])) for t in manifest["tiles"]}
+    assert check_cliff(pack, manifest, tiles) == len(tiles)  # the pack passes
+    mutate(pack, tiles, _first_ring_tile(pack, manifest))
+    with pytest.raises(PackCheckError, match=message):
+        check_cliff(pack, manifest, tiles)
+
+
+def test_ac14_the_planarity_check_catches_a_bent_quad() -> None:
+    """Two triangles sharing an edge and the stored normal (0, 0, 1), one with its far
+    corner 1 cm up: a quad bent along its diagonal. A flat one passes."""
+    from mapgen.build.pack_checks import TileMeshes, _planar
+
+    def quad(lift: float) -> TileMeshes:
+        v = np.array([[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 0, 0], [2, 2, 0], [0, 2, lift]])
+        normals = np.tile([0.0, 0.0, 1.0], (6, 1))
+        faces = np.arange(6).reshape(2, 3)
+        return TileMeshes(
+            {"edge_cliff-col": (v.astype(float), faces)}, [], {"edge_cliff-col": normals}
+        )
+
+    _planar("t", "edge_cliff-col", quad(0.0))
+    with pytest.raises(PackCheckError, match=r"isn't planar \(0\.0100 m off"):
+        _planar("t", "edge_cliff-col", quad(0.01))
+
+
+@pytest.mark.parametrize("keep", [False, True], ids=["moved", "copied"])
+def test_ac14_the_cliff_pack_check_catches_a_cliff_node_in_a_tile_off_the_boundary(
+    keep: bool, edge_rect_build: EdgeMap
+) -> None:
+    """edge_rect's 4 x 4 tiles: the rectangle runs through the 12 outer ones. An outer
+    tile's edge_cliff-col moved (or copied) into an inner tile, as a build assigning
+    pieces to the wrong tile would write it."""
+    from mapgen.build.pack_checks import check_cliff
+
+    pack = edge_rect_build.pack
+    manifest = _json(pack / "manifest.json")
+    tiles = {t["id"]: (t, read_glb_meshes(pack / t["file"])) for t in manifest["tiles"]}
+    doc = _json(pack / "boundary.json")
+    through = _through([_local(p) for p in doc["boundary"]["ring"]], manifest["tiles"])
+    inner = sorted(set(tiles) - through)
+    assert len(through) == 12 and len(inner) == 4
+    assert check_cliff(pack, manifest, tiles) == 12
+    source, target = tiles[sorted(through)[0]][1], tiles[inner[0]][1]
+    target.nodes["edge_cliff-col"] = source.nodes["edge_cliff-col"]
+    target.normals["edge_cliff-col"] = source.normals["edge_cliff-col"]
+    if not keep:
+        del source.nodes["edge_cliff-col"]
+    message = "doesn't pass through" if keep else "passes through without edge_cliff-col"
+    with pytest.raises(PackCheckError, match=message):
+        check_cliff(pack, manifest, tiles)
+
+
+@pytest.mark.parametrize("which", ["edge_custom", "edge_rect"])
+def test_ac14_the_cliff_pack_checks_pass_on_the_full_builds(
+    which: str, request: pytest.FixtureRequest
+) -> None:
+    from mapgen.build.pack_checks import check_cliff
+
+    edge: EdgeMap = request.getfixturevalue(f"{which}_build")
+    manifest = _json(edge.pack / "manifest.json")
+    assert check_cliff(edge.pack, manifest) == len({t for t in _cliff_pack(which, edge.pack).cliff})
+
+
+def test_ac14_check_pack_runs_the_cliff_checks(
+    somero_area: SomeroArea, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mapgen.build.pack_checks as pack_checks
+
+    def failing(*args: Any, **kwargs: Any) -> int:
+        raise PackCheckError("cliff checked")
+
+    monkeypatch.setattr(pack_checks, "check_cliff", failing)
+    with pytest.raises(PackCheckError, match="cliff checked"):
+        check_pack(
+            somero_area.pack,
+            somero_area.work,
+            somero_area.config.roads,
+            world_edge=somero_area.config.world_edge,
+        )
+
+
+def test_ac14_the_report_lists_the_cliff(somero_area: SomeroArea) -> None:
+    report = _json(somero_area.work / "10-world-edge" / "report.json")["cliff"]
+    doc = _json(somero_area.pack / "boundary.json")
+    assert report["bottom_y"] == doc["cliff"]["bottom_y"]
+    assert report["ledge_m"] == doc["cliff"]["ledge_m"]
+    assert report["corners"] == {"mitre": 4}  # the test-area square
+    pack = _cliff_pack("somero", somero_area.pack)
+    triangles = report["triangles"]
+    assert triangles["edge_cliff"] == sum(len(n.triangles) for n in pack.cliff.values())
+    assert triangles["edge_bottom"] == sum(len(n.triangles) for n in pack.caps.values())
+    assert report["pieces_moved_to_another_tile"] == report["caps_moved_to_another_tile"] == []

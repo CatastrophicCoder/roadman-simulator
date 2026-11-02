@@ -108,6 +108,40 @@ public class MapLoaderTest
     }
 
     /// <summary>
+    /// The loaded tiles' mesh extent covers every tile's <c>bounds_local</c> (the terrain fills each tile), and a
+    /// look-at point far beyond the tiles is outside it, so the screenshot tool reports such a preset as N/A.
+    /// </summary>
+    [TestCase]
+    public async Task LoadedGeometryExtent_CoversEveryTileAndNotFarBeyond()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(WorldScenePath, true);
+        await runner.SimulateFrames(2);
+        var loader = Loader(runner);
+        var manifest = loader.Manifest!;
+
+        var extent = loader.LoadedGeometryExtent();
+        AssertBool(extent is not null).OverrideFailureMessage("no tile meshes loaded").IsTrue();
+        var e = extent!.Value;
+        foreach (var tile in manifest.Tiles)
+        {
+            var b = tile.Bounds;
+            // Godot z = -north; allow float rounding of the mesh vertices.
+            AssertBool(e.MinX <= b.MinX + HeightTolerance && e.MaxX >= b.MaxX - HeightTolerance
+                    && e.MinZ <= -b.MaxY + HeightTolerance && e.MaxZ >= -b.MinY - HeightTolerance)
+                .OverrideFailureMessage($"extent {e} doesn't cover tile {tile.Id} bounds {b}")
+                .IsTrue();
+        }
+
+        var farX = e.MaxX + 50_000;
+        var preset = new CameraPreset("far-look-at", new LocalPoint(0, 600, 0), new LocalPoint(farX, 0, 0), 70, false);
+        AssertBool(PresetPlacement.LooksAtLoadedTiles(preset, extent)).IsFalse();
+        var centre = manifest.Tiles[0].Bounds.GodotCentre;
+        var inside = preset with { LookAt = new LocalPoint(centre.X, 0, centre.Z) };
+        AssertBool(PresetPlacement.LooksAtLoadedTiles(inside, extent)).IsTrue();
+    }
+
+    /// <summary>
     /// The importer turns each <c>bld_*-colonly</c> glTF node into a standalone <see cref="StaticBody3D"/> (directly
     /// under the tile) holding a <see cref="CollisionShape3D"/>, and makes no mesh for it.
     /// </summary>

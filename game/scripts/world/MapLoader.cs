@@ -271,6 +271,35 @@ public partial class MapLoader : Node3D
     }
 
     /// <summary>
+    /// The x/z extent of the loaded tiles' visible geometry: the union of the global AABBs of every
+    /// <see cref="MeshInstance3D"/> under <see cref="Tiles"/>. Meshes can reach past a tile's <c>bounds_local</c> (the
+    /// <c>edge_cliff</c> ledge of a boundary tile overhangs it), and the extent includes them. Null when no tile mesh
+    /// is loaded.
+    /// </summary>
+    public PlanExtent? LoadedGeometryExtent()
+    {
+        var extents = new List<PlanExtent>();
+        var pending = new Stack<Node>();
+        pending.Push(Tiles);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            if (node is MeshInstance3D { Mesh: not null } mesh)
+            {
+                var aabb = mesh.GlobalTransform * mesh.GetAabb();
+                extents.Add(new PlanExtent(aabb.Position.X, aabb.Position.Z, aabb.End.X, aabb.End.Z));
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                pending.Push(child);
+            }
+        }
+
+        return PlanExtent.UnionOf(extents);
+    }
+
+    /// <summary>
     /// The terrain mesh of a loaded tile (the <c>terrain</c> node under <paramref name="tile"/>, a child of
     /// <see cref="Tiles"/>), or null when the tile has none.
     /// </summary>
