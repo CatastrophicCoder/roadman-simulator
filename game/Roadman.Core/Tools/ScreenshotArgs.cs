@@ -4,7 +4,7 @@ namespace Roadman.Core.Tools;
 
 /// <summary>
 /// The screenshot tool's user arguments (after <c>--</c> on the Godot command line):
-/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect]</c>.
+/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player]</c>.
 /// <c>--seed &lt;n&gt;</c> may stand among them; it belongs to <see cref="SeedArg"/>, which reads it, and is skipped here
 /// (its value is still checked and a repeat is rejected, so a bad seed is an argument error of the screenshot run too).
 /// </summary>
@@ -25,6 +25,10 @@ namespace Roadman.Core.Tools;
 /// Render with the place inspector on, its centre ray through the preset's look-at point. Debug builds only; the pack
 /// must have readable <c>buildings.json</c> and <c>pois.json</c>.
 /// </param>
+/// <param name="Player">
+/// Render the player in the third-person view: placed on the ground at the preset's look-at x/z, facing away from the
+/// preset's camera, seen through its player camera. Debug builds only; can't be combined with <paramref name="Inspect"/>.
+/// </param>
 public sealed record ScreenshotArgs(
     string Preset,
     string OutputPath,
@@ -32,7 +36,8 @@ public sealed record ScreenshotArgs(
     string? MapId = null,
     bool Orthophoto = false,
     bool RoadGraph = false,
-    bool Inspect = false)
+    bool Inspect = false,
+    bool Player = false)
 {
     public const string ScreenshotFlag = "--screenshot";
     public const string PresetsFlag = "--presets";
@@ -40,9 +45,10 @@ public sealed record ScreenshotArgs(
     public const string OrthophotoFlag = "--orthophoto";
     public const string RoadGraphFlag = "--road-graph";
     public const string InspectFlag = "--inspect";
+    public const string PlayerFlag = "--player";
 
     private const string Usage =
-        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{SeedArg.Flag} <n>]";
+        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{PlayerFlag}] [{SeedArg.Flag} <n>]";
 
     /// <summary>
     /// Parses the user arguments.
@@ -53,7 +59,8 @@ public sealed record ScreenshotArgs(
     /// </returns>
     /// <exception cref="ArgumentException">
     /// With <c>--screenshot</c>: a value is missing, an argument is repeated or unknown, the output isn't a <c>.png</c>,
-    /// the map id isn't a slug, or the <c>--seed</c> value isn't an integer.
+    /// the map id isn't a slug, the <c>--seed</c> value isn't an integer, or <c>--player</c> is given with
+    /// <c>--inspect</c>.
     /// </exception>
     public static ScreenshotArgs? Parse(IReadOnlyList<string> userArgs)
     {
@@ -73,6 +80,7 @@ public sealed record ScreenshotArgs(
         var orthophoto = false;
         var roadGraph = false;
         var inspect = false;
+        var player = false;
         var seenSeed = false;
 
         for (var i = 0; i < userArgs.Count; i++)
@@ -137,6 +145,14 @@ public sealed record ScreenshotArgs(
 
                     inspect = true;
                     break;
+                case PlayerFlag:
+                    if (player)
+                    {
+                        throw new ArgumentException($"{PlayerFlag} is given more than once");
+                    }
+
+                    player = true;
+                    break;
                 case SeedArg.Flag:
                     // Read by SeedArg.Parse; here a repeat is rejected and the value is only checked and skipped.
                     if (seenSeed)
@@ -157,7 +173,13 @@ public sealed record ScreenshotArgs(
             throw new ArgumentException($"the output path '{output}' must end in .png");
         }
 
-        return new ScreenshotArgs(preset!, output, presetsPath, mapId, orthophoto, roadGraph, inspect);
+        if (player && inspect)
+        {
+            // The inspector aims the screen centre at the look-at point; the player view aims it past the player.
+            throw new ArgumentException($"{PlayerFlag} can't be combined with {InspectFlag}");
+        }
+
+        return new ScreenshotArgs(preset!, output, presetsPath, mapId, orthophoto, roadGraph, inspect, player);
     }
 
     private static string Value(IReadOnlyList<string> args, int index, string error)
@@ -181,7 +203,8 @@ public static class ScreenshotExitCode
     /// Any failure: bad arguments, unknown preset, missing pack, a map that didn't load completely, headless
     /// display, flat-colour image, <c>--orthophoto</c> without orthophoto images in the pack, or
     /// <c>--road-graph</c> without a readable road graph or without the debug view (not a debug build), or
-    /// <c>--inspect</c> without place data or without the inspector (not a debug build).
+    /// <c>--inspect</c> without place data or without the inspector (not a debug build), or <c>--player</c> outside a
+    /// debug build, with <c>--inspect</c>, or when the player didn't spawn or reach the ground.
     /// </summary>
     public const int Error = 1;
 

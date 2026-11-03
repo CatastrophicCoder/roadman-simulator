@@ -144,7 +144,7 @@ The first playable (milestone 2, "On foot", in `docs/project-outline.md`): one p
 
 ### Debug camera
 
-- `DebugCamera` is added only in debug builds (`OS.IsDebugBuild()`), like the other debug views. Release builds have only the player camera.
+- `DebugCamera` is added only in debug builds (`DebugBuild.IsDebug`, the single helper of ADR 0016), like the other debug views. Release builds have only the player camera.
 - `debug_camera` toggles between the player camera and the debug camera. It is bound to the physical key left of 1 (§ on Finnish Mac keyboards, the backquote key on US layouts). The implementation checks which physical keycode Godot reports for that key on macOS ISO and on Windows (`Key.Quoteleft` or `Key.Section`), binds every one that differs, and records the result in `game/CLAUDE.md`.
   - Switching to the debug camera puts it at the player camera's current transform.
   - While it is on, the player gets no movement or jump input and stands still under gravity, and the player camera doesn't orbit. The debug camera keeps its WASD, Q/E, Shift and right-mouse controls.
@@ -160,8 +160,9 @@ New actions in `project.godot`, each with keyboard and gamepad events (`device` 
 | Action | Keyboard and mouse | Gamepad |
 | --- | --- | --- |
 | `move_forward`, `move_back`, `move_left`, `move_right` | W, S, A, D (physical keys) | left stick |
-| `run` | Shift, hold | left-stick click (`JoyButton.LeftStick`), toggle |
-| `jump` | Space | south face button (`JoyButton.A`) |
+| `run` | Shift, hold | none |
+| `run_toggle` | none | left-stick click, toggle |
+| `jump` | Space | south face button (button index 0) |
 | `camera_left`, `camera_right`, `camera_up`, `camera_down` | mouse motion (not an action) | right stick |
 | `debug_camera` | the key left of 1 (see "Debug camera") | none |
 
@@ -292,6 +293,10 @@ New actions in `project.godot`, each with keyboard and gamepad events (`device` 
   3. `PlayerCamera.StartPitchDegrees` (−15°) is the pitch the first spawn puts the camera at; `FollowSmoothing` is a time constant in seconds (0 = rigid).
   4. Map bodies stay on collision layer 1 and the player is on layer 2 (ADR 0016); the existing map rays (`MapLoader`, `StreetLabelHud`, `PlaceInspector`) use mask 1, so they never hit the player.
   5. Criterion 19's release check tests the single debug-build helper's release branch (ADR 0016), not the exported binary.
+- 2026-11-03, part B plan (the user's answers):
+  1. The left-stick click is its own action, `run_toggle`; `run` keeps only Shift (hold). One action can't tell a held key from a toggling click.
+  2. "Half tilt" (criterion 17) is the raw stick value halfway between the action's deadzone and full tilt: 0.6 raw with the 0.2 deadzone, which `Input.GetVector` remaps to 0.5 strength, so half the speed.
+  3. `debug_camera` is bound to both physical `Key.Quoteleft` (the key left of 1 on Windows and US Macs) and `Key.Section` (left of 1 on ISO Macs, such as the Finnish layout). On ISO Macs `Quoteleft` is the `<>` key beside left Shift, so it toggles too; acceptable for a debug-only key.
 - 2026-11-03, the user's playtest of part A: `WalkSpeed` doubled to 2.8 m/s and `RunSpeed` raised 50 % to 7.5 m/s; the rest felt right. Gamepad buttons are named generically (south, east, west and north face buttons, left and right sticks, left-stick click), and in-game button prompts will use generic glyphs.
 
 ## Open questions

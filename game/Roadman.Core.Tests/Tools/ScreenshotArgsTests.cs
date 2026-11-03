@@ -195,6 +195,58 @@ public class ScreenshotArgsTests
         Assert.Contains("[--inspect]", ex.Message);
     }
 
+    // ----- --player (docs/specs/player-on-foot.md, criterion 23) -----
+
+    [Fact]
+    public void Parse_Player_InAnyPosition()
+    {
+        var after = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--player"]);
+        var before = ScreenshotArgs.Parse(["--player", "--map", "x", "--screenshot", "a", "a.png", "--seed", "1"]);
+        var all = ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--player", "--road-graph", "--orthophoto"]);
+
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, null, Player: true), after);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, "x", Player: true), before);
+        Assert.Equal(new ScreenshotArgs("a", "a.png", null, null, Orthophoto: true, RoadGraph: true, Player: true), all);
+    }
+
+    [Fact]
+    public void Parse_WithoutPlayer_LeavesItOff()
+    {
+        Assert.False(ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--inspect"])!.Player);
+    }
+
+    [Fact]
+    public void Parse_WithoutScreenshotFlag_IgnoresPlayer()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--player"]));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--player", "--player")]
+    [InlineData("--screenshot", "a", "--player")]
+    [InlineData("--screenshot", "a", "a.png", "--player", "yes")]
+    public void Parse_PlayerRepeatedOrMisplaced_Throws(params string[] args)
+    {
+        Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--player", "--inspect")]
+    [InlineData("--inspect", "--screenshot", "a", "a.png", "--player")]
+    public void Parse_PlayerWithInspect_Throws(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--player", ex.Message);
+        Assert.Contains("--inspect", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_UnknownArgument_ListsPlayerInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--players"]));
+        Assert.Contains("[--player]", ex.Message);
+    }
+
     [Theory]
     [InlineData(3, 3, null)]
     [InlineData(2, 3, ScreenshotExitCode.Error)]

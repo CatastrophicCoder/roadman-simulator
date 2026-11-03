@@ -3,6 +3,7 @@ using Directory = System.IO.Directory;
 using IOException = System.IO.IOException;
 using Path = System.IO.Path;
 using System.Linq;
+using System.Threading.Tasks;
 using Godot;
 using Roadman.Core.Maps;
 using Roadman.Core.Tools;
@@ -13,11 +14,18 @@ namespace Roadman.Debug;
 
 /// <summary>
 /// Renders the world from a named camera preset to a PNG and quits:
-/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect]</c>.
+/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--seed &lt;n&gt;]</c>.
 /// <para>
 /// The image comes from its own <see cref="SubViewport"/> of <see cref="ImageSize"/>, so it doesn't depend on the
 /// window size, display scaling or where the window is. Rendering needs a real display server: the tool refuses to
 /// run under <c>--headless</c>. Exit codes are in <see cref="ScreenshotExitCode"/>.
+/// </para>
+/// <para>
+/// With <c>--player</c> (debug builds only), after the usual checks the spawned (hidden) player is placed on the ground
+/// at the preset's look-at x/z (<see cref="MapLoader.GroundOrRoadHitAt"/>), facing away from the preset's camera, and
+/// shown; the street label follows it. Once it is on the floor, the capture camera copies the player camera's transform
+/// and field of view every frame for <see cref="SettleFrames"/> frames, so the image is the third-person view. The
+/// player camera itself never becomes current: the capture camera renders in its own viewport.
 /// </para>
 /// </summary>
 public partial class ScreenshotTool : Node
@@ -40,6 +48,45 @@ public partial class ScreenshotTool : Node
 
     [Export]
     public float CameraFar { get; set; } = 8000f;
+
+    /// <summary>
+    /// <c>--player</c>: physics frames to wait for the player beyond <see cref="Scenes.World.SpawnPhysicsWaitFrames"/>
+    /// (the world's own wait for the terrain collision before it draws a spawn point).
+    /// <para>
+    /// Why 10: the world starts its wait on <see cref="MapLoader.MapLoaded"/> and spawns synchronously in the frame the
+    /// wait succeeds, so it has a player at most <see cref="Scenes.World.SpawnPhysicsWaitFrames"/> physics frames after
+    /// the load. The tool starts counting later (after its own terrain-collision wait, which also starts on the load),
+    /// so its count is never ahead of the world's; the one frame the two awaits on the same physics frame signal can
+    /// resume apart in is all the margin needs. 10 is that frame with a tenfold allowance, and costs nothing when the
+    /// spawn succeeds (the loop ends as soon as the player exists or <see cref="Scenes.World.LastSpawnFailure"/> is set).
+    /// </para>
+    /// </summary>
+    [Export]
+    public int PlayerSpawnMarginFrames { get; set; } = 10;
+
+    /// <summary>
+    /// <c>--player</c>: physics frames to wait for the placed player to be on the floor.
+    /// <para>
+    /// Why 60 (1 s at the default 60 physics ticks per second): the tool puts the player's feet on the ground hit itself
+    /// (<see cref="MapLoader.GroundOrRoadHitAt"/>), so it is on the floor after the first <c>MoveAndSlide</c>. The
+    /// slowest landing the player otherwise makes is the spawn drop of <see cref="Scenes.World.SpawnDropHeight"/>
+    /// (0.5 m) under the project gravity (9.8 m/s²): √(2 · 0.5 / 9.8) ≈ 0.32 s ≈ 20 frames. 60 frames is three times
+    /// that, so a placement a little above the surface still lands in time; the loop ends at the first frame on the
+    /// floor, so the wait costs nothing when it succeeds.
+    /// </para>
+    /// </summary>
+    [Export]
+    public int PlayerFloorWaitFrames { get; set; } = 60;
+
+    /// <summary>
+    /// Whether <see cref="Finish"/> quits the scene tree with the exit code (the command-line run). Tests set it false
+    /// and read <see cref="ExitCode"/> instead, so the test runner keeps running.
+    /// </summary>
+    [Export]
+    public bool QuitOnFinish { get; set; } = true;
+
+    /// <summary>The exit code the run finished with (<see cref="ScreenshotExitCode"/>); null while it is still running.</summary>
+    public int? ExitCode { get; private set; }
 
     /// <summary>The parsed command line; set before adding the node.</summary>
     public ScreenshotArgs? Request { get; set; }
@@ -75,6 +122,13 @@ public partial class ScreenshotTool : Node
     /// </summary>
     public PlaceInspector? Inspector { get; set; }
 
+    /// <summary>
+    /// The world whose <see cref="Scenes.World.Player"/> and <see cref="Scenes.World.PlayerCamera"/> <c>--player</c>
+    /// photographs (and whose <see cref="Scenes.World.LastSpawnFailure"/> it reports). Set before adding the node;
+    /// <c>--player</c> without it is an error.
+    /// </summary>
+    public World? World { get; set; }
+
     private CameraPreset? _preset;
     private string _outputPath = "";
     private SubViewport? _viewport;
@@ -93,6 +147,32 @@ public partial class ScreenshotTool : Node
         if (Request.MapId is { } mapId)
         {
             Loader.MapId = mapId;
+        }
+
+        // The build checks need neither rendering nor the pack, so they come before the headless refusal: the release
+        // case is testable headless, and the exit code (Error) is the same either way.
+        if (Request.Orthophoto && OrthophotoView is null)
+        {
+            Finish(ScreenshotExitCode.Error, "--orthophoto needs the orthophoto debug view, which only debug builds have");
+            return;
+        }
+
+        if (Request.RoadGraph && RoadGraphView is null)
+        {
+            Finish(ScreenshotExitCode.Error, "--road-graph needs the road graph debug view, which only debug builds have");
+            return;
+        }
+
+        if (Request.Inspect && Inspector is null)
+        {
+            Finish(ScreenshotExitCode.Error, "--inspect needs the place inspector, which only debug builds have");
+            return;
+        }
+
+        if (Request.Player && !DebugBuild.IsDebug)
+        {
+            Finish(ScreenshotExitCode.Error, "--player needs a debug build");
+            return;
         }
 
         if (DisplayServer.GetName() == "headless")
@@ -120,21 +200,9 @@ public partial class ScreenshotTool : Node
             return;
         }
 
-        if (Request.Orthophoto && OrthophotoView is null)
+        if (Request.Player && World is null)
         {
-            Finish(ScreenshotExitCode.Error, "--orthophoto needs the orthophoto debug view, which only debug builds have");
-            return;
-        }
-
-        if (Request.RoadGraph && RoadGraphView is null)
-        {
-            Finish(ScreenshotExitCode.Error, "--road-graph needs the road graph debug view, which only debug builds have");
-            return;
-        }
-
-        if (Request.Inspect && Inspector is null)
-        {
-            Finish(ScreenshotExitCode.Error, "--inspect needs the place inspector, which only debug builds have");
+            Finish(ScreenshotExitCode.Error, "--player needs the World set on the ScreenshotTool before it is added");
             return;
         }
 
@@ -335,6 +403,29 @@ public partial class ScreenshotTool : Node
         GD.Print(FormattableString.Invariant(
             $"Screenshot: preset '{preset.Name}' camera at ({camera.X:0.###}, {camera.Y:0.###}, {camera.Z:0.###}), looking at ({target.X:0.###}, {target.Y:0.###}, {target.Z:0.###})"));
 
+        if (Request!.Player)
+        {
+            if (await PlacePlayerAsync(placement) is not { } playerCamera)
+            {
+                return;
+            }
+
+            // Copy before each frame, so the last frame drawn before Save() uses the latest third-person transform.
+            for (var i = 0; i < SettleFrames; i++)
+            {
+                _camera!.GlobalTransform = playerCamera.Camera.GlobalTransform;
+                _camera.Fov = playerCamera.Camera.Fov;
+                await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+                if (_finished || !IsInsideTree())
+                {
+                    return;
+                }
+            }
+
+            Save();
+            return;
+        }
+
         for (var i = 0; i < SettleFrames; i++)
         {
             await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
@@ -347,7 +438,7 @@ public partial class ScreenshotTool : Node
         // Spec criterion 18: the --inspect image must show the panel on a building. The inspector casts its ray each
         // physics frame, so after the settle frames its selection is the building at the screen centre, if any. With
         // the whole map loaded, a centre ray that hits nothing has left the built area: N/A, like a preset outside it.
-        if (Request!.Inspect && Inspector!.SelectedBuilding is null && !Inspector.LastRayHit)
+        if (Request.Inspect && Inspector!.SelectedBuilding is null && !Inspector.LastRayHit)
         {
             GD.Print($"N/A: outside built area (the centre ray of preset '{preset.Name}' leaves the built area without hitting a building)");
             Finish(ScreenshotExitCode.OutsideBuiltArea, null);
@@ -366,6 +457,96 @@ public partial class ScreenshotTool : Node
 
         Save();
     }
+
+    /// <summary>
+    /// <c>--player</c>: waits for the world's player, puts it on the ground (the higher of the terrain and road hits) at
+    /// the look-at x/z facing away from the preset camera, shows it, turns its camera behind it, points the street label
+    /// at it and waits until it is on the floor.
+    /// </summary>
+    /// <returns>The player camera to copy, or null after finishing with an error.</returns>
+    private async Task<OnFoot.PlayerCamera?> PlacePlayerAsync(PresetResolution placement)
+    {
+        var world = World!;
+        var loader = Loader!;
+        var maxSpawnFrames = world.SpawnPhysicsWaitFrames + PlayerSpawnMarginFrames;
+        var tree = GetTree();
+        for (var frame = 0; !HasPlayer(world) && world.LastSpawnFailure is null && frame < maxSpawnFrames; frame++)
+        {
+            await ToSignal(tree, SceneTree.SignalName.PhysicsFrame);
+            if (_finished || !IsInsideTree())
+            {
+                return null;
+            }
+        }
+
+        if (!HasPlayer(world))
+        {
+            var reason = world.LastSpawnFailure
+                ?? FormattableString.Invariant($"no spawn within {maxSpawnFrames} physics frames");
+            Finish(ScreenshotExitCode.Error, $"--player: the player didn't spawn ({reason}); {MapPack.RegenHint(loader.ResolvedMapId)}");
+            return null;
+        }
+
+        var player = world.Player!;
+        var playerCamera = world.PlayerCamera!;
+        var lookAt = ToVector(placement.LookAt);
+        if (loader.GroundOrRoadHitAt(lookAt.X, lookAt.Z) is not { } ground)
+        {
+            Finish(
+                ScreenshotExitCode.Error,
+                FormattableString.Invariant(
+                    $"--player: no terrain or road under the look-at point x {lookAt.X:0.###}, z {lookAt.Z:0.###} ({MapLoader.TerrainGroup}, {MapLoader.RoadGroup})"));
+            return null;
+        }
+
+        // Away from the camera: Godot's yaw 0 looks along −Z, forward = (−sin yaw, 0, −cos yaw).
+        var away = lookAt - ToVector(placement.Position);
+        var facing = new Vector2(away.X, away.Z).LengthSquared() > 1e-6f ? Mathf.Atan2(-away.X, -away.Z) : playerCamera.Yaw;
+
+        player.InputEnabled = false;
+        playerCamera.InputEnabled = false;
+        player.PlaceAt(ground.Position, facing);
+        player.Visible = true;
+        playerCamera.PlaceBehind(facing);
+        if (Hud is not null)
+        {
+            Hud.Target = player;
+        }
+
+        var feet = ground.Position;
+        GD.Print(FormattableString.Invariant(
+            $"Screenshot: --player at ({feet.X:0.###}, {feet.Y:0.###}, {feet.Z:0.###}), facing {Mathf.RadToDeg(facing):0.###}°"));
+
+        for (var frame = 0; frame < PlayerFloorWaitFrames; frame++)
+        {
+            await ToSignal(tree, SceneTree.SignalName.PhysicsFrame);
+            if (_finished || !IsInsideTree())
+            {
+                return null;
+            }
+
+            if (!IsInstanceValid(player) || !IsInstanceValid(playerCamera))
+            {
+                Finish(ScreenshotExitCode.Error, "--player: the player was freed before the capture");
+                return null;
+            }
+
+            if (player.IsOnFloor())
+            {
+                return playerCamera;
+            }
+        }
+
+        Finish(
+            ScreenshotExitCode.Error,
+            FormattableString.Invariant(
+                $"--player: the player isn't on the floor after {PlayerFloorWaitFrames} physics frames at ({feet.X:0.###}, {feet.Y:0.###}, {feet.Z:0.###})"));
+        return null;
+    }
+
+    private static bool HasPlayer(World world) =>
+        world.Player is { } player && IsInstanceValid(player)
+        && world.PlayerCamera is { } camera && IsInstanceValid(camera);
 
     private void PlaceCamera(Vector3 position, Vector3 lookAt, float fov)
     {
@@ -416,7 +597,10 @@ public partial class ScreenshotTool : Node
         Finish(ScreenshotExitCode.Saved, null);
     }
 
-    /// <summary>Quits with <paramref name="exitCode"/>; an error message is pushed as an error so logs show it.</summary>
+    /// <summary>
+    /// Records <paramref name="exitCode"/> in <see cref="ExitCode"/> and, with <see cref="QuitOnFinish"/>, quits with it; an
+    /// error message is pushed as an error so logs show it.
+    /// </summary>
     private void Finish(int exitCode, string? error)
     {
         if (_finished)
@@ -425,12 +609,16 @@ public partial class ScreenshotTool : Node
         }
 
         _finished = true;
+        ExitCode = exitCode;
         if (error is not null)
         {
             GD.PushError($"Screenshot: {error}");
         }
 
-        GetTree().Quit(exitCode);
+        if (QuitOnFinish)
+        {
+            GetTree().Quit(exitCode);
+        }
     }
 
     private static Vector3 ToVector(LocalPoint point) => new((float)point.X, (float)point.Y, (float)point.Z);

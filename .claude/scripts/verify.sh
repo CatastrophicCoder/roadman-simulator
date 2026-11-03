@@ -202,6 +202,19 @@ else
       *) report FAIL "screenshot inspect" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
     esac
   fi
+  # The player in the third-person view at street level (docs/specs/player-on-foot.md, criterion 23).
+  log="$LOGS/screenshot-centre-street-level-player.log"
+  if ! grep -qx "centre-street-level" <<<"$PRESETS"; then
+    report N/A "screenshot player" "pack has no centre-street-level preset"
+  else
+    screenshot_preset "$GODOT_BIN" "$MAP_ID" centre-street-level "$SHOTS/centre-street-level-player.png" "$log" --player --seed 1
+    case $? in
+      0) report PASS "screenshot player" "build/screenshots/centre-street-level-player.png" ;;
+      2) report N/A "screenshot player" "outside built area (log: $log)" ;;
+      124) report FAIL "screenshot player" "timed out after ${GODOT_SCREENSHOT_TIMEOUT:-120}s (log: $log)" ;;
+      *) report FAIL "screenshot player" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
+    esac
+  fi
 fi
 
 echo "verify summary (logs: $LOGS)"

@@ -155,6 +155,94 @@ public class RoadGraphTest
     }
 
     /// <summary>
+    /// <see cref="MapLoader.GroundOrRoadHitAt"/> (the ground the <c>--player</c> screenshot stands the player on,
+    /// player-on-foot criterion 23) at the middle of a ground drivable edge returns a <see cref="MapLoader.RoadGroup"/>
+    /// body, the <c>road</c> mesh's, above <see cref="MapLoader.TerrainHeightAt"/> there by the map's
+    /// <c>surface_offset_m</c> (within <see cref="GroundTolerance"/>), not the terrain under it. The edge comes from
+    /// <c>road_graph.json</c>: the longest drivable edge that is neither a bridge nor a tunnel, whose midpoint isn't a
+    /// graph vertex (so the expected height is terrain plus offset) and is clear of every bridge deck (farther, across,
+    /// than half the bridge's width plus <see cref="BridgeClearance"/> from its centre line, which also keeps it off the
+    /// deck-end ramps, so the highest road hit
+    /// can't be a deck above the road).
+    /// </summary>
+    [TestCase]
+    public async Task GroundOrRoadHitAt_MidpointOfAGroundDrivableEdge_ReturnsTheRoadBodyAboveTheTerrain()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(WorldScenePath, true);
+        await runner.SimulateFrames(2);
+        var loader = Loader(runner);
+        AssertBool(await loader.WaitForTerrainCollisionAsync()).IsTrue();
+        var graph = loader.RoadGraph!;
+        var offset = SurfaceOffset();
+        var bridges = graph.Edges.Where(e => e.Bridge).ToList();
+        var clearance = BridgeClearance();
+
+        var candidate = graph.Edges
+            .Where(e => e.Drivable && !e.Bridge && !e.Tunnel)
+            .OrderByDescending(e => e.LengthM)
+            .ThenBy(e => e.Id, System.StringComparer.Ordinal)
+            .Select(e => (Edge: e, Mid: Midpoint(e.Points)))
+            .FirstOrDefault(c => !c.Mid.Vertex
+                && bridges.All(b => HorizontalDistance(b.Points, c.Mid.X, c.Mid.Z) > (b.WidthM / 2) + clearance));
+        AssertThat(candidate.Edge).OverrideFailureMessage("no ground drivable edge with a midpoint clear of the bridges").IsNotNull();
+        var (edge, mid) = candidate;
+        var x = (float)mid.X;
+        var z = (float)mid.Z;
+
+        var hit = loader.GroundOrRoadHitAt(x, z);
+        var terrain = loader.TerrainHeightAt(x, z);
+        GD.Print(FormattableInvariant(
+            $"RoadGraphTest: GroundOrRoadHitAt on edge {edge.Id} ({edge.Class}, {edge.LengthM:0.##} m) at x {x:0.###}, z {z:0.###}: hit {hit?.Position.Y:0.####} on {hit?.Body.GetParent()?.Name}, terrain {terrain:0.####}, offset {offset}"));
+        AssertThat(hit).OverrideFailureMessage($"no terrain or road hit at the midpoint of {edge.Id}").IsNotNull();
+        AssertThat(terrain).OverrideFailureMessage($"no terrain under the midpoint of {edge.Id}").IsNotNull();
+        var (position, body) = hit!.Value;
+        AssertBool(body.IsInGroup(MapLoader.RoadGroup)).OverrideFailureMessage($"{body.Name} isn't in {MapLoader.RoadGroup}").IsTrue();
+        AssertBool(body.IsInGroup(MapLoader.TerrainGroup)).IsFalse();
+        AssertThat(body.GetParent()?.Name.ToString()).IsEqual("road");
+        AssertFloat(position.Y).IsGreater(terrain!.Value);
+        AssertFloat(System.Math.Abs(position.Y - terrain.Value - offset)).IsLessEqual(GroundTolerance);
+    }
+
+    /// <summary>
+    /// Extra horizontal distance, m, beyond half a bridge's width that a ground midpoint must keep from the bridge's
+    /// centre line in <see cref="GroundOrRoadHitAt_MidpointOfAGroundDrivableEdge_ReturnsTheRoadBodyAboveTheTerrain"/>,
+    /// from the map's <c>roads.bridge</c> config: <c>railing_width_m</c> (the railings stand outside the carriageway
+    /// width) plus <c>ramp_length_m</c> (the road-side ramp at each deck end rises above terrain plus offset over that
+    /// length, past the bridge edge's end). A choice of edge, not a tolerance on a measurement.
+    /// </summary>
+    private static double BridgeClearance() => MapYamlValue("railing_width_m") + MapYamlValue("ramp_length_m");
+
+    /// <summary>A numeric <c>key: value</c> from <c>maps/&lt;id&gt;/map.yaml</c> (indented, as under <c>roads.bridge</c>).</summary>
+    private static double MapYamlValue(string key)
+    {
+        var path = Path.GetFullPath(Path.Combine(ProjectSettings.GlobalizePath("res://"), "..", "maps", MapId, "map.yaml"));
+        AssertBool(File.Exists(path)).OverrideFailureMessage($"no map config at {path}").IsTrue();
+        var match = Regex.Match(File.ReadAllText(path), $@"^\s+{Regex.Escape(key)}:\s*([0-9.]+)", RegexOptions.Multiline);
+        AssertBool(match.Success).OverrideFailureMessage($"no {key} in {path}").IsTrue();
+        return double.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>The horizontal (x/z) distance from (<paramref name="x"/>, <paramref name="z"/>) to a polyline.</summary>
+    private static double HorizontalDistance(IReadOnlyList<LocalPoint> points, double x, double z)
+    {
+        var best = double.MaxValue;
+        for (var i = 1; i < points.Count; i++)
+        {
+            var (ax, az, bx, bz) = (points[i - 1].X, points[i - 1].Z, points[i].X, points[i].Z);
+            var (dx, dz) = (bx - ax, bz - az);
+            var lengthSquared = (dx * dx) + (dz * dz);
+            var t = lengthSquared == 0 ? 0 : System.Math.Clamp((((x - ax) * dx) + ((z - az) * dz)) / lengthSquared, 0, 1);
+            var (px, pz) = (ax + (t * dx), az + (t * dz));
+            best = System.Math.Min(best, System.Math.Sqrt(((x - px) * (x - px)) + ((z - pz) * (z - pz))));
+        }
+
+        return best;
+    }
+
+    private static string FormattableInvariant(System.FormattableString text) => System.FormattableString.Invariant(text);
+
+    /// <summary>
     /// Casts from 1 m above <paramref name="expected"/> to 1 m below it (so a bridge deck above a road isn't hit);
     /// records a failure unless the first non-building hit is the <c>road</c> body in <see cref="MapLoader.RoadGroup"/>
     /// within <see cref="GroundTolerance"/> of <paramref name="expected"/>. Returns the height error (0 on a miss).
@@ -321,7 +409,7 @@ public class RoadGraphTest
     public async Task Ac24_G_TogglesTheRoadGraphViewInADebugBuild()
     {
         AssertPackPresent();
-        AssertBool(OS.IsDebugBuild()).IsTrue();
+        AssertBool(DebugBuild.IsDebug).IsTrue();
         using var runner = ISceneRunner.Load(WorldScenePath, true);
         await runner.SimulateFrames(2);
         var world = (World)runner.Scene()!;

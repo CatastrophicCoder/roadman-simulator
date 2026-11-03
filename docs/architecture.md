@@ -245,16 +245,19 @@ Projects (all `net10.0`, ADR 0007):
 - `PlayerState.Position` is the player's last committed position (Godot local metres). `PositionChanged` fires only when it changes; death leaves it as it is.
 - `OnFootMotion` holds the on-foot movement maths: camera-relative target velocity, acceleration and deceleration limits, air control, turning, and `JumpVelocity`.
 - `FallReset.IsBelow` is the temporary fall rule (more than a depth below the slab's bottom).
+- `RunToggle` is the gamepad run toggle: a press flips it, and while it is on, the move input going from outside its deadzone to inside turns it off.
 
 TODO: routing (with the traffic AI spec), mission state, and the respawn state machine.
 
 ### Gameplay (Godot C#)
 
 - Autoloads: `Events` (global signal bus) and `GameState` (player, wanted level, settings). Both stay small.
-- `World` scene: MapLoader, WorldEnvironment, sun, debug camera, HUD street label, and the player once it has spawned. In debug builds also the orthophoto view (F2), the road graph view (G) and the place inspector (I).
+- `World` scene: MapLoader, WorldEnvironment, sun, HUD street label, and the player once it has spawned. In debug builds also the debug camera, the orthophoto view (F2), the road graph view (G) and the place inspector (I); release builds have only the player camera.
+- Debug builds (ADR 0016): every debug-only decision asks `DebugBuild.IsDebug` (`scripts/debug/DebugBuild.cs`), the only code that calls `OS.IsDebugBuild()`. Tests set `DebugBuild.Override` to check the release layout.
 - Player (ADR 0016, `docs/specs/player-on-foot.md`): a `CharacterBody3D` built in code (`scripts/player/Player.cs`) that walks, runs and jumps with `OnFootMotion`, on collision layer 2, and writes its position to `PlayerState` every physics frame. `World` spawns it at a random open-ground point of `boundary.json`'s spawn area (`SpawnPicker`, seeded from the time or `--seed`), checking each draw with a ray and a capsule query, and spawns it again after a map reload. No valid `boundary.json`, or no free draw: an error, and no player.
-- Player camera (`scripts/player/PlayerCamera.cs`): a pivot that follows the player, a spring arm on the map's collision layer so the camera never clips into walls, mouse orbit with clamped pitch, no automatic swing-back.
-- Input map: `move_*` (WASD), `run` (Shift), `jump` (Space), and the `debug_*` actions; only the current camera's owner reads input.
+- Player camera (`scripts/player/PlayerCamera.cs`): a pivot that follows the player, a spring arm on the map's collision layer so the camera never clips into walls, mouse and right-stick orbit with clamped pitch, no automatic swing-back.
+- Input map: `move_*` (WASD, left stick), `run` (Shift, held), `run_toggle` (left-stick click, off again when the stick returns inside its deadzone), `jump` (Space, south face button), `camera_*` (right stick), `debug_camera` (the physical key left of 1: `Quoteleft` and `Section`), and the `debug_*` actions. Gamepad events listen to any device. Only the current camera's owner reads input.
+- Debug camera toggle (debug builds only): `debug_camera` switches between the player camera and the debug camera, which starts at the player camera's transform. While it is current the player gets no input and the player camera doesn't orbit; switching back restores the player camera and its mouse capture. Without a player it does nothing.
 - Temporary fall respawn: a player more than `FallRespawnDepth` below `cliff.bottom_y` respawns in the spawn area, with no death. The world-edge death spec replaces it.
 - HUD street label (ADR 0013): the street of the nearest road graph edge within 40 m of the player, or of the ground below the camera until there is a player, in every build. Never business names.
 - Place inspector (debug builds only): a crosshair and a panel with the pack's data for the building or point of interest under the screen centre, including raw names and the override sources. Its text comes from `Roadman.Core`'s `PlaceText`.
@@ -269,5 +272,5 @@ TODO: traffic AI, pedestrian AI, police, missions. Each of these gets a spec in 
 - Pipeline: pytest, using a fixed small test area. `tools/mapgen/tests/fixtures/raw/somero-test-area/` holds the Somero test area's raw data (OSM buildings, highway ways, water, land use and points of interest touching the area, without contributor metadata, the Topographic Database `rakennus` records intersecting it, DEM, lidar and orthophoto cuts, download manifest, attribution in `NOTICE.md`), laid out like `data/raw/<map-id>/`, so tests and CI can build the test-area pack offline. `tools/mapgen/scripts/cut_test_area.py` recreates it.
 - Core: xUnit on `Roadman.Core`.
 - Engine: gdUnit4Net, run headless.
-- Visual: screenshots from the camera presets in the map pack, taken with a short windowed run (ADR 0008).
+- Visual: screenshots from the camera presets in the map pack, taken with a short windowed run (ADR 0008). `--player` (debug builds) renders the player in the third-person view at a preset's look-at point.
 - CI (ADR 0010): `ci.yml` builds the Somero test-area pack from the committed fixture; it ignores `data-*` tags. `release.yml` fetches each map's pinned snapshot and builds the full packs from it (ADR 0011).

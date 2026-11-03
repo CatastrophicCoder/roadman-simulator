@@ -345,7 +345,7 @@ public class PlaceInformationTest
     public async Task Ac17_I_TogglesTheInspectorInADebugBuild()
     {
         AssertPackPresent();
-        AssertBool(OS.IsDebugBuild()).IsTrue();
+        AssertBool(DebugBuild.IsDebug).IsTrue();
         using var runner = ISceneRunner.Load(WorldScenePath, true);
         await runner.SimulateFrames(2);
         var world = (World)runner.Scene()!;
@@ -455,7 +455,7 @@ public class PlaceInformationTest
         AssertThat(building).IsNotNull();
         await UseDebugCameraWithoutTarget(runner, world);
         var (from, to) = ray!.Value;
-        world.Camera.LookAtFromPosition(from, to, Vector3.Forward);
+        world.Camera!.LookAtFromPosition(from, to, Vector3.Forward);
         AssertBool(inspector.SetEnabled(true)).IsTrue();
         await runner.SimulateFrames(2);
 
@@ -678,8 +678,8 @@ public class PlaceInformationTest
         AssertThat(world.Player).OverrideFailureMessage("the player didn't spawn").IsNotNull();
         AssertThat(world.Hud.Target).IsSame(world.Player);
         world.Hud.Target = null;
-        world.Camera.MakeCurrent();
-        AssertBool(world.Camera.Current).IsTrue();
+        world.Camera!.MakeCurrent();
+        AssertBool(world.Camera!.Current).IsTrue();
     }
 
     /// <summary>
@@ -709,7 +709,7 @@ public class PlaceInformationTest
     }
 
     private static void PlaceCameraAbove(World world, Vector3 point) =>
-        world.Camera.LookAtFromPosition(point + (Vector3.Up * CameraHeight), point, Vector3.Forward);
+        world.Camera!.LookAtFromPosition(point + (Vector3.Up * CameraHeight), point, Vector3.Forward);
 
     /// <summary>The point halfway along a polyline by horizontal length.</summary>
     private static LocalPoint Middle(IReadOnlyList<LocalPoint> points)

@@ -39,7 +39,7 @@ public class WorldSceneTest
     [TestCase]
     public void World_AddsOrthophotoViewInDebugBuilds()
     {
-        AssertBool(OS.IsDebugBuild()).IsTrue();
+        AssertBool(DebugBuild.IsDebug).IsTrue();
         using var runner = ISceneRunner.Load(WorldScenePath, true);
         var world = (Roadman.Scenes.World)runner.Scene()!;
 

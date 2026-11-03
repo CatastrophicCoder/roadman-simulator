@@ -68,6 +68,7 @@ public partial class MapLoader : Node3D
     private const int MaxRayHits = 32;
     private static readonly string[] TerrainOnly = [TerrainGroup];
     private static readonly string[] TerrainOrEdge = [TerrainGroup, EdgeGroup];
+    private static readonly string[] TerrainOrRoad = [TerrainGroup, RoadGroup];
 
     [Signal]
     public delegate void MapLoadedEventHandler(int tileCount);
@@ -243,6 +244,14 @@ public partial class MapLoader : Node3D
     /// <see cref="TerrainHeightAt"/>.
     /// </summary>
     public (Vector3 Position, StaticBody3D Body)? GroundOrEdgeHitAt(float x, float z) => RaycastGroups(x, z, TerrainOrEdge);
+
+    /// <summary>
+    /// The highest hit of a vertical ray at Godot (x, z) on the terrain (<see cref="TerrainGroup"/>) or a road, path or
+    /// bridge deck (<see cref="RoadGroup"/>), with the hit body: the surface someone standing there walks on. Null when
+    /// there is neither. Other hits (buildings, the world-edge cliff) are excluded and the ray is cast again. Same
+    /// timing rule as <see cref="TerrainHeightAt"/>.
+    /// </summary>
+    public (Vector3 Position, StaticBody3D Body)? GroundOrRoadHitAt(float x, float z) => RaycastGroups(x, z, TerrainOrRoad);
 
     /// <summary>
     /// The highest hit of a vertical ray at Godot (x, z) on a <see cref="StaticBody3D"/> in one of

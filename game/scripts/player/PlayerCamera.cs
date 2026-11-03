@@ -15,7 +15,9 @@ namespace Roadman.OnFoot;
 /// and the arm after the pivot (<see cref="Node.ProcessPhysicsPriority"/>), so the arm casts from this frame's pivot.
 /// </para>
 /// <para>
-/// Mouse orbit only while the mouse is captured, this camera is current and <see cref="InputEnabled"/>. The mouse is
+/// Mouse orbit only while the mouse is captured, this camera is current and <see cref="InputEnabled"/>; right-stick
+/// orbit (<c>camera_left</c>, <c>camera_right</c>, <c>camera_up</c>, <c>camera_down</c>, through
+/// <see cref="OrbitStick"/>) each physics frame while this camera is current and <see cref="InputEnabled"/>. The mouse is
 /// captured while this camera is current and the window has focus; <c>ui_cancel</c> releases it, a left click
 /// captures it again, losing focus releases it (and regaining it captures again unless <c>ui_cancel</c> released it).
 /// Whether this camera holds the capture (<see cref="MouseCaptured"/>) follows <see cref="Input.MouseMode"/>, so a
@@ -30,6 +32,11 @@ public partial class PlayerCamera : Node3D
 
     /// <summary>Physics priority of the spring arm; after the pivot, so it casts from this frame's pivot.</summary>
     public const int ArmPhysicsPriority = 11;
+
+    public const string CameraLeftAction = "camera_left";
+    public const string CameraRightAction = "camera_right";
+    public const string CameraUpAction = "camera_up";
+    public const string CameraDownAction = "camera_down";
 
     private float _yaw;
     private float _pitch;
@@ -80,7 +87,7 @@ public partial class PlayerCamera : Node3D
     [Export]
     public float MouseSensitivity { get; set; } = 0.003f;
 
-    /// <summary>Radians per second at full right-stick tilt. The stick input itself comes with the gamepad support.</summary>
+    /// <summary>Radians per second at full right-stick tilt.</summary>
     [Export]
     public float StickSensitivity { get; set; } = 3f;
 
@@ -117,7 +124,7 @@ public partial class PlayerCamera : Node3D
     /// <summary>The node followed (the player); null leaves the pivot where it is.</summary>
     public Node3D? Target { get; set; }
 
-    /// <summary>False while something else owns the controls (the debug camera, part B): no orbit, no mouse capture.</summary>
+    /// <summary>False while something else owns the controls (the debug camera): no mouse or stick orbit, no mouse capture.</summary>
     public bool InputEnabled { get; set; } = true;
 
     public SpringArm3D SpringArm { get; private set; } = null!;
@@ -181,6 +188,16 @@ public partial class PlayerCamera : Node3D
 
     public override void _PhysicsProcess(double delta)
     {
+        // Before the pivot and arm update, so this frame's arm casts along the turned direction.
+        if (IsCurrent && InputEnabled)
+        {
+            var stick = Input.GetVector(CameraLeftAction, CameraRightAction, CameraUpAction, CameraDownAction);
+            if (stick != Vector2.Zero)
+            {
+                OrbitStick(stick, delta);
+            }
+        }
+
         if (DesiredPivot is { } pivot)
         {
             GlobalPosition = FollowSmoothing <= 0f
@@ -276,6 +293,19 @@ public partial class PlayerCamera : Node3D
         Pitch = _pitch - (relative.Y * MouseSensitivity * pitchSign);
     }
 
+    /// <summary>
+    /// Applies a right-stick tilt of <paramref name="stick"/> (x right, y down, as <see cref="Input.GetVector"/> gives it)
+    /// for <paramref name="delta"/> seconds at <see cref="StickSensitivity"/>: right turns right, up pitches up (down
+    /// with <see cref="InvertStickY"/>). Pitch stays within its limits.
+    /// </summary>
+    public void OrbitStick(Vector2 stick, double delta)
+    {
+        var pitchSign = InvertStickY ? -1f : 1f;
+        var step = StickSensitivity * (float)delta;
+        _yaw = Mathf.Wrap(_yaw - (stick.X * step), -Mathf.Pi, Mathf.Pi);
+        Pitch = _pitch - (stick.Y * step * pitchSign);
+    }
+
     /// <summary>Turns the camera to look the way <paramref name="facingYaw"/> faces, at <see cref="StartPitchDegrees"/>, and snaps it to the target.</summary>
     public void PlaceBehind(float facingYaw)
     {
@@ -297,10 +327,18 @@ public partial class PlayerCamera : Node3D
         }
     }
 
-    /// <summary>Makes this camera current and captures the mouse when the window has focus.</summary>
-    public void Activate()
+    /// <summary>
+    /// Makes this camera current. With <paramref name="captureMouse"/> it also captures the mouse when the window has
+    /// focus (and again when focus returns); without it the mouse stays as it is until a left click captures it.
+    /// </summary>
+    public void Activate(bool captureMouse = true)
     {
         Camera.MakeCurrent();
+        if (!captureMouse)
+        {
+            return;
+        }
+
         _captureWanted = true;
         if (InputEnabled && GetWindow().HasFocus())
         {

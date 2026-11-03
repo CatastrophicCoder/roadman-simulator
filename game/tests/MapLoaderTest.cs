@@ -80,7 +80,7 @@ public class MapLoaderTest
 
         var ground = world.MapLoader.TerrainHeightAt(0f, 0f);
         AssertBool(ground is not null).IsTrue();
-        AssertFloat(world.Camera.GlobalPosition.Y - ground!.Value).IsEqualApprox(world.CameraStartOffset.Y, 0.01);
+        AssertFloat(world.Camera!.GlobalPosition.Y - ground!.Value).IsEqualApprox(world.CameraStartOffset.Y, 0.01);
     }
 
     [TestCase]

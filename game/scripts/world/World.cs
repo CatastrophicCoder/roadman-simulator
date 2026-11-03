@@ -10,17 +10,24 @@ using Roadman.OnFoot;
 namespace Roadman.Scenes;
 
 /// <summary>
-/// Root of the game world. Builds the environment, sun, map loader and debug camera in code, loads the map, and
-/// places the camera above the terrain at the origin. With <c>-- --screenshot &lt;preset&gt; &lt;out.png&gt;</c> on
-/// the command line it adds a <see cref="ScreenshotTool"/> instead of placing the camera. Always adds the
-/// <see cref="StreetLabelHud"/>. Debug builds also get the <see cref="OrthophotoDebugView"/> (F2), the
-/// <see cref="RoadGraphDebugView"/> (G) and the <see cref="PlaceInspector"/> (I).
+/// Root of the game world. Builds the environment, sun and map loader in code, loads the map, and places the debug
+/// camera above the terrain at the origin. With <c>-- --screenshot &lt;preset&gt; &lt;out.png&gt;</c> on the command
+/// line it adds a <see cref="ScreenshotTool"/> instead of placing the camera. Always adds the
+/// <see cref="StreetLabelHud"/>. Debug builds (<see cref="DebugBuild.IsDebug"/>) also get the <see cref="DebugCamera"/>,
+/// the <see cref="OrthophotoDebugView"/> (F2), the <see cref="RoadGraphDebugView"/> (G) and the
+/// <see cref="PlaceInspector"/> (I); release builds have only the player camera.
 /// <para>
 /// Each time the map loads, the old <see cref="Player"/> is freed and, once the terrain collision is queryable, a new
 /// one spawns at a random point of the pack's spawn area (<see cref="DrawSpawn"/>), with its
 /// <see cref="PlayerCamera"/> current behind it and the street label following it. The draws are seeded from
 /// <c>--seed &lt;n&gt;</c> or the time. In a screenshot run the player spawns hidden, its camera never becomes current
 /// and the label keeps measuring from the capture camera. A failed spawn pushes an error and leaves the debug camera.
+/// </para>
+/// <para>
+/// In debug builds <c>debug_camera</c> (the physical key left of 1) switches between the player camera and the debug
+/// camera (<see cref="ToggleDebugCamera"/>). The debug camera starts at the player camera's transform; while it is
+/// current the player gets no input and the player camera doesn't orbit. Switching back restores the player camera and
+/// the mouse capture it had. Without a player the toggle does nothing.
 /// </para>
 /// </summary>
 public partial class World : Node3D
@@ -38,10 +45,14 @@ public partial class World : Node3D
 
     private const int MaxSpawnShapeHits = 32;
 
+    /// <summary>Toggles between the player camera and the debug camera (debug builds only).</summary>
+    public const string DebugCameraAction = "debug_camera";
+
     private Random _spawnRandom = new(0);
     private int _spawnGeneration;
     private bool _screenshotRun;
     private bool _mapSignalsHooked;
+    private bool _playerCameraHadMouse;
 
     [Export]
     public Vector3 SunRotationDegrees { get; set; } = new(-50f, -30f, 0f);
@@ -109,7 +120,14 @@ public partial class World : Node3D
     /// </summary>
     public string? LastSpawnFailure { get; private set; }
 
-    public DebugCamera Camera { get; private set; } = null!;
+    /// <summary>The free-flying debug camera; null outside debug builds.</summary>
+    public DebugCamera? Camera { get; private set; }
+
+    /// <summary>
+    /// Whether <c>debug_camera</c> switched to the debug camera (player and player camera input off). False after every
+    /// spawn and without a player.
+    /// </summary>
+    public bool DebugCameraActive { get; private set; }
 
     /// <summary>The orthophoto debug view (F2); null outside debug builds.</summary>
     public OrthophotoDebugView? Orthophoto { get; private set; }
@@ -135,7 +153,7 @@ public partial class World : Node3D
         Hud = new StreetLabelHud { Name = "StreetLabelHud", Loader = MapLoader };
         AddChild(Hud);
 
-        if (OS.IsDebugBuild())
+        if (DebugBuild.IsDebug)
         {
             Orthophoto = new OrthophotoDebugView { Name = "OrthophotoDebugView", Loader = MapLoader };
             AddChild(Orthophoto);
@@ -143,11 +161,10 @@ public partial class World : Node3D
             AddChild(RoadGraphView);
             Inspector = new PlaceInspector { Name = "PlaceInspector", Loader = MapLoader };
             AddChild(Inspector);
+            Camera = new DebugCamera { Name = "DebugCamera", Current = true };
+            AddChild(Camera);
+            Camera.LookAtFromPosition(CameraStartOffset, Vector3.Zero, Vector3.Up);
         }
-
-        Camera = new DebugCamera { Name = "DebugCamera", Current = true };
-        AddChild(Camera);
-        Camera.LookAtFromPosition(CameraStartOffset, Vector3.Zero, Vector3.Up);
 
         ScreenshotArgs? screenshot;
         try
@@ -176,11 +193,12 @@ public partial class World : Node3D
                 RoadGraphView = RoadGraphView,
                 Hud = Hud,
                 Inspector = Inspector,
+                World = this,
             });
         }
 
         MapLoader.Load();
-        if (screenshot is null && MapLoader.Manifest is not null)
+        if (screenshot is null && MapLoader.Manifest is not null && Camera is not null)
         {
             PlaceCameraAboveTerrainAsync();
         }
@@ -219,6 +237,51 @@ public partial class World : Node3D
         {
             RespawnPlayer();
         }
+    }
+
+    public override void _UnhandledInput(InputEvent @event)
+    {
+        if (@event.IsActionPressed(DebugCameraAction) && !@event.IsEcho() && ToggleDebugCamera())
+        {
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
+    /// <summary>
+    /// Switches between the player camera and the debug camera (<c>debug_camera</c>). To the debug camera: it takes the
+    /// player camera's global transform and field of view and becomes current, and the player and player camera stop
+    /// reading input; whether the player camera held the mouse is remembered. Back: their input is on again and the
+    /// player camera becomes current, capturing the mouse only if it held it before.
+    /// </summary>
+    /// <returns>False when it did nothing: not a debug build, no debug camera, no player, or a screenshot run.</returns>
+    public bool ToggleDebugCamera()
+    {
+        if (!DebugBuild.IsDebug
+            || _screenshotRun
+            || Camera is null || !IsInstanceValid(Camera)
+            || Player is null || !IsInstanceValid(Player)
+            || PlayerCamera is null || !IsInstanceValid(PlayerCamera))
+        {
+            return false;
+        }
+
+        if (!DebugCameraActive)
+        {
+            _playerCameraHadMouse = PlayerCamera.MouseCaptured;
+            Camera.GlobalTransform = PlayerCamera.Camera.GlobalTransform;
+            Camera.Fov = PlayerCamera.Camera.Fov;
+            Camera.MakeCurrent();
+            Player.InputEnabled = false;
+            PlayerCamera.InputEnabled = false;
+            DebugCameraActive = true;
+            return true;
+        }
+
+        Player.InputEnabled = true;
+        PlayerCamera.InputEnabled = true;
+        PlayerCamera.Activate(captureMouse: _playerCameraHadMouse);
+        DebugCameraActive = false;
+        return true;
     }
 
     /// <summary>Starts the spawn draws over with <paramref name="seed"/>; <see cref="Seed"/> becomes it.</summary>
@@ -478,6 +541,8 @@ public partial class World : Node3D
 
         Player = null;
         PlayerCamera = null;
+        DebugCameraActive = false;
+        _playerCameraHadMouse = false;
         if (Hud is not null)
         {
             Hud.Target = null;
@@ -519,7 +584,7 @@ public partial class World : Node3D
     /// <summary>Moves the camera to <see cref="CameraStartOffset"/> above the terrain at the origin once collision is ready.</summary>
     private async void PlaceCameraAboveTerrainAsync()
     {
-        if (!await MapLoader.WaitForTerrainCollisionAsync() || !IsInstanceValid(Camera))
+        if (!await MapLoader.WaitForTerrainCollisionAsync() || Camera is null || !IsInstanceValid(Camera))
         {
             return;
         }

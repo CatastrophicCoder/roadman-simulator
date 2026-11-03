@@ -10,7 +10,9 @@ namespace Roadman.OnFoot;
 /// The player on foot (<c>docs/specs/player-on-foot.md</c>), a <see cref="CharacterBody3D"/> built in code: a capsule
 /// on its own collision layer (<see cref="CollisionLayers.Player"/>) that collides with the map
 /// (<see cref="CollisionLayers.Map"/>), and a placeholder model (body, head and a cap whose brim shows the facing).
-/// Each physics frame it reads <c>move_*</c>, <c>run</c> and <c>jump</c>, moves with <see cref="OnFootMotion"/>
+/// Each physics frame it reads <c>move_*</c> (WASD or the left stick, radial deadzone), <c>run</c> (Shift, held),
+/// <c>run_toggle</c> (the left-stick click, through <see cref="RunToggle"/>) and <c>jump</c> (Space or the south face
+/// button), moves with <see cref="OnFootMotion"/>
 /// relative to <see cref="Camera"/>'s yaw, applies the project's default gravity, calls <see cref="CharacterBody3D.MoveAndSlide"/>
 /// and writes its position to <see cref="GameState"/>'s <c>PlayerState</c>. The origin is at the feet.
 /// </summary>
@@ -24,6 +26,9 @@ public partial class Player : CharacterBody3D
     public const string MoveLeftAction = "move_left";
     public const string MoveRightAction = "move_right";
     public const string RunAction = "run";
+
+    /// <summary>The gamepad run toggle (left-stick click); see <see cref="RunToggle"/>.</summary>
+    public const string RunToggleAction = "run_toggle";
     public const string JumpAction = "jump";
 
     private float _facingYaw;
@@ -96,13 +101,19 @@ public partial class Player : CharacterBody3D
     public Material? ModelMaterial { get; set; }
 
     /// <summary>
-    /// False while something else owns the controls (the debug camera, part B): no move, run or jump input, but the
-    /// body still falls under gravity and decelerates.
+    /// False while something else owns the controls (the debug camera): no move, run, run-toggle or jump input, but the
+    /// body still falls under gravity and decelerates. <see cref="RunToggle"/> keeps its state.
     /// </summary>
     public bool InputEnabled { get; set; } = true;
 
     /// <summary>The camera whose yaw makes movement camera-relative; null means yaw 0 (forward is −Z, north).</summary>
     public PlayerCamera? Camera { get; set; }
+
+    /// <summary>
+    /// The gamepad run toggle, updated every physics frame from <see cref="RunToggleAction"/> and whether the move vector
+    /// is non-zero. Running is on while <see cref="RunAction"/> is held or this is on.
+    /// </summary>
+    public RunToggle RunToggle { get; } = new();
 
     /// <summary>The movement maths; its values are set from the exports every physics frame.</summary>
     public OnFootMotion Motion { get; } = new();
@@ -160,7 +171,18 @@ public partial class Player : CharacterBody3D
         var move = InputEnabled
             ? Input.GetVector(MoveLeftAction, MoveRightAction, MoveForwardAction, MoveBackAction)
             : Vector2.Zero;
-        var run = InputEnabled && Input.IsActionPressed(RunAction);
+        // With input off no press is fed and the stick reads zero; that zero isn't a stop of the player's own, so the
+        // toggle keeps its state through it.
+        if (InputEnabled)
+        {
+            RunToggle.Update(Input.IsActionJustPressed(RunToggleAction), move != Vector2.Zero);
+        }
+        else
+        {
+            RunToggle.ResetMovement();
+        }
+
+        var run = InputEnabled && (Input.IsActionPressed(RunAction) || RunToggle.On);
         var onFloor = IsOnFloor();
         var cameraYaw = Camera is not null && IsInstanceValid(Camera) ? Camera.Yaw : 0f;
 
@@ -183,6 +205,15 @@ public partial class Player : CharacterBody3D
         Velocity = velocity;
         MoveAndSlide();
         CommitPosition();
+    }
+
+    public override void _Notification(int what)
+    {
+        // The actions release when the window loses focus; the gamepad run toggle stays as it was (spec, "Edge cases").
+        if (what == NotificationApplicationFocusOut)
+        {
+            RunToggle.ResetMovement();
+        }
     }
 
     /// <summary>

@@ -9,6 +9,8 @@ using Godot;
 using Roadman.Autoload;
 using Roadman.Core.Maps;
 using Roadman.Core.Player;
+using Roadman.Core.Tools;
+using Roadman.Debug;
 using Roadman.OnFoot;
 using Roadman.Scenes;
 using static GdUnit4.Assertions;
@@ -19,15 +21,18 @@ using Path = System.IO.Path;
 namespace Roadman.Tests;
 
 /// <summary>
-/// The player on foot in Godot, part A of <c>docs/specs/player-on-foot.md</c> (<c>Ac</c> numbers are its acceptance
-/// criteria): spawn, spawn failure, movement, jump, collision, the third-person camera with the mouse, the temporary
-/// fall respawn and the street label. They run on whichever Somero pack is built (full, or the CI test area from the
+/// The player on foot in Godot, <c>docs/specs/player-on-foot.md</c> (<c>Ac</c> numbers are its acceptance criteria):
+/// spawn, spawn failure, movement, jump, collision, the third-person camera with the mouse and the gamepad, the debug
+/// camera toggle and the release layout, the temporary fall respawn and the street label. They run on whichever Somero pack is built (full, or the CI test area from the
 /// committed fixture), so every position is derived from the loaded pack: the spawn area's open ground from
 /// <see cref="MapLoader.Boundary"/>, roads, bridges and <c>span_end</c> nodes from <see cref="MapLoader.RoadGraph"/>,
 /// walls from the building collision bodies, heights from ray hits. Motion is scripted per physics frame through
-/// <see cref="SceneTree.PhysicsFrame"/>, which Godot emits before any node's <c>_PhysicsProcess</c>, so an action
-/// pressed there is "just pressed" for the player in that same frame, and the state read there is the previous
-/// frame's result. Like <see cref="MapLoaderTest"/>, these fail rather than skip without the pack.
+/// <see cref="SceneTree.PhysicsFrame"/>, which Godot emits before any node's <c>_PhysicsProcess</c>, so the state read
+/// there is the previous frame's result. An action pressed there (with <see cref="Input.ActionPress(StringName, float)"/>
+/// or an injected event) is held at once, so the player reads held input in that same frame, but Godot 4.7 reports it
+/// as "just pressed" only from the next physics frame (measured: in the handler of the press frame
+/// <c>IsActionJustPressed</c> is false, in the next one true), and that next frame's just-press survives a release
+/// in its handler. So a jump or run-toggle press acts one frame after the handler that pressed it. Like <see cref="MapLoaderTest"/>, these fail rather than skip without the pack.
 /// </summary>
 [TestSuite]
 [RequireGodotRuntime]
@@ -74,17 +79,52 @@ public class PlayerOnFootTest
 
     private const float NoRespawnDepth = 19f;
 
+    /// <summary>
+    /// Criteria 10 and 17: physics frames allowed after the ideal stop before a stop counts as failed. The ideal stop
+    /// takes ⌈speed / (<see cref="Player.Deceleration"/> · dt)⌉ frames, assuming every frame is on the floor; a frame
+    /// off the floor decelerates at only <see cref="Player.AirControl"/> of that, so a few such frames (a seam between
+    /// collision faces) make the stop a little longer. Half a second (30 frames at the default 60 ticks per second) is
+    /// far more than that. The loops end at the first stopped frame, so the margin only bounds a failing run and never
+    /// changes a measured distance or speed.
+    /// </summary>
+    private static int StopMarginFrames => Engine.PhysicsTicksPerSecond / 2;
+
+    /// <summary>
+    /// Criteria 10 and 17: horizontal speed below which the player counts as stopped, m/s. <see cref="OnFootMotion"/>
+    /// takes the horizontal velocity to exactly 0 (a move-toward step), but <c>MoveAndSlide</c> on a floor whose normal
+    /// is slightly off vertical can leave a float rounding residue in x and z. At 1e-4 m/s the player would move
+    /// 1e-4 m/s × 0.5 s (<see cref="StopMarginFrames"/>) = 0.05 mm, more than three orders of magnitude below the spec's
+    /// 0.1 m stop tolerance (<see cref="SpecDistanceTolerance"/>), so counting it as stopped can't hide a failure.
+    /// </summary>
+    private const float StoppedSpeed = 1e-4f;
+
     /// <summary>Spacing of the samples along test routes and lines, m (a search resolution, not a tolerance).</summary>
     private const float SampleStep = 0.5f;
 
     /// <summary>The ray start height of the downward casts, as <see cref="World.DrawSpawn"/>.</summary>
     private const float RayTop = 10_000f;
 
+    /// <summary>The joypad device the injected gamepad events come from; the actions listen to every device (−1).</summary>
+    private const int PadDevice = 0;
+
+    /// <summary>The debug camera's forward action (<see cref="DebugCamera"/> reads it by name).</summary>
+    private const string DebugForwardAction = "debug_forward";
+
     private static readonly string[] PlayerActions =
     [
         Player.MoveForwardAction, Player.MoveBackAction, Player.MoveLeftAction, Player.MoveRightAction,
-        Player.RunAction, Player.JumpAction,
+        Player.RunAction, Player.RunToggleAction, Player.JumpAction,
+        PlayerCamera.CameraLeftAction, PlayerCamera.CameraRightAction, PlayerCamera.CameraUpAction, PlayerCamera.CameraDownAction,
+        World.DebugCameraAction, DebugForwardAction,
     ];
+
+    /// <summary>The stick axes and buttons the tests inject; <see cref="ReleaseAll"/> returns every one to rest.</summary>
+    private static readonly JoyAxis[] StickAxes = [JoyAxis.LeftX, JoyAxis.LeftY, JoyAxis.RightX, JoyAxis.RightY];
+
+    private static readonly JoyButton[] PadButtons = [GamepadButtons.South, GamepadButtons.LeftStickClick];
+
+    /// <summary>The physical keys the tests inject as key events (the two <c>debug_camera</c> keys and W).</summary>
+    private static readonly Key[] InjectedKeys = [Key.Quoteleft, Key.Section, Key.W];
 
     private string _tempPack = "";
     private Variant? _savedMapIdSetting;
@@ -93,6 +133,7 @@ public class PlayerOnFootTest
     public void CleanUp()
     {
         ReleaseAll();
+        DebugBuild.Override = null;
         if (_tempPack != "" && Directory.Exists(_tempPack))
         {
             Directory.Delete(_tempPack, recursive: true);
@@ -148,7 +189,7 @@ public class PlayerOnFootTest
             AssertFloat(Mathf.Abs(feet.Y - terrain.Value)).IsLessEqual(SpecDistanceTolerance);
             AssertBool(world.PlayerCamera!.IsCurrent).OverrideFailureMessage("the player camera isn't current").IsTrue();
             AssertThat(world.GetViewport().GetCamera3D()).IsSame(world.PlayerCamera.Camera);
-            AssertBool(world.Camera.Current).IsFalse();
+            AssertBool(world.Camera!.Current).IsFalse();
         }
         finally
         {
@@ -292,12 +333,15 @@ public class PlayerOnFootTest
         var radius = template.CapsuleRadius;
         var height = template.CapsuleHeight;
         template.Free();
-        // From below the slab to above the void trigger's top plus a capsule: every draw's capsule is in that range.
-        var bottom = (float)boundary.Cliff.BottomY;
-        var top = (float)boundary.VoidTrigger.TopY + height + 1f;
-
         var world = NewWorld(TestSeed);
         world.SpawnMaxAttempts = attempts;
+
+        // Every capsule a draw can test lies in [bottom, top]. Bottom: the slab's bottom, below every terrain hit.
+        // Top: the spawn ray starts at RayTop (as World.DrawSpawn), so its hit is at most there, and the capsule it
+        // tests spans SpawnDropHeight + CapsuleHeight above the hit. The post is beside the draw point (half a radius
+        // off, a quarter radius wide), so however tall it is, the vertical ray at the point misses it.
+        var bottom = (float)boundary.Cliff.BottomY;
+        var top = RayTop + world.SpawnDropHeight + height;
         var picker = new SpawnPicker(boundary.SpawnArea, new Random(TestSeed));
         var draws = Enumerable.Range(0, attempts).Select(_ => picker.Next()).ToList();
         foreach (var draw in draws)
@@ -318,6 +362,7 @@ public class PlayerOnFootTest
             AssertThat(world.LastSpawnFailure).IsNotNull();
             AssertThat(world.LastSpawnFailure!).Contains($"none of {attempts} draws").Contains(world.MapLoader.BoundaryPath);
             AssertNoPlayer(world);
+            await AssertDebugCameraKeyChangesNothing(world);
         }
         finally
         {
@@ -361,6 +406,7 @@ public class PlayerOnFootTest
             AssertThat(world.LastSpawnFailure).IsNotNull();
             AssertThat(world.LastSpawnFailure!).Contains("no terrain collision").Contains(world.MapLoader.BoundaryPath);
             AssertNoPlayer(world);
+            await AssertDebugCameraKeyChangesNothing(world);
         }
         finally
         {
@@ -797,7 +843,314 @@ public class PlayerOnFootTest
         AssertThat(string.Join("; ", hits.Take(10))).IsEqual("");
     }
 
-    // ----- Criterion 17 (mouse only; the gamepad is part B) -----
+    // ----- Criterion 17: gamepad (injected joypad events) and mouse -----
+
+    /// <summary>Criterion 17 with criterion 10's measurement: the left stick at full forward tilt (LeftY −1) walks like <c>move_forward</c>.</summary>
+    [TestCase]
+    public async Task Ac17_LeftStickFullForward_WalksAwayFromTheCameraAtWalkSpeedAndStops()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        var player = world.Player!;
+        await AssertStraightRun(world, player, FindFlatLine(world, player), run: false, () => Stick(JoyAxis.LeftY, -1f), 1f, "Ac17 full stick");
+    }
+
+    /// <summary>
+    /// "Half tilt" (spec amendment, part B plan 2): the raw stick value halfway between the action's deadzone and full
+    /// tilt. <see cref="Input.GetVector"/> remaps the length radially from [deadzone, 1] to [0, 1], with the mean of its
+    /// four actions' deadzones, so that raw value gives strength 0.5 and half <see cref="Player.WalkSpeed"/> (± 5 %).
+    /// </summary>
+    [TestCase]
+    public async Task Ac17_LeftStickHalfTilt_WalksAtHalfWalkSpeed()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        var player = world.Player!;
+        var deadzone = MoveDeadzone();
+        var halfTilt = (deadzone + 1f) / 2f;
+        var strength = Mathf.InverseLerp(deadzone, 1f, halfTilt);
+        AssertFloat(strength).IsEqualApprox(0.5f, 1e-6f);
+
+        // The remap as Input reads it: injected on its own, the move vector has that length.
+        Stick(JoyAxis.LeftY, -halfTilt);
+        var vector = Input.GetVector(Player.MoveLeftAction, Player.MoveRightAction, Player.MoveForwardAction, Player.MoveBackAction);
+        ReleaseAll();
+        GD.Print(Invariant($"PlayerOnFootTest: Ac17 half tilt: deadzone {deadzone}, raw {halfTilt}, move vector {vector}"));
+        AssertFloat(vector.Length()).IsEqualApprox(strength, 1e-6f);
+        AssertFloat(vector.Y).IsLess(0f);
+
+        await AssertStraightRun(world, player, FindFlatLine(world, player), run: false, () => Stick(JoyAxis.LeftY, -halfTilt), strength, "Ac17 half tilt");
+    }
+
+    /// <summary>
+    /// With the stick at full forward tilt, a left-stick click (press, then release a frame later) turns
+    /// <see cref="Player.RunToggle"/> on and the player runs at <see cref="Player.RunSpeed"/> (± 5 % after
+    /// acceleration). The stick back inside its deadzone (half the deadzone, not zero) turns the toggle off in that
+    /// physics frame; after the stop, full tilt again walks at <see cref="Player.WalkSpeed"/>. Each speed is measured
+    /// over <see cref="ToggleHoldSeconds"/> after the ramp to it, along the flat line, and the whole sequence stays on
+    /// that line (checked).
+    /// </summary>
+    [TestCase]
+    public async Task Ac17_LeftStickClick_TogglesRunningOn_StickInsideTheDeadzoneTurnsItOff_TheNextMovementWalks()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        var player = world.Player!;
+        var line = FindFlatLine(world, player);
+        await PlaceAndSettle(world, player, line.Start, line.Yaw);
+        AssertBool(player.RunToggle.On).IsFalse();
+        var deadzone = MoveDeadzone();
+        var dt = 1f / Engine.PhysicsTicksPerSecond;
+        var hold = Mathf.RoundToInt(ToggleHoldSeconds * Engine.PhysicsTicksPerSecond);
+
+        // Frame 0 tilts, frame 1 clicks, frame 2 releases the click. The click is just pressed for the player in frame
+        // 2 (class summary), so from frame 2 the target is RunSpeed; it is reached within ⌈RunSpeed / (Acceleration·dt)⌉
+        // frames (from rest, the slowest case), so the run is measured from then.
+        const int clickFrame = 1;
+        const int clickActs = clickFrame + 1;
+        var runFrom = clickActs + Mathf.CeilToInt(player.RunSpeed / player.Acceleration / dt) + 1;
+        var runTo = runFrom + hold;
+        var stopFrames = Mathf.CeilToInt(player.RunSpeed / player.Deceleration / dt) + StopMarginFrames;
+        int? stoppedAt = null;
+        int? walkFrom = null;
+        int? walkTo = null;
+        var onAfterClick = false;
+        var onBeforeRelease = false;
+        var onAfterRelease = true;
+        var onWhileWalking = true;
+        var alongRunFrom = 0f;
+        var alongRunTo = 0f;
+        var alongWalkFrom = 0f;
+        var alongWalkTo = 0f;
+        var farthest = 0f;
+        await Drive(world, frame =>
+        {
+            var along = line.Along(player.GlobalPosition);
+            farthest = Mathf.Max(farthest, along);
+            switch (frame)
+            {
+                case 0:
+                    Stick(JoyAxis.LeftY, -1f);
+                    return false;
+                case clickFrame:
+                    PadButton(GamepadButtons.LeftStickClick, pressed: true);
+                    return false;
+                case clickActs:
+                    PadButton(GamepadButtons.LeftStickClick, pressed: false);
+                    return false;
+                case clickActs + 1:
+                    // The state read here is after the physics of the frame that saw the click.
+                    onAfterClick = player.RunToggle.On;
+                    return false;
+            }
+
+            if (frame == runFrom)
+            {
+                alongRunFrom = along;
+            }
+            else if (frame == runTo)
+            {
+                alongRunTo = along;
+                onBeforeRelease = player.RunToggle.On;
+                Stick(JoyAxis.LeftY, -deadzone / 2f);
+            }
+            else if (frame == runTo + 1)
+            {
+                onAfterRelease = player.RunToggle.On;
+            }
+            else if (frame > runTo + 1 && stoppedAt is null)
+            {
+                if (Horizontal(player.Velocity).Length() < StoppedSpeed)
+                {
+                    stoppedAt = frame;
+                    Stick(JoyAxis.LeftY, -1f);
+                    walkFrom = frame + Mathf.CeilToInt(player.WalkSpeed / player.Acceleration / dt) + 1;
+                    walkTo = walkFrom + hold;
+                }
+                else if (frame > runTo + stopFrames)
+                {
+                    return true;
+                }
+            }
+            else if (frame == walkFrom)
+            {
+                alongWalkFrom = along;
+            }
+            else if (frame == walkTo)
+            {
+                alongWalkTo = along;
+                onWhileWalking = player.RunToggle.On;
+                ReleaseAll();
+                return true;
+            }
+
+            return false;
+        }, runTo + stopFrames + (3 * hold));
+        ReleaseAll();
+
+        var seconds = hold * dt;
+        var runSpeed = (alongRunTo - alongRunFrom) / seconds;
+        var walkSpeed = (alongWalkTo - alongWalkFrom) / seconds;
+        GD.Print(Invariant(
+            $"PlayerOnFootTest: Ac17 run toggle: on after the click {onAfterClick}, run {runSpeed:0.####} m/s (RunSpeed {player.RunSpeed}), off after the stick returned {!onAfterRelease}, stopped at frame {stoppedAt}, walk {walkSpeed:0.####} m/s (WalkSpeed {player.WalkSpeed}), farthest {farthest:0.##} of {line.Length:0.##} m"));
+        AssertBool(onAfterClick).OverrideFailureMessage("the left-stick click didn't turn the run toggle on").IsTrue();
+        AssertBool(onBeforeRelease).OverrideFailureMessage("the run toggle turned off while the stick was held").IsTrue();
+        AssertFloat(runSpeed).IsBetween(player.RunSpeed * (1f - SpecSpeedTolerance), player.RunSpeed * (1f + SpecSpeedTolerance));
+        AssertBool(onAfterRelease).OverrideFailureMessage("the stick back inside its deadzone didn't turn the run toggle off").IsFalse();
+        AssertThat(stoppedAt).OverrideFailureMessage("the player didn't stop with the stick inside its deadzone").IsNotNull();
+        AssertThat(walkTo).IsNotNull();
+        AssertFloat(walkSpeed).IsBetween(player.WalkSpeed * (1f - SpecSpeedTolerance), player.WalkSpeed * (1f + SpecSpeedTolerance));
+        AssertBool(onWhileWalking).OverrideFailureMessage("the next movement ran").IsFalse();
+        AssertFloat(farthest).OverrideFailureMessage("the sequence left the checked flat line").IsLessEqual(line.Length);
+    }
+
+    /// <summary>The south face button (button 0) jumps like <c>jump</c> (criterion 11's apex tolerance) and the player lands.</summary>
+    [TestCase]
+    public async Task Ac17_SouthButton_JumpsToJumpHeightAndLands()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        var player = world.Player!;
+        var line = FindFlatLine(world, player);
+        await PlaceAndSettle(world, player, line.Start, line.Yaw);
+        var takeOff = player.GlobalPosition.Y;
+        var airFrames = Mathf.CeilToInt(2f * player.JumpSpeed / player.Gravity * Engine.PhysicsTicksPerSecond);
+        var apex = takeOff;
+        var leftFloor = false;
+        var landed = false;
+        await Drive(world, frame =>
+        {
+            apex = Mathf.Max(apex, player.GlobalPosition.Y);
+            var onFloor = player.IsOnFloor();
+            if (frame == 0)
+            {
+                PadButton(GamepadButtons.South, pressed: true);
+                return false;
+            }
+
+            if (frame == 1)
+            {
+                PadButton(GamepadButtons.South, pressed: false);
+            }
+
+            leftFloor |= !onFloor;
+            landed = leftFloor && onFloor;
+            return landed;
+        }, 2 * airFrames);
+
+        var rise = apex - takeOff;
+        GD.Print(Invariant($"PlayerOnFootTest: Ac17 south button: apex +{rise:0.####} m (JumpHeight {player.JumpHeight})"));
+        AssertBool(leftFloor).OverrideFailureMessage("the south button didn't leave the floor").IsTrue();
+        AssertFloat(rise).IsBetween(player.JumpHeight * (1f - JumpTolerance), player.JumpHeight * (1f + JumpTolerance));
+        AssertBool(landed).OverrideFailureMessage($"not on the floor again within {2 * airFrames} physics frames").IsTrue();
+    }
+
+    /// <summary>
+    /// In the world, with the player camera current: right stick right (RightX +1) turns the camera right (yaw falls by
+    /// <see cref="PlayerCamera.StickSensitivity"/> × dt per frame at full tilt), and stick up (RightY −1) pitches it up
+    /// by the same rate (not inverted). Held up, then down, for longer than the whole pitch range takes, the pitch
+    /// stops at <see cref="PlayerCamera.MaxPitchDegrees"/>, then <see cref="PlayerCamera.MinPitchDegrees"/>, and is
+    /// within them in every frame.
+    /// </summary>
+    [TestCase]
+    public async Task Ac17_RightStick_TurnsTheCameraRightAndPitchesUpNotInverted_PitchStaysWithinItsLimits()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        var camera = world.PlayerCamera!;
+        AssertBool(camera.IsCurrent).IsTrue();
+        AssertBool(camera.InvertStickY).IsFalse();
+        var min = Mathf.DegToRad(camera.MinPitchDegrees);
+        var max = Mathf.DegToRad(camera.MaxPitchDegrees);
+        var step = camera.StickSensitivity / Engine.PhysicsTicksPerSecond;
+
+        // Yaw: a quarter turn's worth of frames, so the change stays inside (−π, π) and needs no unwrapping beyond one.
+        var yawFrames = Mathf.FloorToInt(Mathf.Pi / 2f / step);
+        var yawBefore = camera.Yaw;
+        await HoldStick(world, JoyAxis.RightX, 1f, yawFrames, null);
+        var yawChange = Mathf.AngleDifference(yawBefore, camera.Yaw);
+
+        // Pitch up for fewer frames than the way from the start pitch to the limit.
+        var pitchBefore = camera.Pitch;
+        var upFrames = Mathf.FloorToInt((max - pitchBefore) / step) - 1;
+        await HoldStick(world, JoyAxis.RightY, -1f, upFrames, null);
+        var pitchChange = camera.Pitch - pitchBefore;
+
+        // Held through the whole range and beyond, both ways.
+        var rangeFrames = Mathf.CeilToInt((max - min) / step) + 2;
+        var pitches = new List<float>();
+        await HoldStick(world, JoyAxis.RightY, -1f, rangeFrames, pitches);
+        var atTop = camera.Pitch;
+        await HoldStick(world, JoyAxis.RightY, 1f, rangeFrames, pitches);
+        var atBottom = camera.Pitch;
+
+        // Float rounding only: each frame adds one rounded step and wraps or clamps, so the error grows by at most a
+        // couple of float32 ulps of the angle (|angle| ≤ π) per frame.
+        var ulp = MathF.BitIncrement(Mathf.Pi) - Mathf.Pi;
+        GD.Print(Invariant(
+            $"PlayerOnFootTest: Ac17 right stick: yaw {Mathf.RadToDeg(yawChange):0.###}° in {yawFrames} frames, pitch +{Mathf.RadToDeg(pitchChange):0.###}° in {upFrames} frames, held: top {Mathf.RadToDeg(atTop):0.###}°, bottom {Mathf.RadToDeg(atBottom):0.###}°"));
+        AssertFloat(yawChange).IsEqualApprox(-yawFrames * step, 2f * yawFrames * ulp);
+        AssertFloat(pitchChange).IsEqualApprox(upFrames * step, 2f * upFrames * ulp);
+        AssertFloat(atTop).IsEqualApprox(max, 1e-6f);
+        AssertFloat(atBottom).IsEqualApprox(min, 1e-6f);
+        AssertFloat(pitches.Max()).IsLessEqual(max);
+        AssertFloat(pitches.Min()).IsGreaterEqual(min);
+    }
+
+    /// <summary>
+    /// <see cref="PlayerCamera.OrbitStick"/> directly (x right, y down, as <see cref="Input.GetVector"/> gives it): up
+    /// pitches up and down back by <see cref="PlayerCamera.StickSensitivity"/> × delta, right turns right, a tilt held
+    /// for twice the time the pitch range takes stops at each limit, and <see cref="PlayerCamera.InvertStickY"/>
+    /// reverses only the pitch.
+    /// </summary>
+    [TestCase]
+    public async Task Ac17_OrbitStick_UpPitchesUpRightTurnsRight_PitchClampedToItsLimits()
+    {
+        using var runner = ISceneRunner.Load(new Node3D { Name = "Root" }, true);
+        var camera = new PlayerCamera { Name = "PlayerCamera" };
+        runner.Scene()!.AddChild(camera);
+        await runner.AwaitIdleFrame();
+        var min = Mathf.DegToRad(camera.MinPitchDegrees);
+        var max = Mathf.DegToRad(camera.MaxPitchDegrees);
+        var dt = 1.0 / Engine.PhysicsTicksPerSecond;
+        var step = camera.StickSensitivity * (float)dt;
+        var wholeRange = 2.0 * (max - min) / camera.StickSensitivity;
+
+        var start = camera.Pitch;
+        camera.OrbitStick(new Vector2(0f, -1f), dt);
+        AssertFloat(camera.Pitch).IsEqualApprox(start + step, 1e-6f);
+        camera.OrbitStick(new Vector2(0f, 1f), dt);
+        AssertFloat(camera.Pitch).IsEqualApprox(start, 1e-6f);
+
+        camera.OrbitStick(new Vector2(0f, -1f), wholeRange);
+        AssertFloat(camera.Pitch).IsEqualApprox(max, 1e-6f);
+        camera.OrbitStick(new Vector2(0f, 1f), wholeRange);
+        AssertFloat(camera.Pitch).IsEqualApprox(min, 1e-6f);
+
+        var yaw = camera.Yaw;
+        camera.OrbitStick(new Vector2(1f, 0f), dt);
+        AssertFloat(camera.Yaw).IsEqualApprox(yaw - step, 1e-6f);
+        AssertFloat(camera.Rotation.X).IsEqualApprox(camera.Pitch, 1e-6f);
+        AssertFloat(camera.Rotation.Y).IsEqualApprox(camera.Yaw, 1e-6f);
+
+        camera.InvertStickY = true;
+        camera.OrbitStick(new Vector2(0f, 1f), dt);
+        AssertFloat(camera.Pitch).IsEqualApprox(min + step, 1e-6f);
+        yaw = camera.Yaw;
+        camera.OrbitStick(new Vector2(1f, 0f), dt);
+        AssertFloat(camera.Yaw).IsEqualApprox(yaw - step, 1e-6f);
+    }
+
 
     [TestCase]
     public async Task Ac17_MouseUp_PitchesUp_AndPitchStaysWithinItsLimits()
@@ -835,6 +1188,17 @@ public class PlayerOnFootTest
 
     // ----- Criterion 18: no automatic swing-back -----
 
+    /// <summary>
+    /// One full turn of the input direction in <see cref="CircleSeconds"/> with no camera input. The input at frame k
+    /// of N is the angle θ = 2πk/N, pressed as <c>move_right</c> sin θ and <c>move_back</c> cos θ
+    /// (<see cref="PressAxis"/>: a positive value presses the positive action), so the move direction, relative to the
+    /// camera's forward F and right R, is d(θ) = sin θ·R − cos θ·F: back, right, forward, left. At
+    /// <see cref="Player.WalkSpeed"/> W and ω = 2π/T the ideal path is p(t) = c + r·(−cos θ·R − sin θ·F), a circle of
+    /// radius r = W·T/2π (2.8 m/s, 3 s: ≈ 1.34 m) centred one radius to the right of the start, c = p₀ + r·R. The walk
+    /// starts there, on the flattest disc of open ground that holds that circle with the capsule (<see cref="FindOpenDisc"/>),
+    /// and every frame the player's centre stays within <see cref="CirclePathBound"/> of c and on open ground. The camera
+    /// yaw and pitch never change.
+    /// </summary>
     [TestCase]
     public async Task Ac18_WalkingInACircleWithoutCameraInput_LeavesTheCameraYawUnchanged()
     {
@@ -844,27 +1208,54 @@ public class PlayerOnFootTest
         AssertBool(await WaitForSpawn(world)).IsTrue();
         var player = world.Player!;
         var camera = world.PlayerCamera!;
-        var line = FindFlatLine(world, player);
-        await PlaceAndSettle(world, player, line.Start, line.Yaw);
-        camera.Yaw = line.Yaw;
-        var yaw = camera.Yaw;
-        var pitch = camera.Pitch;
+        var openGround = world.MapLoader.Boundary!.SpawnArea.OpenGround;
+        var r = player.WalkSpeed * CircleSeconds / Mathf.Tau;
 
-        // One full turn of the input direction in 3 s: a circle about WalkSpeed × 3 / 2π in radius (2.8 m/s: ≈ 1.34 m).
-        const float seconds = 3f;
-        var frames = Mathf.CeilToInt(seconds * Engine.PhysicsTicksPerSecond);
+        // The disc must hold the path bound plus the capsule. The bound's slope term depends on the disc found, so the
+        // search radius adds a sample step instead (the rings are sampled that far apart, a margin for an obstacle
+        // edge between two samples), and the slope term and the centre's settle offset must fit in it (checked below;
+        // at a few degrees the slope term is millimetres).
+        var noSlopeBound = CirclePathBound(player, r, 0f);
+        var disc = FindOpenDisc(world, player, noSlopeBound + player.CapsuleRadius + SampleStep);
+        var bound = CirclePathBound(player, r, disc.MaxSlope);
+
+        // Camera yaw 0: F = −Z and R = F × up = +X (OnFootMotion: right input moves along (cos yaw, −sin yaw)).
+        const float yaw = 0f;
+        var right = new Vector3(Mathf.Cos(yaw), 0f, -Mathf.Sin(yaw));
+        var startXz = disc.Centre - (right * r);
+        var ground = FirstHit(world, startXz.X, startXz.Z, RayTop, -RayTop)!.Value.Position;
+        await PlaceAndSettle(world, player, ground, yaw);
+        camera.Yaw = yaw;
+        var cameraYaw = camera.Yaw;
+        var pitch = camera.Pitch;
+        var centre = Horizontal(player.GlobalPosition + (right * r));
+        var centreOffset = HorizontalDistance(centre, disc.Centre);
+        AssertFloat(centreOffset + bound + player.CapsuleRadius)
+            .OverrideFailureMessage(Invariant($"the circle (bound {bound:0.###} m, centre {centreOffset:0.####} m off) doesn't fit the {disc.Radius:0.###} m disc with the capsule"))
+            .IsLessEqual(disc.Radius);
+
+        var frames = Mathf.CeilToInt(CircleSeconds * Engine.PhysicsTicksPerSecond);
         var yaws = new List<float>();
         var pitches = new List<float>();
         var facing = new List<float>();
         var path = 0f;
         var last = player.GlobalPosition;
+        var farthest = 0f;
+        var offGround = new List<Vector3>();
         await Drive(world, frame =>
         {
+            var position = player.GlobalPosition;
             yaws.Add(camera.Yaw);
             pitches.Add(camera.Pitch);
             facing.Add(player.FacingYaw);
-            path += Horizontal(player.GlobalPosition - last).Length();
-            last = player.GlobalPosition;
+            path += Horizontal(position - last).Length();
+            last = position;
+            farthest = Mathf.Max(farthest, HorizontalDistance(position, centre));
+            if (!SpawnPicker.Contains(openGround, position.X, position.Z))
+            {
+                offGround.Add(position);
+            }
+
             var angle = Mathf.Tau * frame / frames;
             PressAxis(Player.MoveLeftAction, Player.MoveRightAction, Mathf.Sin(angle));
             PressAxis(Player.MoveForwardAction, Player.MoveBackAction, Mathf.Cos(angle));
@@ -878,11 +1269,382 @@ public class PlayerOnFootTest
             turned += Mathf.Abs(Mathf.AngleDifference(facing[i - 1], facing[i]));
         }
 
-        GD.Print(Invariant($"PlayerOnFootTest: Ac18 walked {path:0.##} m, facing turned {Mathf.RadToDeg(turned):0.#}°, camera yaw stayed {Mathf.RadToDeg(yaw):0.###}°"));
-        AssertFloat(path).OverrideFailureMessage("the player didn't walk").IsGreater(player.WalkSpeed * seconds / 2f);
+        GD.Print(Invariant(
+            $"PlayerOnFootTest: Ac18 circle r {r:0.###} m on a {disc.Radius:0.###} m disc at {disc.Centre} (max slope {Mathf.RadToDeg(disc.MaxSlope):0.##}°): walked {path:0.##} m, farthest {farthest:0.###} m from the centre (bound {bound:0.###}), facing turned {Mathf.RadToDeg(turned):0.#}°, camera yaw stayed {Mathf.RadToDeg(cameraYaw):0.###}°"));
+        AssertFloat(path).OverrideFailureMessage("the player didn't walk").IsGreater(player.WalkSpeed * CircleSeconds / 2f);
         AssertFloat(turned).OverrideFailureMessage("the player didn't walk round").IsGreater(Mathf.Pi * 1.5f);
-        AssertThat(yaws.Distinct().ToList()).IsEqual(new List<float> { yaw });
+        AssertFloat(farthest).OverrideFailureMessage("the walk left the circle's bound").IsLessEqual(bound);
+        AssertThat(string.Join("; ", offGround.Take(5).Select(p => Invariant($"{p}")))).OverrideFailureMessage("the walk left the open ground").IsEqual("");
+        AssertThat(yaws.Distinct().ToList()).IsEqual(new List<float> { cameraYaw });
         AssertThat(pitches.Distinct().ToList()).IsEqual(new List<float> { pitch });
+    }
+
+    // ----- Criterion 19: the debug camera toggle (debug builds) and the release layout -----
+
+    [TestCase]
+    public void Ac19_DebugCameraAction_IsBoundToExactlyThePhysicalKeysQuoteleftAndSection()
+    {
+        AssertBool(InputMap.HasAction(World.DebugCameraAction)).IsTrue();
+        var events = InputMap.ActionGetEvents(World.DebugCameraAction);
+        var keys = events.OfType<InputEventKey>().ToList();
+        AssertInt(events.Count).OverrideFailureMessage("debug_camera has events other than the two keys").IsEqual(2);
+        AssertInt(keys.Count).IsEqual(2);
+        AssertThat(keys.Select(k => k.PhysicalKeycode).OrderBy(k => k).ToList())
+            .IsEqual(new[] { Key.Quoteleft, Key.Section }.OrderBy(k => k).ToList());
+
+        // Physical keycodes only (the key left of 1 on any layout), never a layout keycode or label.
+        foreach (var key in keys)
+        {
+            AssertThat(key.Keycode).IsEqual(Key.None);
+            AssertThat(key.KeyLabel).IsEqual(Key.None);
+        }
+    }
+
+    /// <summary>
+    /// A press of the physical key left of 1 (<c>Key.Quoteleft</c>), injected through <see cref="Input.ParseInputEvent"/>,
+    /// makes the <see cref="DebugCamera"/> current at the player camera's global transform and field of view, and
+    /// turns the player's and the player camera's input off.
+    /// </summary>
+    [TestCase]
+    public async Task Ac19_DebugCameraKey_SwitchesToTheDebugCameraAtThePlayerCameraTransform()
+    {
+        AssertPackPresent();
+        AssertBool(DebugBuild.IsDebug).IsTrue();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        var player = world.Player!;
+        var playerCamera = world.PlayerCamera!;
+        var debugCamera = world.Camera!;
+        var line = FindFlatLine(world, player);
+        await PlaceAndSettle(world, player, line.Start, line.Yaw);
+        AssertBool(playerCamera.IsCurrent).IsTrue();
+        AssertBool(world.DebugCameraActive).IsFalse();
+        var transform = playerCamera.Camera.GlobalTransform;
+        AssertThat(debugCamera.GlobalTransform.IsEqualApprox(transform)).OverrideFailureMessage("the debug camera already was where the player camera is").IsFalse();
+
+        TapKey(Key.Quoteleft);
+
+        GD.Print(Invariant($"PlayerOnFootTest: Ac19 player camera at {transform.Origin}, debug camera now at {debugCamera.GlobalPosition}"));
+        AssertBool(world.DebugCameraActive).OverrideFailureMessage("the debug_camera key didn't toggle").IsTrue();
+        AssertBool(debugCamera.Current).IsTrue();
+        AssertThat(world.GetViewport().GetCamera3D()).IsSame(debugCamera);
+        AssertBool(playerCamera.IsCurrent).IsFalse();
+        AssertBool(debugCamera.GlobalTransform.IsEqualApprox(transform))
+            .OverrideFailureMessage(Invariant($"debug camera at {debugCamera.GlobalTransform}, player camera at {transform}"))
+            .IsTrue();
+        AssertFloat(debugCamera.Fov).IsEqual(playerCamera.Camera.Fov);
+        AssertBool(player.InputEnabled).IsFalse();
+        AssertBool(playerCamera.InputEnabled).IsFalse();
+    }
+
+    /// <summary>
+    /// With the debug camera on: <c>move_forward</c> held (and the right stick at full tilt) for
+    /// <see cref="DebugHoldSeconds"/> leaves the player and the player camera where they were, while
+    /// <c>debug_forward</c> moves the debug camera along its view direction by <c>MoveSpeed</c> × the process time it
+    /// was held (the debug camera moves in <c>_Process</c>).
+    /// </summary>
+    [TestCase]
+    public async Task Ac19_WhileTheDebugCameraIsOn_MoveForwardDoesNotMoveThePlayer_DebugForwardMovesTheDebugCamera()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        var player = world.Player!;
+        var playerCamera = world.PlayerCamera!;
+        var debugCamera = world.Camera!;
+        var line = FindFlatLine(world, player);
+        await PlaceAndSettle(world, player, line.Start, line.Yaw);
+        TapKey(Key.Quoteleft);
+        AssertBool(world.DebugCameraActive).IsTrue();
+
+        var feet = player.GlobalPosition;
+        var yaw = playerCamera.Yaw;
+        var pitch = playerCamera.Pitch;
+        var cameraStart = debugCamera.GlobalPosition;
+        var forward = -debugCamera.GlobalBasis.Z.Normalized();
+        var tree = world.GetTree();
+        var heldTime = 0.0;
+        var processFrames = 0;
+        void OnProcess()
+        {
+            heldTime += world.GetProcessDeltaTime();
+            processFrames++;
+        }
+
+        var frames = Mathf.RoundToInt(DebugHoldSeconds * Engine.PhysicsTicksPerSecond);
+        var maxDrift = 0f;
+        var jumped = false;
+        try
+        {
+            await Drive(world, frame =>
+            {
+                maxDrift = Mathf.Max(maxDrift, HorizontalDistance(player.GlobalPosition, feet));
+                jumped |= !player.IsOnFloor();
+                if (frame == 0)
+                {
+                    // Counted from here: the process frames after this physics frame read the pressed action.
+                    tree.ProcessFrame += OnProcess;
+                    Input.ActionPress(Player.MoveForwardAction);
+                    Input.ActionPress(Player.JumpAction);
+                    Input.ActionPress(DebugForwardAction);
+                    Stick(JoyAxis.RightX, 1f);
+                    Stick(JoyAxis.RightY, -1f);
+                    return false;
+                }
+
+                if (frame == frames)
+                {
+                    tree.ProcessFrame -= OnProcess;
+                    ReleaseAll();
+                    return true;
+                }
+
+                return false;
+            }, frames + 1);
+        }
+        finally
+        {
+            tree.ProcessFrame -= OnProcess;
+            ReleaseAll();
+        }
+
+        var moved = debugCamera.GlobalPosition - cameraStart;
+        var along = moved.Dot(forward);
+        var across = (moved - (forward * along)).Length();
+        var expected = debugCamera.MoveSpeed * (float)heldTime;
+
+        // Float rounding only: each process frame adds one rounded step to coordinates of magnitude up to |p|, so the
+        // error grows by at most a float32 ulp of |p| per component and frame.
+        var magnitude = Mathf.Max(MaxAbs(cameraStart), MaxAbs(debugCamera.GlobalPosition));
+        var rounding = 2f * Mathf.Sqrt(3f) * processFrames * (MathF.BitIncrement(magnitude) - magnitude);
+
+        // The player stands with zero velocity and no input: MoveAndSlide's depenetration recovery, bounded by the
+        // body's safe margin, is the only horizontal motion it may make.
+        GD.Print(Invariant(
+            $"PlayerOnFootTest: Ac19 debug camera on: player drift {maxDrift:0.######} m (safe margin {player.SafeMargin}), debug camera {along:0.####} m forward (expected {expected:0.####} over {processFrames} process frames, {heldTime:0.####} s), {across:0.######} m across"));
+        AssertFloat(maxDrift).OverrideFailureMessage("move_forward moved the player while the debug camera was on").IsLessEqual(player.SafeMargin);
+        AssertBool(jumped).OverrideFailureMessage("jump worked while the debug camera was on").IsFalse();
+        AssertFloat(playerCamera.Yaw).IsEqual(yaw);
+        AssertFloat(playerCamera.Pitch).IsEqual(pitch);
+        AssertInt(processFrames).OverrideFailureMessage("no process frame ran while debug_forward was held").IsGreater(0);
+        AssertFloat(along).OverrideFailureMessage("debug_forward didn't move the debug camera forward").IsGreater(0f);
+        AssertFloat(along).IsEqualApprox(expected, rounding);
+        AssertFloat(across).IsLessEqual(rounding);
+        AssertBool(debugCamera.Current).IsTrue();
+    }
+
+    /// <summary>
+    /// After switching on with <c>Key.Quoteleft</c>, a press of the other binding (<c>Key.Section</c>, left of 1 on ISO
+    /// Mac keyboards) switches back: the player camera is current again, as it was (same yaw and pitch), the player and
+    /// the player camera read input again, and <c>move_forward</c> then moves the player.
+    /// </summary>
+    [TestCase]
+    public async Task Ac19_SectionKey_SwitchesBackToThePlayerCameraWithInputOn()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        var player = world.Player!;
+        var playerCamera = world.PlayerCamera!;
+        var line = FindFlatLine(world, player);
+        await PlaceAndSettle(world, player, line.Start, line.Yaw);
+        var yaw = playerCamera.Yaw;
+        var pitch = playerCamera.Pitch;
+        TapKey(Key.Quoteleft);
+        AssertBool(world.DebugCameraActive).IsTrue();
+        await PhysicsFrames(world, 2);
+
+        TapKey(Key.Section);
+
+        AssertBool(world.DebugCameraActive).OverrideFailureMessage("the Section key didn't toggle back").IsFalse();
+        AssertBool(playerCamera.IsCurrent).IsTrue();
+        AssertThat(world.GetViewport().GetCamera3D()).IsSame(playerCamera.Camera);
+        AssertBool(world.Camera!.Current).IsFalse();
+        AssertBool(player.InputEnabled).IsTrue();
+        AssertBool(playerCamera.InputEnabled).IsTrue();
+        AssertFloat(playerCamera.Yaw).IsEqual(yaw);
+        AssertFloat(playerCamera.Pitch).IsEqual(pitch);
+
+        // Input really is on again: one frame of move_forward accelerates the player.
+        var speed = 0f;
+        await Drive(world, frame =>
+        {
+            if (frame == 0)
+            {
+                Input.ActionPress(Player.MoveForwardAction);
+                return false;
+            }
+
+            speed = Horizontal(player.Velocity).Length();
+            ReleaseAll();
+            return true;
+        }, 2);
+        AssertFloat(speed).OverrideFailureMessage("move_forward didn't move the player after switching back").IsGreater(0f);
+    }
+
+    /// <summary>
+    /// Criterion 19's release check (spec amendment 5, ADR 0016): with <see cref="DebugBuild.Override"/> false before the
+    /// world enters the tree, the world builds the release layout. It has no <see cref="DebugCamera"/> (nor any debug
+    /// view) anywhere in its tree, the player spawns with its camera current, and neither
+    /// <see cref="World.ToggleDebugCamera"/> nor the <c>debug_camera</c> key changes anything.
+    /// </summary>
+    [TestCase]
+    public async Task Ac19_ReleaseLayout_HasNoDebugCameraAndThePlayerCameraStaysCurrent()
+    {
+        AssertPackPresent();
+        DebugBuild.Override = false;
+        AssertBool(DebugBuild.IsDebug).IsFalse();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).OverrideFailureMessage("the player didn't spawn in the release layout").IsTrue();
+        await PhysicsFrames(world, 2);
+        var player = world.Player!;
+        var playerCamera = world.PlayerCamera!;
+
+        AssertInt(Descendants(world).OfType<DebugCamera>().Count()).IsEqual(0);
+        AssertInt(Descendants(world).OfType<OrthophotoDebugView>().Count()).IsEqual(0);
+        AssertInt(Descendants(world).OfType<RoadGraphDebugView>().Count()).IsEqual(0);
+        AssertInt(Descendants(world).OfType<PlaceInspector>().Count()).IsEqual(0);
+        AssertThat(world.Camera).IsNull();
+        AssertThat(world.Orthophoto).IsNull();
+        AssertThat(world.RoadGraphView).IsNull();
+        AssertThat(world.Inspector).IsNull();
+        AssertBool(playerCamera.IsCurrent).IsTrue();
+        AssertThat(world.GetViewport().GetCamera3D()).IsSame(playerCamera.Camera);
+
+        AssertBool(world.ToggleDebugCamera()).IsFalse();
+        TapKey(Key.Quoteleft);
+        TapKey(Key.Section);
+        await PhysicsFrames(world, 2);
+        AssertBool(world.DebugCameraActive).IsFalse();
+        AssertBool(playerCamera.IsCurrent).IsTrue();
+        AssertThat(world.GetViewport().GetCamera3D()).IsSame(playerCamera.Camera);
+        AssertBool(player.InputEnabled).IsTrue();
+        AssertBool(playerCamera.InputEnabled).IsTrue();
+    }
+
+    /// <summary>
+    /// Criterion 19, the mouse capture restore ("Switching back restores the player camera as it was, and the mouse
+    /// capture"): <see cref="PlayerCamera.Activate"/> with <c>captureMouse: false</c> makes the camera current and
+    /// doesn't capture the mouse, and a <see cref="World.ToggleDebugCamera"/> round trip that starts with the mouse not
+    /// captured ends with the player camera current and the mouse still not captured.
+    /// <para>
+    /// What this can and can't show: measured on 2026-11-04 under the gdUnit4 headless run, the window reports focus
+    /// (<c>HasFocus()</c> true), but the headless display server doesn't support mouse capture, so
+    /// <see cref="Input.MouseMode"/> stays <c>Visible</c> after any capture request and
+    /// <see cref="PlayerCamera.MouseCaptured"/> is always false here (the spawn's <c>Activate()</c> asks for the capture
+    /// and doesn't get it). The test therefore shows that neither path changes <see cref="Input.MouseMode"/> or leaves the
+    /// debug camera current, and that the camera never reports a capture; it can't tell "not captured because not
+    /// asked" from "not captured because the display can't", and it can't show that a round trip starting with the
+    /// mouse captured captures it again. That half needs a real display (the playtest, criterion 25). The printed line
+    /// records the display, focus and mouse mode of each run.
+    /// </para>
+    /// </summary>
+    [TestCase]
+    public async Task Ac19_SwitchingBackWithTheMouseFree_MakesThePlayerCameraCurrentAndLeavesTheMouseFree()
+    {
+        AssertPackPresent();
+        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
+        var world = (World)runner.Scene()!;
+        AssertBool(await WaitForSpawn(world)).IsTrue();
+        await PhysicsFrames(world, 2);
+        var playerCamera = world.PlayerCamera!;
+        var modeBefore = Input.MouseMode;
+        GD.Print($"PlayerOnFootTest: Ac19 mouse restore: display {DisplayServer.GetName()}, focus {playerCamera.GetWindow().HasFocus()}, mouse mode {modeBefore}");
+        AssertBool(playerCamera.MouseCaptured).OverrideFailureMessage("precondition: the mouse is captured after the spawn").IsFalse();
+
+        // Activate without capture, with the debug camera current first so MakeCurrent has something to change.
+        world.Camera!.MakeCurrent();
+        AssertBool(playerCamera.IsCurrent).IsFalse();
+        playerCamera.Activate(captureMouse: false);
+        AssertBool(playerCamera.IsCurrent).IsTrue();
+        AssertThat(world.GetViewport().GetCamera3D()).IsSame(playerCamera.Camera);
+        AssertBool(playerCamera.MouseCaptured).IsFalse();
+        AssertThat(Input.MouseMode).IsEqual(modeBefore);
+        await PhysicsFrames(world, 2);
+        AssertBool(playerCamera.MouseCaptured).IsFalse();
+        AssertThat(Input.MouseMode).IsEqual(modeBefore);
+
+        // The round trip through the debug camera.
+        AssertBool(world.ToggleDebugCamera()).IsTrue();
+        AssertBool(world.DebugCameraActive).IsTrue();
+        AssertBool(playerCamera.IsCurrent).IsFalse();
+        await PhysicsFrames(world, 2);
+        AssertBool(world.ToggleDebugCamera()).IsTrue();
+        AssertBool(world.DebugCameraActive).IsFalse();
+        AssertBool(playerCamera.IsCurrent).IsTrue();
+        AssertThat(world.GetViewport().GetCamera3D()).IsSame(playerCamera.Camera);
+        AssertBool(playerCamera.InputEnabled).IsTrue();
+        AssertBool(playerCamera.MouseCaptured).IsFalse();
+        AssertThat(Input.MouseMode).IsEqual(modeBefore);
+        await PhysicsFrames(world, 2);
+        AssertBool(playerCamera.MouseCaptured).IsFalse();
+        AssertThat(Input.MouseMode).IsEqual(modeBefore);
+    }
+
+    // ----- Criterion 23: --player and the debug-only screenshot flags outside a debug build -----
+
+    /// <summary>
+    /// Criterion 23's release half: with <see cref="DebugBuild.Override"/> false, a <see cref="ScreenshotTool"/> asked for
+    /// <c>--player</c> finishes with <see cref="ScreenshotExitCode.Error"/> (1) when it is added and pushes
+    /// "--player needs a debug build". The check comes before the headless refusal, so it runs here without a display.
+    /// </summary>
+    [TestCase]
+    public void Ac23_PlayerFlagOutsideADebugBuild_ExitsWithErrorAndSaysItNeedsADebugBuild()
+    {
+        DebugBuild.Override = false;
+        var (exitCode, errors) = RunScreenshotToolReady(ToolArgs() with { Player = true });
+        AssertThat(exitCode).IsEqual(ScreenshotExitCode.Error);
+        AssertBool(errors.Any(e => e.Contains("--player needs a debug build"))).OverrideFailureMessage(string.Join("; ", errors)).IsTrue();
+        AssertBool(errors.Any(e => e.Contains("--headless"))).OverrideFailureMessage("the headless refusal ran before the build check").IsFalse();
+    }
+
+    /// <summary>
+    /// The contrast for <see cref="Ac23_PlayerFlagOutsideADebugBuild_ExitsWithErrorAndSaysItNeedsADebugBuild"/>: in a
+    /// debug build the same request passes the build check and stops at the headless refusal (still exit 1 here), so
+    /// the message above comes from the build check and not from something else refusing.
+    /// </summary>
+    [TestCase]
+    public void Ac23_PlayerFlagInADebugBuild_PassesTheBuildCheck()
+    {
+        AssertThat(DisplayServer.GetName()).OverrideFailureMessage("this contrast needs the headless run of .runsettings").IsEqual("headless");
+        DebugBuild.Override = true;
+        var (exitCode, errors) = RunScreenshotToolReady(ToolArgs() with { Player = true });
+        AssertThat(exitCode).IsEqual(ScreenshotExitCode.Error);
+        AssertBool(errors.Any(e => e.Contains("--player needs a debug build"))).OverrideFailureMessage(string.Join("; ", errors)).IsFalse();
+        AssertBool(errors.Any(e => e.Contains("rendering is disabled with --headless"))).OverrideFailureMessage(string.Join("; ", errors)).IsTrue();
+    }
+
+    /// <summary>
+    /// Outside a debug build the world has no road graph view (criterion 19's release layout), so a
+    /// <see cref="ScreenshotTool"/> asked for <c>--road-graph</c> without it exits 1 and says why (game/CLAUDE.md,
+    /// "Screenshots": "Exit 1 in a non-debug build").
+    /// </summary>
+    [TestCase]
+    public void RoadGraphFlagOutsideADebugBuild_ExitsWithErrorAndSaysItNeedsTheDebugView()
+    {
+        DebugBuild.Override = false;
+        var (exitCode, errors) = RunScreenshotToolReady(ToolArgs() with { RoadGraph = true });
+        AssertThat(exitCode).IsEqual(ScreenshotExitCode.Error);
+        AssertBool(errors.Any(e => e.Contains("--road-graph needs the road graph debug view, which only debug builds have")))
+            .OverrideFailureMessage(string.Join("; ", errors)).IsTrue();
+    }
+
+    /// <summary>
+    /// Outside a debug build the world has no place inspector, so a <see cref="ScreenshotTool"/> asked for
+    /// <c>--inspect</c> without it exits 1 and says why (game/CLAUDE.md, "Screenshots": "Exit 1 in a non-debug build").
+    /// </summary>
+    [TestCase]
+    public void InspectFlagOutsideADebugBuild_ExitsWithErrorAndSaysItNeedsTheInspector()
+    {
+        DebugBuild.Override = false;
+        var (exitCode, errors) = RunScreenshotToolReady(ToolArgs() with { Inspect = true });
+        AssertThat(exitCode).IsEqual(ScreenshotExitCode.Error);
+        AssertBool(errors.Any(e => e.Contains("--inspect needs the place inspector, which only debug builds have")))
+            .OverrideFailureMessage(string.Join("; ", errors)).IsTrue();
     }
 
     // ----- Criterion 20: temporary fall respawn -----
@@ -926,7 +1688,8 @@ public class PlayerOnFootTest
             player.PlaceAt(new Vector3(spawn.X, slabBottom - NoRespawnDepth, spawn.Z), 0f);
             await PhysicsFrames(world, safeFrames);
             AssertInt(respawns.Count).OverrideFailureMessage($"respawned at {NoRespawnDepth} m below the slab").IsEqual(0);
-            AssertFloat(player.GlobalPosition.Y).IsLess(slabBottom - NoRespawnDepth + 0.01f);
+            // Nothing is under the slab: placed there with zero velocity it only falls.
+            AssertFloat(player.GlobalPosition.Y).IsLessEqual(slabBottom - NoRespawnDepth);
             AssertFloat(player.GlobalPosition.Y).IsGreaterEqual(slabBottom - world.FallRespawnDepth);
 
             // 21 m below, falling: respawned in the next physics frame with zero velocity.
@@ -968,13 +1731,15 @@ public class PlayerOnFootTest
         var graph = world.MapLoader.RoadGraph!;
         AssertThat(hud.Target).IsSame(player);
 
-        // The first named ground edge whose middle, on the road surface, is nearest to that edge.
+        // The first named ground edge whose middle, on the road surface, is nearest to that edge. The road surface is
+        // the first body from the top there (no height window to guess): with a bridge or anything else above the
+        // middle, the next candidate is used.
         RoadEdge? edge = null;
         Vector3 feet = default;
         foreach (var candidate in graph.Edges.Where(e => e.Names.Name is not null && !e.Bridge && !e.Tunnel))
         {
             var middle = PolylineAt(candidate.Points, PolylineLength(candidate.Points) / 2);
-            if (FirstHit(world, middle.X, middle.Z, middle.Y + 1f, middle.Y - 1f) is not { } hit || !hit.Body.IsInGroup(MapLoader.RoadGroup))
+            if (FirstHit(world, middle.X, middle.Z, RayTop, -RayTop) is not { } hit || !hit.Body.IsInGroup(MapLoader.RoadGroup) || IsBridgeBody(hit.Body))
             {
                 continue;
             }
@@ -989,8 +1754,8 @@ public class PlayerOnFootTest
 
         AssertThat(edge).OverrideFailureMessage("no named ground edge is the nearest edge to its own middle").IsNotNull();
         // The debug camera current, far beyond the map: its own downward ray would hit nothing.
-        world.Camera.MakeCurrent();
-        world.Camera.GlobalPosition = feet + new Vector3(100_000f, 1000f, 100_000f);
+        world.Camera!.MakeCurrent();
+        world.Camera!.GlobalPosition = feet + new Vector3(100_000f, 1000f, 100_000f);
         player.PlaceAt(feet, 0f);
         await PhysicsFrames(world, 3);
 
@@ -1148,6 +1913,37 @@ public class PlayerOnFootTest
         AssertFloat(((SphereShape3D)camera.SpringArm.Shape).Radius).IsEqual(0.35f);
     }
 
+    // ===== Helpers: screenshot tool =====
+
+    /// <summary>A preset request with no flags; the output path is never written (every run here exits before saving).</summary>
+    private static ScreenshotArgs ToolArgs() =>
+        new("centre-street-level", Path.Combine(Path.GetTempPath(), "player-on-foot-test-unused.png"), null, MapId);
+
+    /// <summary>
+    /// Adds a <see cref="ScreenshotTool"/> for <paramref name="args"/> with the release layout's null views and no world
+    /// (as <see cref="World"/> builds it outside a debug build) and <see cref="ScreenshotTool.QuitOnFinish"/> false, so
+    /// its <c>_Ready</c> checks run without quitting the test runner. The loader is never added to the tree, so no map
+    /// loads. Returns <see cref="ScreenshotTool.ExitCode"/> and the errors pushed meanwhile.
+    /// </summary>
+    private static (int? ExitCode, IReadOnlyList<string> Errors) RunScreenshotToolReady(ScreenshotArgs args)
+    {
+        var loader = new MapLoader { Name = "MapLoader" };
+        var tool = new ScreenshotTool { Name = "ScreenshotTool", Request = args, Loader = loader, QuitOnFinish = false };
+        var capture = new ErrorCapture();
+        OS.AddLogger(capture);
+        try
+        {
+            using var runner = ISceneRunner.Load(new Node { Name = "Root" }, true);
+            runner.Scene()!.AddChild(tool);
+            return (tool.ExitCode, capture.ErrorsOnly);
+        }
+        finally
+        {
+            OS.RemoveLogger(capture);
+            loader.Free();
+        }
+    }
+
     // ===== Helpers: world and frames =====
 
     private static World NewWorld(int? seed)
@@ -1225,12 +2021,108 @@ public class PlayerOnFootTest
         }
     }
 
+    /// <summary>
+    /// Returns every injected input to rest: the stick axes to 0 and the pad buttons and injected keys released (as
+    /// events, because an action's state per device stays until its device sends the release), then every action the
+    /// tests press with <see cref="Input.ActionPress(StringName, float)"/>.
+    /// </summary>
     private static void ReleaseAll()
     {
+        foreach (var axis in StickAxes)
+        {
+            Stick(axis, 0f);
+        }
+
+        foreach (var button in PadButtons)
+        {
+            PadButton(button, pressed: false);
+        }
+
+        foreach (var key in InjectedKeys)
+        {
+            KeyEvent(key, pressed: false);
+        }
+
         foreach (var action in PlayerActions)
         {
             Input.ActionRelease(action);
         }
+    }
+
+    /// <summary>
+    /// Feeds <paramref name="event"/> to <see cref="Input.ParseInputEvent"/> and flushes it at once, so the action
+    /// state changes and the event reaches the nodes' input callbacks now. In a <see cref="SceneTree.PhysicsFrame"/>
+    /// handler it acts like <see cref="Input.ActionPress(StringName, float)"/> (see the class summary for when a press
+    /// counts as just pressed).
+    /// </summary>
+    private static void Inject(InputEvent @event)
+    {
+        Input.ParseInputEvent(@event);
+        Input.FlushBufferedEvents();
+    }
+
+    private static void Stick(JoyAxis axis, float value) =>
+        Inject(new InputEventJoypadMotion { Device = PadDevice, Axis = axis, AxisValue = value });
+
+    private static void PadButton(JoyButton button, bool pressed) =>
+        Inject(new InputEventJoypadButton { Device = PadDevice, ButtonIndex = button, Pressed = pressed });
+
+    private static void KeyEvent(Key physical, bool pressed) =>
+        Inject(new InputEventKey { PhysicalKeycode = physical, Pressed = pressed });
+
+    /// <summary>
+    /// The deadzone <see cref="Input.GetVector"/> uses for the move actions when none is passed: the mean of the four
+    /// actions' deadzones (Godot's documented default).
+    /// </summary>
+    private static float MoveDeadzone() =>
+        new[] { Player.MoveLeftAction, Player.MoveRightAction, Player.MoveForwardAction, Player.MoveBackAction }
+            .Average(a => InputMap.ActionGetDeadzone(a));
+
+    /// <summary>
+    /// Tilts <paramref name="axis"/> to <paramref name="value"/> at the start of a physics frame and back to 0 at the
+    /// start of the frame <paramref name="frames"/> later, so exactly <paramref name="frames"/> physics frames read the
+    /// tilt. Adds the camera pitch after each of them to <paramref name="pitches"/> (when given).
+    /// </summary>
+    private static async Task HoldStick(World world, JoyAxis axis, float value, int frames, List<float>? pitches)
+    {
+        var camera = world.PlayerCamera!;
+        await Drive(world, frame =>
+        {
+            if (frame > 0)
+            {
+                pitches?.Add(camera.Pitch);
+            }
+
+            if (frame == 0)
+            {
+                Stick(axis, value);
+                return false;
+            }
+
+            if (frame == frames)
+            {
+                Stick(axis, 0f);
+                return true;
+            }
+
+            return false;
+        }, frames + 1);
+    }
+
+    /// <summary>
+    /// Criterion 17's run toggle: how long each of the run and the walk is measured after its ramp. Both, with their
+    /// ramps and the stop between, fit on the flat line criterion 10's single 2 s run is sized for (the test checks it).
+    /// </summary>
+    private const float ToggleHoldSeconds = 1f;
+
+    /// <summary>Criterion 19: how long <c>move_forward</c> and <c>debug_forward</c> are held with the debug camera on (criterion 10's hold, 2 s).</summary>
+    private const float DebugHoldSeconds = 2f;
+
+    /// <summary>A key press and its release, as one tap of a physical key.</summary>
+    private static void TapKey(Key physical)
+    {
+        KeyEvent(physical, pressed: true);
+        KeyEvent(physical, pressed: false);
     }
 
     /// <summary>Presses <paramref name="negative"/> or <paramref name="positive"/> with the strength of <paramref name="value"/>.</summary>
@@ -1267,11 +2159,19 @@ public class PlayerOnFootTest
 
     // ===== Helpers: criterion 10 =====
 
-    private static async Task AssertStraightRun(World world, Player player, FlatLine line, bool run)
+    /// <summary>
+    /// Criterion 10's measurement: from rest at the line's start with the camera behind, the input held for 2 s moves
+    /// the player away from the camera at the target speed (± 5 % after acceleration), with little sideways drift, and
+    /// after the release it stops within the distance <see cref="Player.Deceleration"/> gives (+ 0.1 m). By default the
+    /// input is <c>move_forward</c> (and <c>run</c> with <paramref name="run"/>); <paramref name="press"/> replaces it
+    /// (a stick tilt, criterion 17), and <paramref name="strength"/> is the move vector's length that input gives, so
+    /// the target is <paramref name="strength"/> × the walk or run speed (spec: speed = WalkSpeed × |move|).
+    /// </summary>
+    private static async Task AssertStraightRun(World world, Player player, FlatLine line, bool run, Action? press = null, float strength = 1f, string label = "")
     {
         await PlaceAndSettle(world, player, line.Start, line.Yaw);
         var camera = world.PlayerCamera!;
-        var speed = run ? player.RunSpeed : player.WalkSpeed;
+        var speed = (run ? player.RunSpeed : player.WalkSpeed) * strength;
         var holdFrames = Mathf.RoundToInt(2f * Engine.PhysicsTicksPerSecond);
         var dt = 1f / Engine.PhysicsTicksPerSecond;
         var steadyFrom = Mathf.CeilToInt(speed / player.Acceleration / dt) + 1;
@@ -1280,7 +2180,7 @@ public class PlayerOnFootTest
         var releasePosition = Vector3.Zero;
         var stopPosition = Vector3.Zero;
         var stopped = false;
-        var stopFrames = Mathf.CeilToInt(speed / player.Deceleration / dt) + 30;
+        var stopFrames = Mathf.CeilToInt(speed / player.Deceleration / dt) + StopMarginFrames;
         Vector3 cameraAtStart = default;
         await Drive(world, frame =>
         {
@@ -1288,10 +2188,17 @@ public class PlayerOnFootTest
             if (frame == 0)
             {
                 cameraAtStart = camera.Camera.GlobalPosition;
-                Input.ActionPress(Player.MoveForwardAction);
-                if (run)
+                if (press is not null)
                 {
-                    Input.ActionPress(Player.RunAction);
+                    press();
+                }
+                else
+                {
+                    Input.ActionPress(Player.MoveForwardAction);
+                    if (run)
+                    {
+                        Input.ActionPress(Player.RunAction);
+                    }
                 }
             }
             else if (frame == steadyFrom)
@@ -1307,7 +2214,7 @@ public class PlayerOnFootTest
             else if (frame > holdFrames)
             {
                 stopPosition = position;
-                if (Horizontal(player.Velocity).Length() < 1e-4f)
+                if (Horizontal(player.Velocity).Length() < StoppedSpeed)
                 {
                     stopped = true;
                     return true;
@@ -1325,7 +2232,7 @@ public class PlayerOnFootTest
         var stopDistance = HorizontalDistance(stopPosition, releasePosition);
         var allowedStop = (speed * speed / (2f * player.Deceleration)) + SpecDistanceTolerance;
         GD.Print(Invariant(
-            $"PlayerOnFootTest: Ac10 {(run ? "run" : "walk")} on a line with max slope {Mathf.RadToDeg(line.MaxSlope):0.##}°: {along:0.####} m/s away from the camera (target {speed}), {across:0.####} m/s across; stopped in {stopDistance:0.####} m (allowed {allowedStop:0.####})"));
+            $"PlayerOnFootTest: {(label == "" ? "Ac10" : label)} {(run ? "run" : "walk")} on a line with max slope {Mathf.RadToDeg(line.MaxSlope):0.##}°: {along:0.####} m/s away from the camera (target {speed}), {across:0.####} m/s across; stopped in {stopDistance:0.####} m (allowed {allowedStop:0.####})"));
         AssertFloat(along).IsBetween(speed * (1f - SpecSpeedTolerance), speed * (1f + SpecSpeedTolerance));
         AssertFloat(across).IsLessEqual(speed * SpecSpeedTolerance);
         AssertBool(stopped).OverrideFailureMessage("the player didn't stop after the release").IsTrue();
@@ -1444,12 +2351,142 @@ public class PlayerOnFootTest
         return best;
     }
 
-    /// <summary>Open ground kept on each side of a flat line: room for the capsule on a circle of criterion 18.</summary>
+    /// <summary>Open ground kept on each side of a flat line: room beside it for the capsule (criteria 10 to 12).</summary>
     private const float LateralClearance = 1.5f;
+
+    /// <summary>Criterion 18: the time of one full turn of the input direction.</summary>
+    private const float CircleSeconds = 3f;
+
+    /// <summary>
+    /// Criterion 18: how far from the ideal centre c the player's centre may get on the circle of radius
+    /// <paramref name="r"/>. The motion moves the velocity toward the target W·d(θ) by at most Acceleration·dt per
+    /// frame; the target turns by W·ω·dt per frame (2.8 m/s × 2π/3 s / 60 ≈ 0.1 m/s), less than that limit (20 m/s² /
+    /// 60 ≈ 0.33 m/s), so once the velocity has caught up it equals the target every frame. Up to then it falls short
+    /// by a deficit δ = ∫(target − velocity) dt, at most the ramp from rest,
+    /// <see cref="RunUpDistance"/>(W, Acceleration) = W²/2a + W·dt, so afterwards the path is the ideal circle moved by
+    /// δ, within r + |δ| of c (not inside r: the far side lies |δ| beyond). Each frame moving at the frame's start
+    /// direction instead of turning continuously moves the polygon from the circle by at most W·dt more. On a slope θ
+    /// the body slides along the floor, which can shorten a frame's horizontal step to cos²θ of it, so over the
+    /// W·T path the centre shifts by at most W·T·sin²θ.
+    /// </summary>
+    private static float CirclePathBound(Player player, float r, float maxSlope)
+    {
+        var dt = 1f / Engine.PhysicsTicksPerSecond;
+        var w = player.WalkSpeed;
+        var sin = Mathf.Sin(maxSlope);
+        return r + RunUpDistance(w, player.Acceleration) + (w * dt) + (w * CircleSeconds * sin * sin);
+    }
+
+    /// <summary>A disc of open ground: its centre (y 0), radius and the steepest slope between its samples.</summary>
+    private sealed record OpenDisc(Vector3 Centre, float Radius, float MaxSlope);
+
+    /// <summary>
+    /// The flattest disc of radius <paramref name="radius"/> on the spawn area's open ground: centres on a grid of
+    /// <see cref="SampleStep"/> over the open ground's bounds; samples at the centre and on rings
+    /// <see cref="SampleStep"/> or less apart out to <paramref name="radius"/> (the outermost exactly at it), each with
+    /// spokes at most <see cref="SampleStep"/> apart on the outer ring. Every sample must be inside
+    /// <c>spawn_area.open_ground</c> (<see cref="SpawnPicker.Contains"/>), the first body under it must be terrain, and
+    /// the steepest slope between neighbouring samples (along a ring and between rings) is the disc's; it must be under
+    /// <see cref="Player.FloorMaxAngle"/>.
+    /// </summary>
+    private static OpenDisc FindOpenDisc(World world, Player player, float radius)
+    {
+        var openGround = world.MapLoader.Boundary!.SpawnArea.OpenGround;
+        var rings = Mathf.CeilToInt(radius / SampleStep);
+        var spokes = Mathf.CeilToInt(Mathf.Tau * radius / SampleStep);
+        var offsets = new Vector2[rings + 1, spokes];
+        for (var k = 0; k <= rings; k++)
+        {
+            for (var j = 0; j < spokes; j++)
+            {
+                var angle = Mathf.Tau * j / spokes;
+                offsets[k, j] = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * (radius * k / rings);
+            }
+        }
+
+        var minX = openGround.Min(p => p.Exterior.Min(q => q.X));
+        var maxX = openGround.Max(p => p.Exterior.Max(q => q.X));
+        var minZ = openGround.Min(p => p.Exterior.Min(q => q.Z));
+        var maxZ = openGround.Max(p => p.Exterior.Max(q => q.Z));
+        OpenDisc? best = null;
+        var discs = 0;
+        var heights = new float[rings + 1, spokes];
+        for (var x = minX + radius; x <= maxX - radius; x += SampleStep)
+        {
+            for (var z = minZ + radius; z <= maxZ - radius; z += SampleStep)
+            {
+                var centre = new Vector2((float)x, (float)z);
+                var open = true;
+                // Outermost ring first: it fails soonest.
+                for (var k = rings; k >= 0 && open; k--)
+                {
+                    for (var j = 0; j < (k == 0 ? 1 : spokes) && open; j++)
+                    {
+                        var p = centre + offsets[k, j];
+                        open = SpawnPicker.Contains(openGround, p.X, p.Y);
+                    }
+                }
+
+                if (!open)
+                {
+                    continue;
+                }
+
+                discs++;
+                var maxSlope = 0f;
+                for (var k = 0; k <= rings && maxSlope < (best?.MaxSlope ?? float.MaxValue); k++)
+                {
+                    for (var j = 0; j < spokes; j++)
+                    {
+                        var p = centre + offsets[k, j];
+                        if (k == 0 && j > 0)
+                        {
+                            heights[0, j] = heights[0, 0];
+                            continue;
+                        }
+
+                        if (FirstHit(world, p.X, p.Y, RayTop, -RayTop) is not { } hit || !hit.Body.IsInGroup(MapLoader.TerrainGroup))
+                        {
+                            maxSlope = float.MaxValue;
+                            break;
+                        }
+
+                        heights[k, j] = hit.Position.Y;
+                        if (k > 0)
+                        {
+                            maxSlope = Mathf.Max(maxSlope, Slope(heights[k, j], heights[k - 1, j], (offsets[k, j] - offsets[k - 1, j]).Length()));
+                            if (j > 0)
+                            {
+                                maxSlope = Mathf.Max(maxSlope, Slope(heights[k, j], heights[k, j - 1], (offsets[k, j] - offsets[k, j - 1]).Length()));
+                            }
+
+                            if (j == spokes - 1)
+                            {
+                                maxSlope = Mathf.Max(maxSlope, Slope(heights[k, j], heights[k, 0], (offsets[k, j] - offsets[k, 0]).Length()));
+                            }
+                        }
+                    }
+                }
+
+                if (best is null || maxSlope < best.MaxSlope)
+                {
+                    best = new OpenDisc(new Vector3(centre.X, 0f, centre.Y), radius, maxSlope);
+                }
+            }
+        }
+
+        AssertBool(best is not null).OverrideFailureMessage(Invariant($"no {radius:0.###} m disc of the open ground has terrain under every sample")).IsTrue();
+        GD.Print(Invariant(
+            $"PlayerOnFootTest: flattest of {discs} open-ground discs of {radius:0.###} m is at {best!.Centre}, max slope {Mathf.RadToDeg(best.MaxSlope):0.##}°"));
+        AssertFloat(best.MaxSlope).IsLess(player.FloorMaxAngle);
+        return best;
+    }
+
+    private static float Slope(float heightA, float heightB, float horizontal) => Mathf.Atan(Mathf.Abs(heightA - heightB) / horizontal);
 
     /// <summary>
     /// The terrain-road-terrain route of criterion 13 beside the ground drivable edge nearest the spawn area: A on the
-    /// terrain beside the road (half the width plus a capsule diameter and a metre out), B on the centre line 10 m on,
+    /// terrain beside the road (half the width, a capsule radius and the distance to cruise speed out), B on the centre line 10 m on,
     /// C on the terrain again 20 m on, on the same side. Every sample along A-B-C and of the two capsule-edge lines
     /// beside it has only road or terrain as its first body, A and C have terrain and B has road.
     /// </summary>
@@ -1464,7 +2501,14 @@ public class PlayerOnFootTest
         foreach (var edge in edges)
         {
             var total = PolylineLength(edge.Points);
-            var outward = ((float)edge.WidthM / 2f) + (2f * player.CapsuleRadius) + 1f;
+            // The capsule at A (and C) stands wholly off the road (half the width plus its radius from the centre
+            // line), and the player reaches its cruise speed before the capsule can touch the road: FollowRoute
+            // measures the speed ("never stops") from frame cruiseFrom on, by which the player has covered at most
+            // the ramp to WalkSpeed plus one frame (RunUpDistance + W·dt). That margin is taken straight across
+            // although the walk to B is diagonal, so along the walk it is longer. RoadEdgeClearOfCapsule checks the
+            // road-side edge of the capsule against the actual mesh along that stretch.
+            var cruise = RunUpDistance(player.WalkSpeed, player.Acceleration) + (player.WalkSpeed / Engine.PhysicsTicksPerSecond);
+            var outward = ((float)edge.WidthM / 2f) + player.CapsuleRadius + cruise;
             for (var s0 = 0.0; s0 + RoadRouteLength <= total; s0 += 2.0)
             {
                 foreach (var sideSign in new[] { 1f, -1f })
@@ -1485,7 +2529,11 @@ public class PlayerOnFootTest
                         points.Add(hit.Position);
                     }
 
-                    if (!ok || !RouteOnRoadOrTerrain(world, points, player.CapsuleRadius + 0.1f) || MaxRouteSlope(world, points) >= player.FloorMaxAngle)
+                    if (!ok
+                        || !RoadEdgeClearOfCapsule(world, points[0], points[1], Offset(edge.Points, s0, 0f), player.CapsuleRadius, cruise)
+                        || !RoadEdgeClearOfCapsule(world, points[2], points[1], Offset(edge.Points, s0 + RoadRouteLength, 0f), player.CapsuleRadius, cruise)
+                        || !RouteOnRoadOrTerrain(world, points, player.CapsuleRadius + 0.1f)
+                        || MaxRouteSlope(world, points) >= player.FloorMaxAngle)
                     {
                         continue;
                     }
@@ -1496,6 +2544,30 @@ public class PlayerOnFootTest
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Whether, over the first <paramref name="distance"/> of the walk from <paramref name="start"/> toward
+    /// <paramref name="toward"/>, the capsule's edge nearest the road (its centre moved <paramref name="radius"/> toward
+    /// <paramref name="roadCentre"/>, the centre line point across from the start) has terrain as its first body.
+    /// </summary>
+    private static bool RoadEdgeClearOfCapsule(World world, Vector3 start, Vector3 toward, Vector3 roadCentre, float radius, float distance)
+    {
+        var direction = Horizontal(toward - start).Normalized();
+        var inward = Horizontal(roadCentre - start).Normalized();
+        for (var s = 0f; ; s = Mathf.Min(s + (SampleStep / 2f), distance))
+        {
+            var p = start + (direction * s) + (inward * radius);
+            if (FirstHit(world, p.X, p.Z, RayTop, -RayTop) is not { } hit || !hit.Body.IsInGroup(MapLoader.TerrainGroup))
+            {
+                return false;
+            }
+
+            if (s >= distance)
+            {
+                return true;
+            }
+        }
     }
 
     /// <summary>Whether every sample along the route, and of the lines <paramref name="halfWidth"/> to its sides, has road or terrain as its first body.</summary>
@@ -1539,9 +2611,9 @@ public class PlayerOnFootTest
             float? previous = null;
             for (var s = 0f; s <= length; s += SampleStep)
             {
+                // The first body from the top, as RouteOnRoadOrTerrain checked it is road or terrain: no window.
                 var p = a + (direction * s);
-                var y = Mathf.Lerp(a.Y, b.Y, s / length);
-                if (FirstHit(world, p.X, p.Z, y + 2f, y - 2f) is not { } hit)
+                if (FirstHit(world, p.X, p.Z, RayTop, -RayTop) is not { } hit)
                 {
                     return float.MaxValue;
                 }
@@ -1604,7 +2676,10 @@ public class PlayerOnFootTest
                             foreach (var offset in new[] { -player.CapsuleRadius, 0f, player.CapsuleRadius })
                             {
                                 var from = start + (Vector3.Up * height) + (side * offset);
-                                var to = from - (normal * (distance + 1f));
+                                // The face's plane is exactly `distance` away along the ray (the offsets are along
+                                // the face, the face is vertical). The ray ends a safe margin past it, enough for
+                                // float rounding, so it hits only this face, not one set further back.
+                                var to = from - (normal * (distance + player.SafeMargin));
                                 var hit = space.IntersectRay(PhysicsRayQueryParameters3D.Create(from, to, CollisionLayers.Map));
                                 if (hit.Count == 0 || hit["collider"].AsGodotObject() != body)
                                 {
@@ -1710,7 +2785,8 @@ public class PlayerOnFootTest
         {
             var length = PolylineLength(edge.Points);
             var middle = PolylineAt(edge.Points, length / 2);
-            if (FirstHit(world, middle.X, middle.Z, middle.Y + 1f, middle.Y - 1f) is not { } deck || !IsBridgeBody(deck.Body))
+            // The deck is the first body from the top at the edge's middle; anything above it means the next edge.
+            if (FirstHit(world, middle.X, middle.Z, RayTop, -RayTop) is not { } deck || !IsBridgeBody(deck.Body))
             {
                 continue;
             }
@@ -1733,8 +2809,8 @@ public class PlayerOnFootTest
     /// <summary>
     /// The criterion 15 route over the bridge nearest the spawn area: out along the road edge at a <c>span_end</c>
     /// node (up to twice the ramp length), the node, the chained bridge edges' points to where the bridge ends, and on
-    /// along a road edge there. Each sample of it is on a road or bridge surface (first hit within a metre of the
-    /// graph height). Points are on the surface.
+    /// along a road edge there. Each sample of it has a road or bridge surface as its first body from the top
+    /// (<see cref="SurfacePoints"/>). Points are on the surface.
     /// </summary>
     private static (string SpanEnd, List<Vector3> Points, Vector3 DeckFrom, Vector3 DeckTo, float DeckWidth)? FindRampRoute(World world)
     {
@@ -1823,7 +2899,11 @@ public class PlayerOnFootTest
         return cut;
     }
 
-    /// <summary>Each point moved onto the road or bridge surface below it, or null when a sample along the route has none within a metre of the graph height.</summary>
+    /// <summary>
+    /// Each point moved onto the road or bridge surface at its x/z, or null when the first body from the top at a
+    /// sample along the route isn't a road, path or deck (<see cref="MapLoader.RoadGroup"/>). Taking the first body
+    /// from the top needs no height window around the graph point.
+    /// </summary>
     private static List<Vector3>? SurfacePoints(World world, List<LocalPoint> points)
     {
         for (var i = 1; i < points.Count; i++)
@@ -1834,7 +2914,7 @@ public class PlayerOnFootTest
             for (var s = 0f; s <= length; s += SampleStep)
             {
                 var p = a.Lerp(b, length > 0f ? s / length : 0f);
-                if (FirstHit(world, p.X, p.Z, p.Y + 1f, p.Y - 1f) is not { } hit || !hit.Body.IsInGroup(MapLoader.RoadGroup))
+                if (FirstHit(world, p.X, p.Z, RayTop, -RayTop) is not { } hit || !hit.Body.IsInGroup(MapLoader.RoadGroup))
                 {
                     return null;
                 }
@@ -1845,7 +2925,7 @@ public class PlayerOnFootTest
         foreach (var point in points)
         {
             var p = ToVector(point);
-            surface.Add(FirstHit(world, p.X, p.Z, p.Y + 1f, p.Y - 1f)!.Value.Position);
+            surface.Add(FirstHit(world, p.X, p.Z, RayTop, -RayTop)!.Value.Position);
         }
 
         return surface;
@@ -2016,6 +3096,7 @@ public class PlayerOnFootTest
             }
 
             AssertNoPlayer(world);
+            await AssertDebugCameraKeyChangesNothing(world);
         }
         finally
         {
@@ -2049,9 +3130,27 @@ public class PlayerOnFootTest
         AssertInt(Descendants(world).OfType<Player>().Count()).IsEqual(0);
         AssertInt(Descendants(world).OfType<PlayerCamera>().Count()).IsEqual(0);
         AssertThat(world.Hud.Target).IsNull();
-        AssertBool(OS.IsDebugBuild()).IsTrue();
-        AssertBool(world.Camera.Current).IsTrue();
+        AssertBool(DebugBuild.IsDebug).IsTrue();
+        AssertBool(world.Camera!.Current).IsTrue();
         AssertThat(world.GetViewport().GetCamera3D()).IsSame(world.Camera);
+    }
+
+    /// <summary>
+    /// Criterion 9: without a player, a press of each <c>debug_camera</c> key (injected as in the criterion 19 tests,
+    /// where the same injection does toggle) and <see cref="World.ToggleDebugCamera"/> leave the debug camera current.
+    /// </summary>
+    private static async Task AssertDebugCameraKeyChangesNothing(World world)
+    {
+        var camera = world.Camera!;
+        TapKey(Key.Quoteleft);
+        await PhysicsFrames(world, 2);
+        TapKey(Key.Section);
+        await PhysicsFrames(world, 2);
+        AssertBool(world.ToggleDebugCamera()).IsFalse();
+        AssertBool(world.DebugCameraActive).IsFalse();
+        AssertBool(camera.Current).OverrideFailureMessage("debug_camera changed the current camera without a player").IsTrue();
+        AssertThat(world.GetViewport().GetCamera3D()).IsSame(camera);
+        AssertThat(world.Player).IsNull();
     }
 
     /// <summary>
@@ -2167,6 +3266,8 @@ public class PlayerOnFootTest
     private static float YawOf(Vector3 direction) => Mathf.Atan2(-direction.X, -direction.Z);
 
     private static Vector3 Horizontal(Vector3 v) => new(v.X, 0f, v.Z);
+
+    private static float MaxAbs(Vector3 v) => Mathf.Max(Mathf.Abs(v.X), Mathf.Max(Mathf.Abs(v.Y), Mathf.Abs(v.Z)));
 
     private static float HorizontalDistance(Vector3 a, Vector3 b) => Horizontal(a - b).Length();
 
