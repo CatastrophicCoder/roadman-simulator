@@ -55,10 +55,10 @@ public partial class Player : CharacterBody3D
     }
 
     [Export]
-    public float WalkSpeed { get; set; } = 1.4f;
+    public float WalkSpeed { get; set; } = 2.8f;
 
     [Export]
-    public float RunSpeed { get; set; } = 5.0f;
+    public float RunSpeed { get; set; } = 7.5f;
 
     /// <summary>m/s² with input.</summary>
     [Export]

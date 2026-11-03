@@ -73,10 +73,10 @@ The first playable (milestone 2, "On foot", in `docs/project-outline.md`): one p
   | --- | --- | --- |
   | `CapsuleHeight` | 1.8 m | Eyes at about 1.7 m, the eye height every street-level camera preset uses |
   | `CapsuleRadius` | 0.3 m | About shoulder width. Fits through the narrowest gaps that open ground and paths leave |
-  | `WalkSpeed` | 1.4 m/s | The usual figure for human walking pace |
-  | `RunSpeed` | 5.0 m/s | A jogging run. Crossing the 2 km map takes about 7 minutes, which leaves room for vehicles to matter |
-  | `Acceleration` | 20 m/s² | Reaches `RunSpeed` in 0.25 s, responsive without a jolt |
-  | `Deceleration` | 25 m/s² | Stops from `RunSpeed` in 0.2 s (0.5 m), a little faster than it starts |
+  | `WalkSpeed` | 2.8 m/s | Twice the usual human walking pace (1.4 m/s); doubled in the playtest |
+  | `RunSpeed` | 7.5 m/s | Raised 50 % from 5.0 m/s in the playtest. Crossing the 2 km map takes about 4.5 minutes, which leaves room for vehicles to matter |
+  | `Acceleration` | 20 m/s² | Reaches `RunSpeed` in 0.375 s, responsive without a jolt |
+  | `Deceleration` | 25 m/s² | Stops from `RunSpeed` in 0.3 s (1.1 m), a little faster than it starts |
   | `AirControl` | 0.3 | Some steering in a jump, but the jump keeps its line |
   | `TurnSpeed` | 720 °/s | Turns round (180°) in 0.25 s |
   | `JumpHeight` | 1.3 m | The decided apex (see "Barriers and jump") |
@@ -161,7 +161,7 @@ New actions in `project.godot`, each with keyboard and gamepad events (`device` 
 | --- | --- | --- |
 | `move_forward`, `move_back`, `move_left`, `move_right` | W, S, A, D (physical keys) | left stick |
 | `run` | Shift, hold | left-stick click (`JoyButton.LeftStick`), toggle |
-| `jump` | Space | south face button (`JoyButton.A`: A on Xbox, Cross on PlayStation) |
+| `jump` | Space | south face button (`JoyButton.A`) |
 | `camera_left`, `camera_right`, `camera_up`, `camera_down` | mouse motion (not an action) | right stick |
 | `debug_camera` | the key left of 1 (see "Debug camera") | none |
 
@@ -282,7 +282,7 @@ New actions in `project.godot`, each with keyboard and gamepad events (`device` 
   5. Camera not inverted; invert options come with the settings view.
   6. No automatic swing-back.
   7. The debug camera key is the physical key left of 1; the no-F-keys debug-key convention goes in `game/CLAUDE.md`.
-  8. Bindings: WASD, hold Shift to run, Space to jump; left stick moves, left-stick click toggles running, A/Cross jumps, right stick moves the camera.
+  8. Bindings: WASD, hold Shift to run, Space to jump; left stick moves, left-stick click toggles running, the south face button jumps, right stick moves the camera.
   9. `--player` is added.
   10. A temporary respawn when the player is more than 20 m below the slab's bottom.
   11. The outline is being re-exported with the milestones as text; a "use" action belongs to later specs.
@@ -292,6 +292,7 @@ New actions in `project.godot`, each with keyboard and gamepad events (`device` 
   3. `PlayerCamera.StartPitchDegrees` (−15°) is the pitch the first spawn puts the camera at; `FollowSmoothing` is a time constant in seconds (0 = rigid).
   4. Map bodies stay on collision layer 1 and the player is on layer 2 (ADR 0016); the existing map rays (`MapLoader`, `StreetLabelHud`, `PlaceInspector`) use mask 1, so they never hit the player.
   5. Criterion 19's release check tests the single debug-build helper's release branch (ADR 0016), not the exported binary.
+- 2026-11-03, the user's playtest of part A: `WalkSpeed` doubled to 2.8 m/s and `RunSpeed` raised 50 % to 7.5 m/s; the rest felt right. Gamepad buttons are named generically (south, east, west and north face buttons, left and right sticks, left-stick click), and in-game button prompts will use generic glyphs.
 
 ## Open questions
 

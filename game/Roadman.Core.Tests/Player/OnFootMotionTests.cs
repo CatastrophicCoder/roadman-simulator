@@ -15,8 +15,8 @@ public class OnFootMotionTests
     {
         var motion = new OnFootMotion();
 
-        Assert.Equal(1.4, motion.WalkSpeed);
-        Assert.Equal(5.0, motion.RunSpeed);
+        Assert.Equal(2.8, motion.WalkSpeed);
+        Assert.Equal(7.5, motion.RunSpeed);
         Assert.Equal(20, motion.Acceleration);
         Assert.Equal(25, motion.Deceleration);
         Assert.Equal(0.3, motion.AirControl);
@@ -33,7 +33,7 @@ public class OnFootMotionTests
         var motion = new OnFootMotion();
         var expected = (run ? motion.RunSpeed : motion.WalkSpeed) * input;
 
-        // 2 s is far more than RunSpeed / Acceleration = 0.25 s.
+        // 2 s is far more than RunSpeed / Acceleration = 0.375 s.
         var step = Run(motion, 0, Forward * input, cameraYaw: 0, run, onFloor: true, steps: 120);
 
         Assert.InRange(step.Speed, expected * 0.99, expected * 1.01);
@@ -133,7 +133,7 @@ public class OnFootMotionTests
         var motion = new OnFootMotion();
         var facing = 1.234;
         var vx = 3.0;
-        var vz = -4.0; // 5 m/s, RunSpeed
+        var vz = -4.0; // 5 m/s
         var previousSpeed = 5.0;
 
         // 5 m/s at 25 m/s² stops in 0.2 s = 12 steps.

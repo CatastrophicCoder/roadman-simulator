@@ -850,7 +850,7 @@ public class PlayerOnFootTest
         var yaw = camera.Yaw;
         var pitch = camera.Pitch;
 
-        // One full turn of the input direction in 3 s: a circle about 1.4 × 3 / 2π ≈ 0.67 m in radius.
+        // One full turn of the input direction in 3 s: a circle about WalkSpeed × 3 / 2π in radius (2.8 m/s: ≈ 1.34 m).
         const float seconds = 3f;
         var frames = Mathf.CeilToInt(seconds * Engine.PhysicsTicksPerSecond);
         var yaws = new List<float>();

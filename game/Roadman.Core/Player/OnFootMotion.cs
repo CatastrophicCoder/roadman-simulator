@@ -34,14 +34,14 @@ public readonly record struct OnFootStep(double VelocityX, double VelocityZ, dou
 /// </remarks>
 public sealed class OnFootMotion
 {
-    private double _walkSpeed = 1.4;
-    private double _runSpeed = 5.0;
+    private double _walkSpeed = 2.8;
+    private double _runSpeed = 7.5;
     private double _acceleration = 20;
     private double _deceleration = 25;
     private double _airControl = 0.3;
     private double _turnSpeed = 720;
 
-    /// <summary>Uses the spec's starting values (walk 1.4 m/s, run 5.0 m/s, 20 and 25 m/s², air control 0.3, 720 °/s).</summary>
+    /// <summary>Uses the spec's values (walk 2.8 m/s, run 7.5 m/s, tuned in the 2026-11-03 playtest; 20 and 25 m/s², air control 0.3, 720 °/s).</summary>
     public OnFootMotion()
     {
     }
