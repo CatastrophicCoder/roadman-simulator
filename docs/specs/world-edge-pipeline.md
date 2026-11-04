@@ -80,11 +80,11 @@ Example, Somero (`maps/somero/map.yaml`). Only the boundary differs from the def
 # Playable boundary and world edge (docs/specs/world-edge-pipeline.md). Every other
 # key keeps its pipeline default; list a key here only to override it.
 world_edge:
-  # Candidate B (west notch), 184 points. Start and winding don't matter (the pipeline
+  # Candidate B (west notch), 184 points (the original count; 162 since the 2026-11-04 amendment). Start and winding don't matter (the pipeline
   # orders the ring). From tools/mapgen/build/somero/world-edge/boundary-candidates.geojson, feature B-west-notch.
   boundary_wgs84:
     - {lat: ..., lon: ...}
-    # ... 184 points in all
+    # ... 184 points in all (originally; 162 since the 2026-11-04 amendment)
 ```
 
 **First implementation step:** copy the 184 points of `B-west-notch` from `boundary-candidates.geojson` into `maps/somero/map.yaml` as `world_edge.boundary_wgs84`, so the committed `map.yaml` is the only record of the boundary. `tools/mapgen/build/` is git-ignored and can be overwritten; the candidates file stays out of Git. Because `MapConfig` forbids unknown keys, this goes in together with the `world_edge` config model, not before it.

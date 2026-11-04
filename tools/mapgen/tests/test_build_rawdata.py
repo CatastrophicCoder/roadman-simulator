@@ -368,17 +368,21 @@ def test_mml_only_ac13_full_build_reports_the_spec_counts(
 # boundary, the spawn check, and the heights of "Config" (cliff.depth_m). Roadblocks, fences
 # and touched road surfaces are the measured counts of this build (the spec's estimate was
 # about 39-41 roadblocks, 33-35 drivable; see its 2026-11-02 amendment for slice (b)).
-B_RING_M = 10_560
+# B was cleaned on 2026-11-04 (ADR 0015 amendment: no spike or notch under 3 m), which
+# shortened the ring from 10,560 m and the land fences from 747.
+B_RING_M = 10_330
 B_WATER_M = 320.7
 B_LAKE_M = 255.8
 B_LAKE_ID = "mml:jarvi/2026919564"
 B_COUNTS = {
     "roadblocks": 41,
     "roadblocks_drivable": 34,
-    "fences_land": 747,
+    "fences_land": 718,
     "fences_water": 17,
     "touched_without_crossing": 2,
 }
+B_BUILDINGS = 1_940  # kept buildings, the same set before and after the 2026-11-04 cleaning
+B_CLOSEST_M = 2.12  # the closest kept building to the ring (routed at building_clearance_m)
 B_SPAWN = {"open_area_m2": 5308, "boundary_distance_m": 1017}
 B_HEIGHTS = {"boundary_min": 81.8, "boundary_max": 133.4, "cliff_bottom_y": 51.8}
 
@@ -446,6 +450,10 @@ def test_ac16_somero_full_build_uses_boundary_b_with_the_spec_figures(
     ring = Polygon([(p[0], -p[1]) for p in doc["boundary"]["ring"]])
     clearance = full_build.config.world_edge.building_clearance_m
     assert crossing_buildings(ring, footprints, clearance) == []
+    buildings = json.loads((full_build.pack / "buildings.json").read_text("utf-8"))["buildings"]
+    assert len(buildings) == len(footprints) == B_BUILDINGS
+    closest = min(g.distance(ring.exterior) for _, g in footprints)
+    assert round(closest, 2) == B_CLOSEST_M
 
 
 def _local_polygon(geometry: dict[str, Any], origin: tuple[float, float]) -> Any:
