@@ -147,7 +147,7 @@ A building whose lidar value was rejected records `lidar_rejected` with the reas
 
 ### Geometry
 
-Flat roofs at `base_z + height_m`. Collision boxes use the same height.
+Flat roofs at `base_z + height_m`. Collision meshes (the extruded footprint parts) use the same height (2026-11-04: ADR 0006 amendment, extruded footprint).
 
 ### CI and the test fixture
 
@@ -179,7 +179,7 @@ Flat roofs at `base_z + height_m`. Collision boxes use the same height.
 8. `roof_z_p90` is stored for every lidar building and is at least `roof_z_median`.
 9. Every process id starting with `laserkeilausaineisto` other than `laserkeilausaineisto_05_karttalehti` is refused, both in the adapter options and in the client. A test checks this with a 5 p id.
 10. Manifest credits include "Laser scanning data 0,5 p" only when the build read lidar files. The manifest still validates against the schema.
-11. No building has a NaN, zero or negative height, and collision boxes span `base_z` to `base_z + height_m`.
+11. No building has a NaN, zero or negative height, and collision meshes (the extruded footprint parts; collision boxes before 2026-11-04: ADR 0006 amendment, extruded footprint) span `base_z` to `base_z + height_m`.
 12. The pytest suite, including the lidar fixture, runs without network access and in under about 10 s. The committed fixture has MML attribution next to it.
 13. `docs/architecture.md`, ADR 0005, `CREDITS.md`, `tools/mapgen/CLAUDE.md` and `maps/somero/map.yaml` are updated as described above.
 14. A screenshot of the centre tiles shows buildings of varied heights, checked by hand.

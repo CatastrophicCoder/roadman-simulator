@@ -220,7 +220,7 @@ def test_ac4_roof_top_in_the_mesh_is_the_roof_median(lidar_build: LidarBuild) ->
     assert checked == len(buildings) - 2
 
 
-def test_ac11_collision_boxes_span_base_to_roof(lidar_build: LidarBuild) -> None:
+def test_ac11_collision_meshes_span_base_to_roof(lidar_build: LidarBuild) -> None:
     buildings = _buildings(lidar_build.pack)
     by_collision = {c: b for b in buildings.values() for c in b["collision_nodes"]}
     seen = 0

@@ -1,11 +1,14 @@
+from collections import Counter
+
 import numpy as np
 import pytest
-from shapely.geometry import MultiPolygon, Polygon, box
+from shapely.geometry import MultiPolygon, Point, Polygon, box
 
 from mapgen.build.area import BuildArea
 from mapgen.build.buildings import (
-    collision_box,
-    collision_boxes,
+    DEGENERATE_AREA_M2,
+    collision_mesh,
+    collision_parts,
     extrude,
     match_measured_heights,
     node_name,
@@ -13,6 +16,7 @@ from mapgen.build.buildings import (
     parse_levels,
     resolve_buildings,
     resolve_height,
+    triangle_areas,
 )
 from mapgen.build.heightfield import Heightfield
 from mapgen.build.stage1_load import LocalFootprint
@@ -101,12 +105,13 @@ def test_extrude_clockwise_and_multipolygon_input() -> None:
     assert _signed_volume(*extrude(two, 0, 3)) == pytest.approx(15.0)
 
 
-def test_multi_part_buildings_get_one_box_per_part() -> None:
-    parts = MultiPolygon([box(0, 0, 4, 4), box(20, 0, 26, 3)])
-    boxes = collision_boxes(parts)
-    assert len(boxes) == 2
-    assert [round(b.area, 6) for b in boxes] == [16.0, 18.0]  # no box spans the 16 m gap
-    assert not any(b.intersects(box(5, 0, 19, 4)) for b in boxes)
+def test_multi_part_buildings_get_one_collision_mesh_per_part() -> None:
+    parts = collision_parts(MultiPolygon([box(0, 0, 4, 4), box(20, 0, 26, 3)]))
+    assert len(parts) == 2
+    meshes = [collision_mesh(part, 0.0, 2.0) for part in parts]
+    assert [round(_signed_volume(*m), 6) for m in meshes] == [32.0, 36.0]
+    for vertices, _ in meshes:  # no mesh spans the 16 m gap
+        assert not ((vertices[:, 0] > 4) & (vertices[:, 0] < 20)).any()
 
 
 def test_multi_part_collision_names_and_meshes() -> None:
@@ -144,17 +149,56 @@ def test_node_names_stay_unique() -> None:
     assert sorted(names) == ["bld_osm_way_7", "bld_osm_way_7_2"]
 
 
-def test_courtyards_and_concave_footprints_get_filled_boxes() -> None:
+def _edges_pair_up(vertices: np.ndarray, faces: np.ndarray) -> bool:
+    """Closed and consistently wound: every directed edge (by position) has its reverse."""
+    keys = [tuple(np.round(p, 9)) for p in vertices]
+    edges = Counter((keys[f[i]], keys[f[(i + 1) % 3]]) for f in np.asarray(faces) for i in range(3))
+    return all(edges[(b, a)] == n for (a, b), n in edges.items())
+
+
+def _top_covers(vertices: np.ndarray, faces: np.ndarray, x: float, y: float) -> bool:
+    t = vertices[faces]
+    top = t[np.isclose(t[:, :, 2], vertices[:, 2].max()).all(axis=1)]
+    return any(Polygon(tri[:, :2]).covers(Point(x, y)) for tri in top)
+
+
+def test_courtyard_stays_open_in_the_collision_mesh() -> None:
     courtyard = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)], [[(3, 3), (3, 6), (6, 6), (6, 3)]])
-    (rectangle,) = collision_boxes(courtyard)
-    assert rectangle.area == pytest.approx(100.0)  # the courtyard is inside the box
+    vertices, faces = collision_mesh(courtyard, 2.0, 8.0)
+    assert _signed_volume(vertices, faces) == pytest.approx(courtyard.area * 6.0)  # 91 m² x 6
+    assert not _top_covers(vertices, faces, 4.5, 4.5)  # the courtyard is open
+    assert _top_covers(vertices, faces, 1.0, 1.0)
+    assert _edges_pair_up(vertices, faces)
 
 
-def test_collision_box_covers_the_footprint() -> None:
+def test_concave_footprint_collision_is_the_footprint_extruded() -> None:
     footprint = Polygon([(20, 20), (40, 20), (40, 30), (30, 30), (30, 40), (20, 40)])
-    rectangle = collision_box(footprint)
-    assert rectangle.covers(footprint.buffer(-1e-9))
-    assert len(rectangle.exterior.coords) == 5
+    vertices, faces = collision_mesh(footprint, 0.0, 5.0)
+    assert _signed_volume(vertices, faces) == pytest.approx(footprint.area * 5.0)
+    assert not _top_covers(vertices, faces, 35.0, 35.0)  # the concave corner stays empty
+    assert {tuple(p) for p in vertices[:, :2]} == set(footprint.exterior.coords)
+    assert _edges_pair_up(vertices, faces)
+    assert triangle_areas(vertices, faces).min() >= DEGENERATE_AREA_M2
+
+
+def test_collision_mesh_is_the_visual_extrusion_of_one_part() -> None:
+    part = Polygon([(0, 0), (8, 0), (8, 3), (5, 3), (5, 7), (0, 7)])
+    visual_v, visual_f = extrude(part, 90.0, 96.5)
+    vertices, faces = collision_mesh(part, 90.0, 96.5)
+    assert np.array_equal(vertices, visual_v) and np.array_equal(faces, visual_f)
+
+
+def test_collision_mesh_drops_degenerate_triangles(monkeypatch: pytest.MonkeyPatch) -> None:
+    part = box(0, 0, 6, 4)
+    vertices, faces = extrude(part, 0.0, 3.0)
+    # A zero-area triangle (three points on the south wall's bottom edge) appended.
+    sliver = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]])
+    padded = (np.vstack([vertices, sliver]), np.vstack([faces, [len(vertices) + np.arange(3)]]))
+    monkeypatch.setattr("mapgen.build.buildings.extrude", lambda *_: padded)
+    kept_v, kept_f = collision_mesh(part, 0.0, 3.0)
+    assert len(kept_f) == len(faces)
+    assert triangle_areas(kept_v, kept_f).min() >= DEGENERATE_AREA_M2
+    assert _signed_volume(kept_v, kept_f) == pytest.approx(72.0)
 
 
 def test_resolve_buildings_assigns_tile_by_centroid_and_base_below_ground() -> None:

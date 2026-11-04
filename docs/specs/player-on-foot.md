@@ -19,7 +19,7 @@ The first playable (milestone 2, "On foot", in `docs/project-outline.md`): one p
   - Open ground is the spawn polygon minus buildings, water, and road, path and deck surfaces grown by `spawn.obstacle_buffer_m` (2.0 m), and minus everything within `spawn.min_boundary_distance_m` (10.0 m) of the boundary.
 - Somero's spawn area S1 lies inside the test area, so the full pack and the CI test-area pack share it. In the current full pack it has one open-ground polygon (one ring, 91 points) of 5,308.4 m², within x 19.2 to 135.0, z −135.0 to −61.2.
 - The full pack's `cliff.bottom_y` (the slab's bottom) is 51.8, and `void_trigger.bottom_y` is 31.8.
-- Surfaces the player walks on: terrain (`map_terrain`), roads and paths 0.05 m above it (`surface_offset_m`, `map_roads`), and bridge decks with 5 m road-side ramps, with 1.0 m railings. At the world edge the ground steps by up to 0.25 m onto the ledge (ADR 0015). Buildings are collision boxes (`map_buildings`).
+- Surfaces the player walks on: terrain (`map_terrain`), roads and paths 0.05 m above it (`surface_offset_m`, `map_roads`), and bridge decks with 5 m road-side ramps, with 1.0 m railings. At the world edge the ground steps by up to 0.25 m onto the ledge (ADR 0015). Buildings are collision meshes, the extruded footprint parts (`map_buildings`) (2026-11-04: ADR 0006 amendment, extruded footprint).
 - Measured in the full Somero pack (2026-11-02, from the tile meshes' up-facing triangles weighted by area, and from `04-roads/report.json`):
 
   | Surface | 95th percentile | 99th percentile | 99.9th percentile | Area over 30° |
@@ -233,7 +233,7 @@ New actions in `project.godot`, each with keyboard and gamepad events (`device` 
 11. Pressing `jump` on flat ground raises the player's feet 1.3 m (± 5 %, from `JumpHeight`) above the take-off height, and it lands again. A second press in the air does nothing.
 12. From a run-up at `RunSpeed`, the player jumps over a 1.15 m tall, 0.2 m deep test box (the 0.9 m barrier plus 0.25 m) placed across its path, and lands on the far side.
 13. Walking 20 m along a road from the spawn area onto the terrain and back, crossing its 0.05 m edge both ways, the player is never airborne for more than one physics frame, never stops, and never ends up below the surface.
-14. Walking into a building's collision box at `RunSpeed`, the player stops at the wall and doesn't pass through it within 3 s. Walking along a bridge deck into its railing doesn't pass it either.
+14. Walking into a building's collision mesh (the extruded footprint part; a collision box before 2026-11-04: ADR 0006 amendment, extruded footprint) at `RunSpeed`, the player stops at the wall and doesn't pass through it within 3 s. Walking along a bridge deck into its railing doesn't pass it either.
 15. Walking up and down a bridge ramp (at a `span_end` node picked from `road_graph.json`, not a hard-coded position), the player stays on the floor and crosses the deck.
 16. With the player 1 m from a building wall and the camera turned in 15° steps all the way round the player, a ray from the pivot to the camera never hits a collision body.
 17. Gamepad, with injected `InputEventJoypadMotion` and `InputEventJoypadButton` events:

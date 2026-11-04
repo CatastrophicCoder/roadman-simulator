@@ -10,6 +10,17 @@ stage output in the work folder, so they test what the game will load.
   node names of a tile are equal once Godot strips its collision suffixes (`-col`,
   `-colonly`, `-convcolonly`), so the import renames nothing; every
   building's centroid is in its tile; no building base floats above the terrain mesh.
+- Building collision (`check_collision_extent`, `check_collision_mesh`, ADR 0006
+  amendment 2026-11-04), against the building's visual mesh in the staged tile (its
+  up-facing triangles from above are the footprint, its z range base to top;
+  `buildings.json` has no outlines): no part of a collision mesh, seen from above, lies
+  more than `COLLISION_EXTENT_M` (0.05 m) from the footprint, so a filled courtyard or
+  concave corner fails too; the meshes' outlines together equal the footprint (within
+  `OUTLINE_SLACK_M2` plus 1 mm times the perimeter). Each mesh spans base to top (1 mm);
+  its triangles are non-degenerate (`DEGENERATE_AREA_M2`) and horizontal or vertical;
+  up-facing ones are at the top, down-facing ones at the base, with the same outline;
+  every wall triangle spans base to top and faces out of the mesh's outline; the walls
+  cover the outline's boundary with the area it needs; the signed volume is positive.
 - Roads (docs/specs/roads-and-road-graph.md, criterion numbers in messages): the graph
   matches its schema and its report; nodes and points are finite and in the area;
   `area_edge` nodes lie on the boundary ring of `boundary.json` (1 µm); `length_m` is the
@@ -93,6 +104,7 @@ import shapely
 from shapely.geometry import LineString, Polygon, shape
 from shapely.geometry.base import BaseGeometry
 
+from mapgen.build.buildings import DEGENERATE_AREA_M2, triangle_areas
 from mapgen.build.export_glb import TERRAIN_NODE, from_gltf
 from mapgen.build.pack_manifest import committed_schema
 from mapgen.build.places.categories import CATEGORIES, CATEGORY_SOURCES, NAME_SOURCES
@@ -135,6 +147,12 @@ ROAD_SURFACES = ("road-col", "path-col")
 COLLISION_SUFFIXES = ("-convcolonly", "-colonly", "-col")
 BRIDGE_NODE = re.compile(r"^bridge_osm_way_(\d+)(?:_p\d+)?-col$")
 SPAN_END_ID = re.compile(r"^span:way/(\d+):(\d+)$")
+# Building collision: how far, horizontally, a collision mesh may reach past the footprint.
+COLLISION_EXTENT_M = 0.05
+# Building collision: area slack between outlines that should be equal (plus 1 mm times
+# the perimeter), and how far out from a wall triangle its outward side is probed.
+OUTLINE_SLACK_M2 = 0.01
+WALL_PROBE_M = 1e-4
 
 _GLB_DTYPES = {5121: "u1", 5123: "<u2", 5125: "<u4", 5126: "<f4"}
 _GLB_WIDTH = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
@@ -177,6 +195,162 @@ def import_name(name: str) -> str:
         if name.lower().endswith(suffix):
             return name[: -len(suffix)]
     return name
+
+
+def mesh_footprint(vertices: np.ndarray, faces: np.ndarray) -> BaseGeometry:
+    """The footprint of a z-up mesh: the union of its up-facing triangles seen from above
+    (for an extruded building, its flat roof)."""
+    t = np.asarray(vertices, dtype=float)[np.asarray(faces, dtype=np.int64)]
+    up = (t[:, 1, 0] - t[:, 0, 0]) * (t[:, 2, 1] - t[:, 0, 1]) - (t[:, 1, 1] - t[:, 0, 1]) * (
+        t[:, 2, 0] - t[:, 0, 0]
+    ) > 0
+    return shapely.union_all(shapely.polygons(t[up][:, :, :2]))
+
+
+def _reach(region: BaseGeometry, footprint: BaseGeometry) -> float:
+    """How far the farthest point of `region` lies from `footprint` (the directed Hausdorff
+    distance from the region to the footprint), to 0.1 mm: the smallest r for which the
+    footprint grown by r covers the region, found by bisection."""
+    if region.is_empty:
+        return 0.0
+    low, high = 0.0, float(shapely.hausdorff_distance(region, footprint)) + MM
+    while high - low > 1e-4:
+        middle = (low + high) / 2
+        if footprint.buffer(middle, quad_segs=16).covers(region):
+            high = middle
+        else:
+            low = middle
+    return high
+
+
+def _outline_tolerance(outline: BaseGeometry) -> float:
+    """Allowed area between two outlines that should be equal: `OUTLINE_SLACK_M2` plus
+    `MM` times the perimeter (float32 rounding, buffered edges)."""
+    return OUTLINE_SLACK_M2 + MM * float(outline.boundary.length)
+
+
+def check_collision_mesh(
+    collision: str,
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    base: float,
+    top: float,
+) -> BaseGeometry:
+    """One collision mesh is a closed prism from `base` to `top` wound outward; returns its
+    outline from above (the union of its up-facing triangles).
+
+    Every triangle is non-degenerate (`DEGENERATE_AREA_M2`) and horizontal or vertical.
+    Horizontal triangles facing up lie at `top`, those facing down at `base` (1 mm), and the
+    two sets have the same outline. Every vertical (wall) triangle spans `base` to `top`,
+    and a point `WALL_PROBE_M` out along its normal from its centroid lies outside the
+    outline. The walls cover the outline's boundary, and their area is the boundary length
+    times the height (a missing wall triangle fails). The signed volume is positive."""
+    _require(len(faces) > 0, f"{collision}: collision mesh has no triangles")
+    areas = triangle_areas(vertices, faces)
+    _require(
+        areas.min() >= DEGENERATE_AREA_M2,
+        f"{collision}: {int((areas < DEGENERATE_AREA_M2).sum())} degenerate triangle(s)",
+    )
+    t = np.asarray(vertices, dtype=float)[faces]
+    z_low, z_high = float(t[:, :, 2].min()), float(t[:, :, 2].max())
+    _require(
+        abs(z_low - base) <= MM and abs(z_high - top) <= MM,
+        f"{collision}: collision spans z {z_low:.3f}..{z_high:.3f}, the visual mesh "
+        f"{base:.3f}..{top:.3f}",
+    )
+    normal = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
+    length = np.linalg.norm(normal, axis=1)
+    flat = np.linalg.norm(normal[:, :2], axis=1) <= 1e-6 * length
+    wall = np.abs(normal[:, 2]) <= 1e-6 * length
+    _require((flat | wall).all(), f"{collision}: {int((~(flat | wall)).sum())} slanted triangle(s)")
+    up, down = flat & (normal[:, 2] > 0), flat & (normal[:, 2] < 0)
+    z = t[:, :, 2]
+    misplaced = (up & (np.abs(z - top).max(axis=1) > MM)) | (
+        down & (np.abs(z - base).max(axis=1) > MM)
+    )
+    _require(
+        not misplaced.any(),
+        f"{collision}: {int(misplaced.sum())} horizontal triangle(s) not facing out of the "
+        "roof or the floor (up at the top, down at the base)",
+    )
+    _require(up.any(), f"{collision}: no up-facing roof triangles")
+    outline = shapely.union_all(shapely.polygons(t[up][:, :, :2]))
+    floor = shapely.union_all(shapely.polygons(t[down][:, :, :2]))
+    gap = float(outline.symmetric_difference(floor).area)
+    _require(
+        gap <= _outline_tolerance(outline),
+        f"{collision}: roof and floor outlines differ by {gap:.3f} m²",
+    )
+    walls = t[wall]
+    short = (np.abs(walls[:, :, 2].min(axis=1) - base) > MM) | (
+        np.abs(walls[:, :, 2].max(axis=1) - top) > MM
+    )
+    _require(not short.any(), f"{collision}: {int(short.sum())} wall triangle(s) not base to top")
+    outward = normal[wall][:, :2] / np.linalg.norm(normal[wall][:, :2], axis=1, keepdims=True)
+    probe = walls[:, :, :2].mean(axis=1) + WALL_PROBE_M * outward
+    inward = shapely.contains_xy(outline, probe[:, 0], probe[:, 1])
+    _require(
+        not inward.any(),
+        f"{collision}: {int(inward.sum())} wall triangle(s) facing into the building",
+    )
+    perimeter = float(outline.boundary.length)
+    height = top - base
+    wall_area = float(areas[wall].sum())
+    _require(
+        abs(wall_area - perimeter * height) <= MM * perimeter * height + OUTLINE_SLACK_M2,
+        f"{collision}: wall area {wall_area:.3f} m², the outline needs "
+        f"{perimeter * height:.3f} m² (a missing or extra wall)",
+    )
+    lines = shapely.linestrings(walls[:, :2, :2])  # each wall triangle's base or top edge
+    uncovered = outline.boundary.difference(shapely.union_all(shapely.buffer(lines, WALL_PROBE_M)))
+    _require(
+        uncovered.length <= MM,
+        f"{collision}: {uncovered.length:.3f} m of the outline has no wall",
+    )
+    volume = float(np.einsum("ij,ij->i", t[:, 0], np.cross(t[:, 1], t[:, 2])).sum()) / 6
+    _require(volume > 0, f"{collision}: collision volume {volume:.3f} m³ (faces inward)")
+    return outline
+
+
+def check_collision_extent(
+    name: str,
+    visual: tuple[np.ndarray, np.ndarray],
+    collisions: Sequence[tuple[str, np.ndarray, np.ndarray]],
+) -> None:
+    """A building's collision meshes against its visual mesh (`visual`), whose up-facing
+    triangles seen from above are the footprint and whose z range is base to top.
+
+    Each mesh passes `check_collision_mesh` with that base and top. Every collision
+    triangle seen from above (a triangle, or a segment for a wall) lies within
+    `COLLISION_EXTENT_M` of the footprint, so a filled courtyard or concave corner fails as
+    well as a vertex outside. The meshes' outlines together equal the footprint (their
+    symmetric difference is at most `OUTLINE_SLACK_M2` plus 1 mm times the perimeter), so a
+    shrunken or missing part fails."""
+    footprint = mesh_footprint(*visual)
+    _require(not footprint.is_empty, f"{name}: visual mesh has no up-facing faces")
+    visual_z = np.asarray(visual[0], dtype=float)[np.unique(visual[1]), 2]
+    base, top = float(visual_z.min()), float(visual_z.max())
+    allowed = footprint.buffer(COLLISION_EXTENT_M)
+    outlines: list[BaseGeometry] = []
+    for collision, vertices, faces in collisions:
+        outlines.append(check_collision_mesh(collision, vertices, faces, base, top))
+        t = np.asarray(vertices, dtype=float)[faces]
+        shadows = shapely.convex_hull(shapely.multipoints(t[:, :, :2]))
+        outside = ~shapely.covered_by(shadows, allowed)
+        if outside.any():
+            excess = shapely.union_all(shadows[outside]).difference(footprint)
+            raise PackCheckError(
+                f"{collision}: collision reaches more than {COLLISION_EXTENT_M} m beyond the "
+                f"footprint of {name} ({excess.area:.3f} m² outside, up to "
+                f"{_reach(excess, footprint):.3f} m away)"
+            )
+    covered = shapely.union_all(outlines)
+    gap = float(covered.symmetric_difference(footprint).area)
+    _require(
+        gap <= _outline_tolerance(footprint),
+        f"{name}: collision outline differs from the footprint by {gap:.3f} m² (allowed "
+        f"{_outline_tolerance(footprint):.3f} m²)",
+    )
 
 
 def check_import_names(tile_id: str, names: Sequence[str]) -> None:
@@ -395,6 +569,9 @@ def check_pack(
             check_collision_names(name, collisions)
             for collision in collisions:
                 _require(collision in meshes.nodes, f"{collision} missing from {tid}")
+            check_collision_extent(
+                name, meshes.nodes[name], [(c, *meshes.nodes[c]) for c in collisions]
+            )
             _require(building["tile"] == tid, f"{name}: tile {building['tile']} != {tid}")
             world = geometries[building["id"]]
             cx, cy = world.centroid.x - origin[0], world.centroid.y - origin[1]

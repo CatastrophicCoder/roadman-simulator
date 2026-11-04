@@ -22,7 +22,7 @@ looked at in record number order (`record_number`):
 6. Otherwise one building: id = the record id, the kept pieces as one footprint.
 
 The kept footprints become `LocalFootprint`s with empty tags, so heights, bases, nodes and
-collision boxes follow the OSM building rules. `mml_only_report` builds the `mml_only`
+collision meshes follow the OSM building rules. `mml_only_report` builds the `mml_only`
 block of `03-buildings/report.json`.
 """
 

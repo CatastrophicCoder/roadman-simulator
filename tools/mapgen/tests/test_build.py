@@ -10,7 +10,9 @@ from typing import Any
 import jsonschema
 import numpy as np
 import pytest
-from shapely.geometry import shape
+from shapely.affinity import translate
+from shapely.geometry import Polygon, shape
+from shapely.ops import unary_union
 
 from conftest import (
     FIXTURE_TEST_AREA_BUILDINGS,
@@ -302,6 +304,130 @@ def test_pack_checks_reject_bad_collision_names(
 ) -> None:
     pack = _corrupt_collisions(fixture_build, tmp_path, building_id, new)
     with pytest.raises(PackCheckError, match=message):
+        _check(fixture_build, pack)
+
+
+# Collision geometry: each footprint part extruded (ADR 0006 amendment 2026-11-04)
+
+
+def _roof_outline(vertices: np.ndarray, faces: np.ndarray) -> Any:
+    """The union of a mesh's up-facing triangles seen from above."""
+    t = vertices[faces]
+    up = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])[:, 2] > 0
+    return unary_union([Polygon(tri[:, :2]) for tri in t[up]])
+
+
+def test_collision_meshes_are_the_extruded_footprint_parts(fixture_build: FixtureBuild) -> None:
+    manifest = _json(fixture_build.pack_dir / "manifest.json")
+    origin = np.array([manifest["origin"]["x"], manifest["origin"]["y"]])
+    features = _json(fixture_build.work_dir / "03-buildings" / "buildings.geojson")["features"]
+    footprints = {f["properties"]["id"]: shape(f["geometry"]) for f in features}
+    tiles = {
+        t["id"]: read_glb_meshes(fixture_build.pack_dir / t["file"]) for t in manifest["tiles"]
+    }
+    checked = 0
+    for building in _json(fixture_build.pack_dir / "buildings.json")["buildings"]:
+        meshes = tiles[building["tile"]]
+        world = footprints[building["id"]]
+        parts = list(getattr(world, "geoms", [world]))
+        assert len(parts) == len(building["collision_nodes"])
+        top = building["base_z"] + building["height_m"]
+        for part, name in zip(parts, building["collision_nodes"], strict=True):
+            vertices, faces = meshes.nodes[name]
+            local = translate(part, -origin[0], -origin[1])
+            outline = _roof_outline(vertices, faces)
+            # The same polygon as the footprint part, holes included (float32 slack).
+            assert outline.symmetric_difference(local).area < 1e-3, name
+            assert vertices[:, 2].min() == pytest.approx(building["base_z"], abs=1e-3)
+            assert vertices[:, 2].max() == pytest.approx(top, abs=1e-3)
+            checked += 1
+    assert checked >= FIXTURE_TEST_AREA_BUILDINGS
+
+
+def test_courtyard_is_open_in_the_collision(fixture_build: FixtureBuild) -> None:
+    """osm:relation/201 has an inner ring: its collision leaves the courtyard open, as the
+    visual mesh does, instead of filling it."""
+    building = next(
+        b
+        for b in _json(fixture_build.pack_dir / "buildings.json")["buildings"]
+        if b["id"] == "osm:relation/201"
+    )
+    meshes = read_glb_meshes(fixture_build.pack_dir / "tiles" / f"{building['tile']}.glb")
+    (name,) = building["collision_nodes"]
+    outline = _roof_outline(*meshes.nodes[name])
+    assert isinstance(outline, Polygon) and len(outline.interiors) == 1
+    courtyard = Polygon(outline.interiors[0])
+    assert courtyard.area > 1.0
+    assert not outline.contains(courtyard.representative_point())
+    assert _roof_outline(*meshes.nodes[building["node"]]).equals(outline)
+
+
+def _grow_glb_node(path: Path, node_name: str, factor: float) -> None:
+    """Give a node's mesh its own copy of its positions, scaled horizontally about their
+    mean (glTF X and Z). The copy is appended to the binary chunk as a new accessor,
+    because the exporter shares identical buffers (a one-part building's collision mesh
+    and its visual mesh store the same positions)."""
+    data = path.read_bytes()
+    json_len = int.from_bytes(data[12:16], "little")
+    gltf = json.loads(data[20 : 20 + json_len])
+    bin_start = 20 + json_len + 8
+    binary = data[bin_start:]
+    node = next(n for n in gltf["nodes"] if n.get("name") == node_name)
+    attributes = gltf["meshes"][node["mesh"]]["primitives"][0]["attributes"]
+    accessor = gltf["accessors"][attributes["POSITION"]]
+    view = gltf["bufferViews"][accessor["bufferView"]]
+    offset = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
+    count = accessor["count"]
+    positions = np.frombuffer(binary, dtype="<f4", count=3 * count, offset=offset).reshape(-1, 3)
+    grown = positions.astype(float)
+    centre = grown.mean(axis=0)
+    grown[:, [0, 2]] = centre[[0, 2]] + factor * (grown[:, [0, 2]] - centre[[0, 2]])
+    stored = grown.astype("<f4")
+    gltf["bufferViews"].append(
+        {"buffer": 0, "byteOffset": len(binary), "byteLength": stored.nbytes}
+    )
+    gltf["accessors"].append(
+        {
+            "bufferView": len(gltf["bufferViews"]) - 1,
+            "componentType": 5126,
+            "count": count,
+            "type": "VEC3",
+            "min": stored.min(axis=0).tolist(),
+            "max": stored.max(axis=0).tolist(),
+        }
+    )
+    attributes["POSITION"] = len(gltf["accessors"]) - 1
+    binary += stored.tobytes()
+    gltf["buffers"][0]["byteLength"] = len(binary)
+    chunk = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    chunk += b" " * (-len(chunk) % 4)
+    body = (
+        len(chunk).to_bytes(4, "little")
+        + b"JSON"
+        + chunk
+        + len(binary).to_bytes(4, "little")
+        + b"BIN\x00"
+        + binary
+    )
+    path.write_bytes(data[:8] + (12 + len(body)).to_bytes(4, "little") + body)
+
+
+def test_pack_checks_reject_collision_beyond_the_footprint(
+    fixture_build: FixtureBuild, tmp_path: Path
+) -> None:
+    pack = tmp_path / "pack"
+    shutil.copytree(fixture_build.pack_dir, pack)
+    building = next(
+        b for b in _json(pack / "buildings.json")["buildings"] if b["id"] == "osm:way/101"
+    )
+    tile = pack / "tiles" / f"{building['tile']}.glb"
+    _grow_glb_node(tile, building["collision_nodes"][0], 1.2)
+    meshes = read_glb_meshes(tile)  # the visual mesh is unchanged
+    assert np.array_equal(
+        meshes.nodes[building["node"]][0],
+        read_glb_meshes(fixture_build.pack_dir / "tiles" / tile.name).nodes[building["node"]][0],
+    )
+    with pytest.raises(PackCheckError, match="bld_osm_way_101_c0-colonly: collision reaches"):
         _check(fixture_build, pack)
 
 

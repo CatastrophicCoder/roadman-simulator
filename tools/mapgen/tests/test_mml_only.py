@@ -885,7 +885,7 @@ def test_ac2_cut_footprints_keep_only_the_part_outside_osm(mml: MmlBuild) -> Non
         assert footprints[_id(n)].symmetric_difference(box(*RECORDS[n].bounds)).area < 1e-6, n
 
 
-def test_ac2_two_kept_pieces_make_one_building_with_two_collision_boxes(mml: MmlBuild) -> None:
+def test_ac2_two_kept_pieces_make_one_building_with_two_collision_meshes(mml: MmlBuild) -> None:
     building = mml.buildings()[_id(2011)]
     assert building["node"] == "bld_mml_rakennus_2011"
     assert building["collision_nodes"] == [

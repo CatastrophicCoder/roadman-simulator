@@ -5,7 +5,9 @@ Height priority: lidar (`mml_lidar`, see `mapgen.build.lidar`), MML 3D measured 
 then a default of 2 floors x 3 m. A manual override goes first once it exists. A lidar
 height is the median roof elevation minus the base, so the flat roof sits at the measured
 median elevation. The base is `Heightfield.min_under(footprint)`. Roofs are flat for now.
-Each building belongs to the tile containing its centroid and is never split.
+Each building belongs to the tile containing its centroid and is never split. Each
+footprint part gets a collision mesh: the part extruded like the visual mesh, courtyards
+open (ADR 0006 amendment 2026-11-04).
 """
 
 import math
@@ -208,19 +210,35 @@ def extrude(
     return np.concatenate(vertices), np.concatenate(faces)
 
 
-def collision_box(polygon: Polygon) -> Polygon:
-    """A polygon's minimum rotated rectangle. Holes and concave corners are filled."""
-    # GEOS's oriented envelope warns on axis-aligned edges but returns the right box.
-    with np.errstate(divide="ignore", invalid="ignore"):
-        box = shapely.minimum_rotated_rectangle(polygon)
-    if not isinstance(box, Polygon) or not box.area > 0 or not math.isfinite(box.area):
-        raise ValueError("footprint has no area")
-    return box
+# A collision triangle with less area than this (computed from the float32 positions the
+# tile stores) counts as degenerate; `collision_mesh` drops such triangles and the pack
+# checks reject them. A float32 step at 1 km is 6.1e-5 m, so the smallest non-zero
+# triangle there has about 1.9e-9 m².
+DEGENERATE_AREA_M2 = 1e-9
 
 
-def collision_boxes(geometry: Polygon | MultiPolygon) -> list[Polygon]:
-    """One box per footprint part, so separate parts don't get a box spanning the gap."""
-    return [collision_box(part) for part in _polygons(geometry)]
+def triangle_areas(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """The area of each triangle, from the vertices rounded to float32 as a tile stores
+    them."""
+    v = np.asarray(vertices, dtype=np.float32).astype(float)
+    t = v[np.asarray(faces, dtype=np.int64)]
+    return 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
+
+
+def collision_parts(geometry: Polygon | MultiPolygon) -> list[Polygon]:
+    """The footprint parts, one collision mesh each, so no mesh spans the gap between
+    separate parts."""
+    return _polygons(geometry)
+
+
+def collision_mesh(part: Polygon, z0: float, z1: float) -> tuple[np.ndarray, np.ndarray]:
+    """A footprint part's collision: the part extruded from z0 to z1, as the visual mesh
+    is (holes stay open as courtyards, concave corners stay concave), geometrically closed
+    and wound outward. Degenerate triangles (`DEGENERATE_AREA_M2`) are left out; the
+    mesh then has the visual mesh's triangles minus those."""
+    vertices, faces = extrude(part, z0, z1)
+    keep = triangle_areas(vertices, faces) >= DEGENERATE_AREA_M2
+    return vertices, faces[keep]
 
 
 @dataclass(frozen=True)
@@ -253,12 +271,14 @@ class Building:
         return extrude(self.footprint, self.base_z, self.top_z)
 
     def collision_meshes(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
-        boxes = collision_boxes(self.footprint)
-        if len(boxes) != len(self.collision_nodes):
-            raise ValueError(f"{self.id}: {len(boxes)} collision boxes for the node names")
+        """One extruded footprint part per collision node, spanning what the visual mesh
+        spans (base to flat roof)."""
+        parts = collision_parts(self.footprint)
+        if len(parts) != len(self.collision_nodes):
+            raise ValueError(f"{self.id}: {len(parts)} footprint parts for the node names")
         return [
-            (name, *extrude(box, self.base_z, self.top_z))
-            for name, box in zip(self.collision_nodes, boxes, strict=True)
+            (name, *collision_mesh(part, self.base_z, self.top_z))
+            for name, part in zip(self.collision_nodes, parts, strict=True)
         ]
 
     def lidar_provenance(self) -> dict[str, Any]:

@@ -76,14 +76,14 @@ For each record of the map's `building_use` source (Somero: `mml_topographic`, t
 5. **Lidar contradiction:** the kept footprint has at least 10 lidar points inside it (all classes except the noise classes 7 and 18; ground included), and at least 90% of them are within 1.5 m of the ground: |point z − `Heightfield.sample` at the point's x/y| ≤ 1.5 m. Not added (`lidar_contradicts`).
 6. Otherwise the record becomes one building.
 
-The kept pieces of one record form one building: one id, one footprint (a polygon, or a multipolygon when several pieces are kept), one height, one collision box per part. The 0.75 m opening radius, 50% surviving share, 4 m², 1 m², 10 point, 90% and 1.5 m height limits are pipeline constants, listed in the report.
+The kept pieces of one record form one building: one id, one footprint (a polygon, or a multipolygon when several pieces are kept), one height, one collision mesh (the extruded footprint part) per part (2026-11-04: ADR 0006 amendment, extruded footprint). The 0.75 m opening radius, 50% surviving share, 4 m², 1 m², 10 point, 90% and 1.5 m height limits are pipeline constants, listed in the report.
 
 Added whenever the map's `building_use` source is enabled and loaded; there is no separate switch. A map with the source disabled adds nothing and the log says so; that isn't a failure.
 
 ### Geometry
 
 - The footprint is the kept geometry from step 4 (the record's repaired polygon when whole), in local coordinates.
-- Base at `Heightfield.min_under(footprint)`, flat roof, extrusion with holes, and one collision box (minimum rotated rectangle) per part, exactly as for OSM buildings.
+- Base at `Heightfield.min_under(footprint)`, flat roof, extrusion with holes, and one collision mesh (the extruded footprint part; a minimum rotated rectangle before 2026-11-04: ADR 0006 amendment, extruded footprint) per part, exactly as for OSM buildings.
 - A cut footprint shares at most its boundary with OSM footprints; its area of overlap with any OSM building is under 0.01 m² (floating point).
 
 ### Height
@@ -161,7 +161,7 @@ The existing counts (`building_count`, height, category, name and address counts
 - A record whose remaining part splits into several pieces: slivers dropped, the rest one multipart building.
 - A record whose difference with OSM leaves lines or points only: discarded as `slivers`.
 - A record touching an OSM footprint only along an edge (shared area 0): added whole.
-- Two MML-only records sharing a wall: both added, each with its own collision box.
+- Two MML-only records sharing a wall: both added, each with its own collision mesh (the extruded footprint part) (2026-11-04: ADR 0006 amendment, extruded footprint).
 - An MML-only footprint overlapping a road surface: added and listed in the report.
 - A record with an unmapped or missing feature class: step 5 has no value, counted as unmapped as now.
 - A build area where no record qualifies: the build succeeds and the report says 0 added.
@@ -169,7 +169,7 @@ The existing counts (`building_count`, height, category, name and address counts
 ## Acceptance criteria
 
 1. On synthetic snippets (OSM footprints, a `rakennus` GPKG written with `sqlite3`, DEM and point arrays): a record with no OSM building near it is added whole; a matched record isn't added; one with its centroid outside the build area isn't; one of 0.9 m² is `too_small` and one of 1.1 m² is added.
-2. Cutting: a record half covered by an OSM building is added with the uncovered half as its footprint; a remaining piece of 3.9 m² is a sliver and one of 4.1 m² (at least 1.5 m wide) is kept; a 1.4 m wide strip of 10 m² is a sliver and a 1.6 m wide one is kept; an L-shaped strip 1.4 m wide is a sliver, also with long arms (each 20 m), and one 1.6 m wide is kept; a compact annex (for example 3 × 2.5 m) is kept; a record leaving two kept pieces becomes one building with two parts and two collision boxes; a record leaving only slivers is discarded as `slivers`; a record touching an OSM footprint only along an edge is added whole.
+2. Cutting: a record half covered by an OSM building is added with the uncovered half as its footprint; a remaining piece of 3.9 m² is a sliver and one of 4.1 m² (at least 1.5 m wide) is kept; a 1.4 m wide strip of 10 m² is a sliver and a 1.6 m wide one is kept; an L-shaped strip 1.4 m wide is a sliver, also with long arms (each 20 m), and one 1.6 m wide is kept; a compact annex (for example 3 × 2.5 m) is kept; a record leaving two kept pieces becomes one building with two parts and two collision meshes (the extruded footprint parts) (2026-11-04: ADR 0006 amendment, extruded footprint); a record leaving only slivers is discarded as `slivers`; a record touching an OSM footprint only along an edge is added whole.
 3. Lidar contradiction: a footprint with 10 points of which 9 are within 1.5 m of the ground (90%) is removed as `lidar_contradicts`; with 10 points of which 8 are within (80%) it is added; with 9 points all within it is added (too few points). Heights are measured against `Heightfield.sample` on a sloped DEM, so ground points on a slope count as within 1.5 m of the ground.
 4. Height: an added building with enough roof points gets `mml_lidar` with the same values as `lidar_height` on its kept footprint; one without gets `default` (6 m) and its `lidar_rejected` reason.
 5. Category on snippets, one building per step: an MML-keyed override; a POI node inside (`osm_poi`); inside a POI area (`osm_poi_area`); 4221x (`mml_use_class`); 4226x with a kept footprint of 39 m² (`garage_or_shed`) and of 41 m² (on to land use), including a record over 40 m² cut below 40 m²; 4222x with and without land use; nothing (`unknown`). `category_raw.osm_building` is always `null`. Name fields come from the override or one named POI, else `null`; `address` is `null`; `mml_building` is the own id with `mml_overlap` `1.0`.
