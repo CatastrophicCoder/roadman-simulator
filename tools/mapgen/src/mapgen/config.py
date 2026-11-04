@@ -259,6 +259,9 @@ class WorldEdgeConfig(StrictModel):
     # A custom boundary polygon, without repeating the first point. None: the build area.
     boundary_wgs84: list[LatLon] | None = None
     building_clearance_m: float = Field(default=2.0, ge=0)
+    # Narrower spikes and notches of the boundary fail the build (world_edge/narrow.py);
+    # 0 turns the check off.
+    min_feature_width_m: float = Field(default=3.0, ge=0)
     fence: FenceConfig = Field(default_factory=FenceConfig)
     roadblock: RoadblockConfig = Field(default_factory=RoadblockConfig)
     cliff: CliffConfig = Field(default_factory=CliffConfig)

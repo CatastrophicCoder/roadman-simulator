@@ -77,7 +77,7 @@ from mapgen.build.world_edge import roadblock_record
 from mapgen.build.world_edge.model import BOUNDARY_SCHEMA
 from mapgen.build.world_edge.ring import Ring
 from mapgen.build.world_edge.roadblocks import EdgeNode, roadblock_spans
-from mapgen.build.world_edge.void import void_quads
+from mapgen.build.world_edge.void import ARC_EXCESS_M, void_quads
 from mapgen.cli import EXIT_OK, main
 from mapgen.config import MapConfig, WorldEdgeConfig
 from mapgen.geo import map_to_wgs84
@@ -515,9 +515,9 @@ def test_ac3_every_default_matches_the_spec_table(
     tmp_repo: TmpRepo, fixture_data: dict[str, Any]
 ) -> None:
     table = _spec_defaults()
-    assert len(table) == 15, (
+    assert len(table) == 16, (
         table
-    )  # boundary, clearance, 2 fence, 2 roadblock, 2 cliff, 3 void, 4 spawn
+    )  # boundary, clearance, min feature width, 2 fence, 2 roadblock, 2 cliff, 3 void, 4 spawn
     assert "world_edge" not in fixture_data
     edge = tmp_repo.load(fixture_data).world_edge
     for key, default in table.items():
@@ -1105,6 +1105,7 @@ def _band_points(
     polygon: Polygon, inner: float, width: float, count: int, rng: np.random.Generator
 ) -> np.ndarray:
     line = polygon.exterior
+    vertices = shapely.multipoints(list(line.coords))
     min_x, min_y, max_x, max_y = polygon.bounds
     reach = inner + width
     chosen: list[np.ndarray] = []
@@ -1116,8 +1117,13 @@ def _band_points(
                 rng.uniform(min_y - reach, max_y + reach, 50_000),
             ]
         )
-        distance = shapely.distance(shapely.points(xy), line)
-        keep = (distance > inner + 1e-6) & (distance < reach - 1e-6)
+        points = shapely.points(xy)
+        distance = shapely.distance(points, line)
+        # The band the prisms cover: from inner, or from inner + ARC_EXCESS_M within
+        # inner + ARC_EXCESS_M of a ring vertex (ADR 0015 amendment of 2026-11-04).
+        near_vertex = shapely.distance(points, vertices) < inner + ARC_EXCESS_M + 1e-6
+        start = np.where(near_vertex, inner + ARC_EXCESS_M, inner)
+        keep = (distance > start + 1e-6) & (distance < reach - 1e-6)
         keep &= ~shapely.contains_xy(polygon, xy[:, 0], xy[:, 1])
         chosen.append(xy[keep])
         total += int(keep.sum())
@@ -1519,6 +1525,28 @@ def test_ac16_a_custom_polygon_crossing_a_building_fails_the_build_naming_it(
         build_custom_map(tmp_path, ring=ring)
     assert "1 building(s)" in str(info.value)
     assert not paths.pack_dir(tmp_path, MAP_ID).exists()
+
+
+# A 2 m wide, 10 m deep notch in the west side, under min_feature_width_m (3 m).
+NARROW_RING = [
+    *CUSTOM_RING[:-2],
+    (-140.0, 51.0),
+    (-130.0, 51.0),
+    (-130.0, 49.0),
+    (-140.0, 49.0),
+    *CUSTOM_RING[-2:],
+]
+
+
+def test_a_narrow_custom_boundary_fails_before_any_stage_output(tmp_path: Path) -> None:
+    with pytest.raises(BuildError, match="narrower than world_edge.min_feature_width_m") as info:
+        build_custom_map(tmp_path, ring=NARROW_RING)
+    message = str(info.value)
+    assert re.search(r"notch at x -1[34]\d\.\d\d, z -50\.\d\d \(Godot local\)", message), message
+    assert "nearest boundary_wgs84 entries (0-based)" in message
+    assert not paths.pack_dir(tmp_path, MAP_ID).exists()
+    work = paths.work_dir(tmp_path, MAP_ID, "full")
+    assert not work.exists() or not any(work.rglob("*")), sorted(work.rglob("*"))
 
 
 # The notch's west side moved from x 130 to x 138.5: NEAR_EDGE (x 139..149, in the notch)
@@ -2022,6 +2050,41 @@ def _drop_a_prism(doc: dict[str, Any]) -> None:
     del prisms[max(range(len(prisms)), key=lambda k: Polygon(prisms[k]["footprint"]).area)]
 
 
+def _prism_too_close(doc: dict[str, Any]) -> None:
+    """Move the first prism 0.5 m towards the ring: its inner side is then 0.5 m from
+    the ring, under void.inner_offset_m (1.0 m)."""
+    ring = Ring.from_coords([_local(p) for p in doc["boundary"]["ring"]])
+    prism = doc["void_trigger"]["prisms"][0]
+    points = [_local(p) for p in prism["footprint"]]
+    centre = Polygon(points).centroid
+    outward = ring.outward_at(ring.project(centre.x, centre.y))
+    prism["footprint"] = [
+        [x - 0.5 * float(outward[0]), -(n - 0.5 * float(outward[1]))] for x, n in points
+    ]
+
+
+def _narrow_notch(doc: dict[str, Any]) -> None:
+    """Cut a 2 m wide, 10 m deep notch into the middle of the ring's first segment (and
+    fix length_m), under world_edge.min_feature_width_m (3 m)."""
+    points = [_local(p) for p in doc["boundary"]["ring"]]
+    (x0, n0), (x1, n1) = points[0], points[1]
+    ux, un = (
+        (x1 - x0) / math.dist(points[0], points[1]),
+        (n1 - n0) / math.dist(points[0], points[1]),
+    )
+    mx, mn = (x0 + x1) / 2, (n0 + n1) / 2
+    left = (-un, ux)  # into the playable area (counter-clockwise ring)
+    notch = [
+        (mx - ux, mn - un),
+        (mx - ux + 10 * left[0], mn - un + 10 * left[1]),
+        (mx + ux + 10 * left[0], mn + un + 10 * left[1]),
+        (mx + ux, mn + un),
+    ]
+    ring = [points[0], *notch, *points[1:]]
+    doc["boundary"]["ring"] = [[x, -n] for x, n in ring]
+    doc["boundary"]["length_m"] = Ring.from_coords(ring).length
+
+
 def _fence_over_road(doc: dict[str, Any]) -> None:
     """Move a roadblock's start, and the end of the fence before it, clearance + 0.5 m
     into the road surface, keeping the loop closed."""
@@ -2048,6 +2111,8 @@ CORRUPTIONS: dict[str, tuple[Callable[[dict[str, Any]], None], str]] = {
     "fence-end-height-off-by-1-cm": (_fence_height, "end at .* != terrain"),
     "land-fence-marked-water": (_land_as_water, "is water but"),
     "void-prism-missing": (_drop_a_prism, "lie in no prism"),
+    "void-prism-too-close": (_prism_too_close, "closer to the ring than void.inner_offset_m"),
+    "narrow-notch-in-the-ring": (_narrow_notch, "spike.* or notch.* narrower than"),
 }
 
 

@@ -3,6 +3,7 @@ markers, the ring, roadblock spans, fences, the void prisms, the spawn check and
 water tables. The acceptance tests on whole builds live elsewhere."""
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from mapgen.build.markers import MARKERS_SCHEMA, MarkersError, parse_markers, re
 from mapgen.build.world_edge import fence_record, roadblock_record, yaw_degrees
 from mapgen.build.world_edge.fences import FenceSegment, fence_segments, max_deviation
 from mapgen.build.world_edge.model import BOUNDARY_SCHEMA
+from mapgen.build.world_edge.narrow import narrow_features
 from mapgen.build.world_edge.ring import ON_RING_M, Ring
 from mapgen.build.world_edge.roadblocks import (
     EdgeNode,
@@ -28,11 +30,12 @@ from mapgen.build.world_edge.roadblocks import (
 )
 from mapgen.build.world_edge.spawn import Obstacle, crossing_buildings, spawn_check
 from mapgen.build.world_edge.void import (
+    ARC_EXCESS_M,
     band_samples,
-    clip_to_outside,
     footprint_problems,
     point_in_quads,
     quads_overlapping,
+    ring_distances,
     void_quads,
 )
 from mapgen.build.world_edge.water import (
@@ -64,6 +67,7 @@ def test_world_edge_block_is_optional_with_the_spec_defaults(
     edge = tmp_repo.load(fixture_data).world_edge
     assert edge.boundary_wgs84 is None
     assert edge.building_clearance_m == 2.0
+    assert edge.min_feature_width_m == 3.0
     assert (edge.fence.max_segment_m, edge.fence.max_terrain_deviation_m) == (20.0, 0.25)
     assert (edge.roadblock.clearance_m, edge.roadblock.merge_distance_m) == (1.0, 15.0)
     assert (edge.cliff.ledge_m, edge.cliff.depth_m) == (2.0, 30.0)
@@ -88,6 +92,15 @@ def test_an_override_changes_only_its_value(
     assert edge.fence.max_terrain_deviation_m == 0.1
     assert edge.fence.max_segment_m == 20.0
     assert edge.cliff.depth_m == 30.0
+
+
+@pytest.mark.parametrize("value", [-1.0, "wide"])
+def test_min_feature_width_must_be_a_non_negative_number(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any], value: Any
+) -> None:
+    fixture_data["world_edge"] = {"min_feature_width_m": value}
+    with pytest.raises(ConfigError, match="min_feature_width_m"):
+        tmp_repo.load(fixture_data)
 
 
 def test_unknown_world_edge_keys_are_errors(
@@ -142,8 +155,11 @@ def test_boundary_for_uses_the_custom_polygon_in_full_builds_and_the_square_in_t
     from mapgen.build.area import build_area
     from mapgen.build.world_edge import boundary_for
 
+    # A trapezoid: a triangle's corners would be sharper than 60°, a narrow spike.
     fixture_data["world_edge"] = {
-        "boundary_wgs84": _latlon([(-500.0, -500.0), (500.0, -500.0), (0.0, 600.0)])
+        "boundary_wgs84": _latlon(
+            [(-500.0, -500.0), (500.0, -500.0), (300.0, 600.0), (-300.0, 600.0)]
+        )
     }
     config = tmp_repo.load(fixture_data)
     full = boundary_for(config, build_area(config, "full"))
@@ -461,39 +477,35 @@ def test_void_prisms_fill_a_narrow_inlet_and_stop_short_of_its_walls() -> None:
     )
     quads = void_quads(ring, 1.0, 20.0)
     assert footprint_problems(quads, tolerance=1e-9) == []
-    in_inlet = [Polygon(q) for q in quads if Polygon(q).within(box(100, 30, 110, 100))]
-    assert in_inlet, "no prism inside the inlet"
-    # Everything in the inlet at least 1 m from its walls and end is covered.
-    uncovered = box(101, 31, 109, 100).difference(shapely.union_all(in_inlet))
+    # Everything in the inlet at least 1 m from its walls and end is covered (its
+    # corners are concave, so no arc slack applies), and no prism comes closer to them.
+    uncovered = box(101, 31, 109, 100).difference(shapely.union_all([Polygon(q) for q in quads]))
     assert uncovered.area == pytest.approx(0.0, abs=1e-6)
+    assert ring_distances(ring, quads).min() >= 1.0 - 1e-9
 
 
-def test_clip_to_outside_never_passes_an_invalid_quad_through() -> None:
-    # The bow-tie a narrow inlet used to produce: its crossing edges enclose two
-    # triangles, one of them over the playable area.
-    polygon = Polygon(
-        [(0, 0), (200, 0), (200, 100), (110, 100), (110, 30), (100, 30), (100, 100), (0, 100)]
-    )
-    bow_tie = [(109.0, 31.0), (101.0, 31.0), (121.0, 51.0), (89.0, 51.0)]
-    assert not Polygon(bow_tie).is_valid
-    pieces = clip_to_outside(polygon, [bow_tie])
-    assert pieces
-    assert footprint_problems(pieces, tolerance=1e-9) == []
-    assert quads_overlapping(polygon, pieces) == []
-    assert all(len(piece) == 4 for piece in pieces)
+def test_a_concave_region_splits_into_convex_pieces_of_the_same_area() -> None:
+    from mapgen.build.world_edge.void import _convex_parts
 
-
-def test_clip_to_outside_keeps_a_convex_quad_and_splits_a_concave_one() -> None:
-    polygon = box(0, 0, 10, 10)
-    outside = [(20.0, 0.0), (30.0, 0.0), (30.0, 10.0), (20.0, 10.0)]
-    assert clip_to_outside(polygon, [outside]) == [outside]
-    dart = [(20.0, 0.0), (30.0, 5.0), (20.0, 10.0), (25.0, 5.0)]  # reflex at (25, 5)
-    pieces = clip_to_outside(polygon, [dart])
+    dart = Polygon([(20.0, 0.0), (30.0, 5.0), (20.0, 10.0), (25.0, 5.0)])  # reflex at (25, 5)
+    pieces = _convex_parts(dart)
     assert len(pieces) == 2
     assert footprint_problems(pieces, tolerance=1e-9) == []
-    assert sum(Polygon(p).area for p in pieces) == pytest.approx(Polygon(dart).area)
-    triangle = [(20.0, 0.0), (30.0, 0.0), (20.0, 10.0)]
-    assert clip_to_outside(polygon, [triangle]) == [[*triangle, triangle[-1]]]
+    assert sum(Polygon(p).area for p in pieces) == pytest.approx(dart.area)
+
+
+def test_clipped_regions_split_into_few_convex_quads() -> None:
+    from mapgen.build.world_edge.void import _convex_parts
+
+    hexagon = Polygon([(2, 0), (1, 1.7), (-1, 1.7), (-2, 0), (-1, -1.7), (1, -1.7)])
+    parts = _convex_parts(hexagon)
+    assert len(parts) == 2 and all(len(set(p)) == 4 for p in parts)
+    assert sum(Polygon(p).area for p in parts) == pytest.approx(hexagon.area)
+    ell = Polygon([(0, 0), (10, 0), (10, 2), (2, 2), (2, 10), (0, 10)])
+    parts = _convex_parts(ell)
+    assert footprint_problems(parts, tolerance=1e-9) == []
+    assert len(parts) == 2  # its 4 triangles merge into two convex quads
+    assert shapely.union_all([Polygon(p) for p in parts]).equals(ell)
 
 
 def test_void_prisms_are_deterministic() -> None:
@@ -513,6 +525,175 @@ def test_footprint_problems_names_bow_ties_reflex_quads_and_wrong_lengths() -> N
         "footprint 3",
     ]
     assert "convex" in problems[1]
+
+
+# Void prisms keep `inner` from the whole ring (ADR 0015 amendment of 2026-11-04)
+
+NOTCH_15 = [(0, 0), (200, 0), (200, 100), (100.75, 100), (100.75, 70), (99.25, 70), (99.25, 100)]
+NOTCH_15 = [*NOTCH_15, (0, 100)]  # a 1.5 m wide, 30 m deep notch in the top side
+SPIKE_15 = [(0, 0), (200, 0), (200, 100), (100.75, 100), (100.75, 130), (99.25, 130)]
+SPIKE_15 = [*SPIKE_15, (99.25, 100), (0, 100)]  # a 1.5 m wide, 30 m long spike
+SLIVER = [(0, 0), (200, 0), (200, 100), (60, 100), (60, 99.4), (140, 99.4), (140, 60)]
+SLIVER = [*SLIVER, (40, 60), (40, 100), (0, 100)]  # 0.6 m between the notch and the edge
+
+
+@pytest.mark.parametrize(
+    "coords", [NOTCH_15, SPIKE_15, SLIVER], ids=["notch-1.5m", "spike-1.5m", "sliver-0.6m"]
+)
+def test_void_prisms_stay_inner_offset_from_the_whole_ring_in_narrow_features(
+    coords: Any,
+) -> None:
+    ring = Ring.from_coords(coords)
+    assert ring.polygon().is_valid
+    quads = void_quads(ring, 1.0, 20.0)
+    assert footprint_problems(quads, tolerance=1e-9) == []
+    distances = ring_distances(ring, quads)
+    assert distances.min() >= 1.0 - 1e-3, (distances.min(), quads[int(distances.argmin())])
+    samples = band_samples(ring, 1.0, 20.0, 10_000)
+    inside = point_in_quads(quads, samples)
+    assert inside.all(), samples[~inside][:3]
+    assert quads_overlapping(ring.polygon(), quads) == []
+
+
+def test_void_prisms_round_a_convex_corner_from_outside_and_cut_a_concave_one() -> None:
+    # An L: five convex corners and one concave corner at (40, 40).
+    ring = Ring.from_coords([(0, 0), (100, 0), (100, 40), (40, 40), (40, 100), (0, 100)])
+    quads = void_quads(ring, 1.0, 20.0)
+    assert footprint_problems(quads, tolerance=1e-9) == []
+    distances = ring_distances(ring, quads)
+    assert distances.min() >= 1.0 - 1e-9  # the arcs are drawn around the circle
+    samples = band_samples(ring, 1.0, 20.0, 10_000)
+    assert point_in_quads(quads, samples).all()
+    # At the convex corner (100, 0), the prisms reach to within ARC_EXCESS_M of the 1 m
+    # circle all round the corner: every point at 1 m + ARC_EXCESS_M + 1 µm is covered.
+    angles = np.linspace(-np.pi / 2, 0.0, 721)
+    radius = 1.0 + ARC_EXCESS_M + 1e-6
+    arc = np.column_stack([100 + radius * np.cos(angles), radius * np.sin(angles)])
+    assert point_in_quads(quads, arc).all()
+    # Near the concave corner nothing comes within 1 m of either segment: the old corner
+    # fills reached 0.707 m (the chord), and the strips cut each other's 1 m zone.
+    near = [Polygon(q) for q in quads if Polygon(q).distance(shapely.Point(40, 40)) < 5]
+    assert near and min(p.distance(ring.line()) for p in near) >= 1.0 - 1e-9
+
+
+def test_void_prisms_at_right_angle_corners_are_exactly_inner_from_the_ring() -> None:
+    # The chord-based corner fill of the old construction reached 0.707 m at a right
+    # angle; the polygon around the circle never reaches inside it.
+    ring = Ring.rectangle(0, 0, 50, 50)
+    quads = void_quads(ring, 1.0, 20.0)
+    assert ring_distances(ring, quads).min() == pytest.approx(1.0, abs=1e-9)
+    # 4 strips and a fan of quads at each corner, all convex quads (no triangles).
+    assert all(len(set(q)) == 4 for q in quads)
+
+
+# Narrow spikes and notches (world_edge.min_feature_width_m)
+
+NOTCH_2 = [(0, 0), (200, 0), (200, 100), (101, 100), (101, 80), (99, 80), (99, 100), (0, 100)]
+SPIKE_2 = [(0, 0), (200, 0), (200, 100), (101, 100), (101, 120), (99, 120), (99, 100), (0, 100)]
+NOTCH_4 = [(0, 0), (200, 0), (200, 100), (102, 100), (102, 80), (98, 80), (98, 100), (0, 100)]
+L_RING = [(0, 0), (100, 0), (100, 40), (40, 40), (40, 100), (0, 100)]
+
+
+def test_a_2_m_notch_is_reported_with_its_width_and_place() -> None:
+    ring = Ring.from_coords(NOTCH_2)
+    [feature] = narrow_features(ring, 3.0)
+    assert feature.kind == "notch"
+    assert feature.width_m == pytest.approx(2.0, abs=1e-6)
+    assert 99 <= feature.point[0] <= 101 and 80 <= feature.point[1] <= 100
+    assert feature.angle_deg is None
+    s_notch = [ring.project(x, n) for x, n in [(101, 100), (101, 80), (99, 80), (99, 100)]]
+    assert feature.s_start <= min(s_notch) + 1e-6 and feature.s_end >= max(s_notch) - 1e-6
+
+
+def test_a_2_m_spike_is_reported_as_a_spike() -> None:
+    ring = Ring.from_coords(SPIKE_2)
+    [feature] = narrow_features(ring, 3.0)
+    assert feature.kind == "spike"
+    assert feature.width_m == pytest.approx(2.0, abs=1e-6)
+    assert 99 <= feature.point[0] <= 101 and 100 <= feature.point[1] <= 120
+
+
+@pytest.mark.parametrize(
+    "coords",
+    [
+        NOTCH_4,
+        L_RING,
+        [(0, 0), (300, 0), (300, 300), (0, 300)],
+        [(0, 0), (100, 0), (100, 50), (100.5, 50), (100.5, 100), (0, 100)],  # a 0.5 m jog
+        [(0, 0), (100, 0), (100, 80), (99.3, 80.7), (0, 100)],  # a chamfered corner
+        [(0, 0), (100, 0), (100 - 100 / np.tan(np.radians(62)), 100), (0, 100)],  # 62°
+    ],
+    ids=["notch-4m", "l-ring", "square", "jog", "chamfer", "corner-62deg"],
+)
+def test_ordinary_shapes_and_wide_notches_have_no_narrow_feature(coords: Any) -> None:
+    assert narrow_features(Ring.from_coords(coords), 3.0) == []
+
+
+def test_a_corner_sharper_than_60_degrees_is_a_spike_or_notch() -> None:
+    # A 55° corner of the playable area at (100, 0); the others are 90° and 125°.
+    spike = Ring.from_coords([(0, 0), (100, 0), (100 - 50 / np.tan(np.radians(55)), 50), (0, 50)])
+    [feature] = narrow_features(spike, 3.0)
+    assert (feature.kind, feature.point) == ("spike", (100.0, 0.0))
+    assert feature.angle_deg == pytest.approx(55.0, abs=1e-6)
+    # A V notch whose outside wedge is 50° at its bottom (50, 78.56...).
+    depth = 10 / np.tan(np.radians(25))
+    notch = Ring.from_coords(
+        [(0, 0), (100, 0), (100, 100), (60, 100), (50, 100 - depth), (40, 100), (0, 100)]
+    )
+    [feature] = narrow_features(notch, 3.0)
+    assert feature.kind == "notch"
+    assert feature.angle_deg == pytest.approx(50.0, abs=1e-6)
+    assert feature.point == pytest.approx((50.0, 100 - depth))
+
+
+def test_a_narrow_feature_over_the_ring_start_is_one_feature() -> None:
+    # A 2 m wide spike pointing west: its tip holds the ring's start vertex (lowest x,
+    # then lowest n), so the gaps across the spike have stretches over s = 0.
+    ring = Ring.from_coords(
+        [(0, 0), (100, 0), (100, 100), (0, 100), (0, 51), (-20, 51), (-20, 49), (0, 49)]
+    )
+    assert tuple(ring.xy[0]) == (-20.0, 49.0)
+    [feature] = narrow_features(ring, 3.0)
+    assert feature.kind == "spike"
+    assert feature.width_m == pytest.approx(2.0, abs=1e-6)
+    assert feature.s_start < ring.length < feature.s_end  # over the start
+    # The whole spike's sides are in the stretch.
+    assert feature.s_end - feature.s_start >= 2 * 20 + 2 - 1e-6
+
+
+def test_min_feature_width_0_turns_the_check_off() -> None:
+    assert narrow_features(Ring.from_coords(NOTCH_2), 0.0) == []
+
+
+def test_boundary_for_fails_on_a_narrow_notch_and_says_where(
+    tmp_repo: TmpRepo, fixture_data: dict[str, Any]
+) -> None:
+    from mapgen.build.area import build_area
+    from mapgen.build.world_edge import WorldEdgeError, boundary_for
+
+    notch = [(-500.0, -500.0), (500.0, -500.0), (500.0, 500.0), (1.0, 500.0), (1.0, 480.0)]
+    notch += [(-1.0, 480.0), (-1.0, 500.0), (-500.0, 500.0)]  # 2 m wide, 20 m deep
+    fixture_data["world_edge"] = {"boundary_wgs84": _latlon(notch)}
+    config = tmp_repo.load(fixture_data)
+    with pytest.raises(WorldEdgeError) as caught:
+        boundary_for(config, build_area(config, "full"))
+    message = str(caught.value)
+    assert "min_feature_width_m (3 m)" in message
+    match = re.search(
+        r"notch at x (-?[\d.]+), z (-?[\d.]+) \(Godot local\), lat ([\d.]+), lon ([\d.]+): "
+        r"([\d.]+) m wide, ring s ([\d.]+)\.\.([\d.]+)",
+        message,
+    )
+    assert match, message
+    x, z = float(match[1]), float(match[2])
+    assert -1 <= x <= 1 and -500 <= z <= -480  # Godot z is -north
+    assert float(match[5]) == pytest.approx(2.0, abs=1e-3)
+    from mapgen.geo import map_to_wgs84
+
+    lon, lat = map_to_wgs84(x + config.origin.x, -z + config.origin.y, config.crs)
+    assert (float(match[3]), float(match[4])) == pytest.approx((lat, lon), abs=1e-6)
+    # The test build uses the test-area square, which passes.
+    assert boundary_for(config, build_area(config, "test")).source == "test_area"
 
 
 # Spawn check and buildings

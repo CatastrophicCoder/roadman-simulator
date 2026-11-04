@@ -34,6 +34,7 @@ from mapgen.build.world_edge.model import (
     BOUNDARY_SCHEMA,
     BOUNDARY_SCHEMA_VERSION,
 )
+from mapgen.build.world_edge.narrow import NarrowFeature, narrow_features
 from mapgen.build.world_edge.ring import Ring
 from mapgen.build.world_edge.roadblocks import (
     EdgeNode,
@@ -47,7 +48,7 @@ from mapgen.build.world_edge.roadblocks import (
     widest,
 )
 from mapgen.build.world_edge.spawn import Obstacle, SpawnResult, spawn_check
-from mapgen.build.world_edge.void import Quad, void_quads
+from mapgen.build.world_edge.void import ARC_EXCESS_M, Quad, ring_distances, void_quads
 from mapgen.build.world_edge.water import (
     WaterCrossing,
     WaterFeature,
@@ -90,16 +91,59 @@ def boundary_for(config: MapConfig, area: BuildArea) -> Boundary:
     """The playable boundary: the test-area square in a test build (whatever
     `boundary_wgs84` says), the custom polygon (`world_edge.boundary_wgs84`, in local
     metres as `MapConfig.boundary_local` gives it) in a full build that has one, else the
-    build area rectangle."""
+    build area rectangle. Raises `WorldEdgeError` when the boundary, whatever its source,
+    has a spike or notch narrower than `world_edge.min_feature_width_m` (`narrow.py`)."""
     if area.name == "test":
-        return Boundary(Ring.rectangle(*area.bounds.as_list()), "test_area")
-    coords = config.boundary_local()
-    if coords is None:
-        return Boundary(Ring.rectangle(*area.bounds.as_list()), "area")
-    try:
-        return Boundary(Ring.from_coords(coords), "custom")
-    except ValueError as exc:
-        raise WorldEdgeError(f"world_edge.boundary_wgs84: {exc}") from exc
+        boundary = Boundary(Ring.rectangle(*area.bounds.as_list()), "test_area")
+    elif (coords := config.boundary_local()) is None:
+        boundary = Boundary(Ring.rectangle(*area.bounds.as_list()), "area")
+    else:
+        try:
+            boundary = Boundary(Ring.from_coords(coords), "custom")
+        except ValueError as exc:
+            raise WorldEdgeError(f"world_edge.boundary_wgs84: {exc}") from exc
+    width = config.world_edge.min_feature_width_m
+    features = narrow_features(boundary.ring, width)
+    if features:
+        raise WorldEdgeError(narrow_message(config, boundary, features, width))
+    return boundary
+
+
+def narrow_message(
+    config: MapConfig, boundary: Boundary, features: Sequence[NarrowFeature], width: float
+) -> str:
+    """The build error for narrow spikes and notches: where each one is (Godot local x/z,
+    WGS84), how narrow, and its stretch of the ring."""
+    lines = [
+        f"the boundary ({boundary.source}) has {len(features)} spike(s) or notch(es) "
+        f"narrower than world_edge.min_feature_width_m ({width:g} m); widen or straighten "
+        "the boundary there (rule: tools/mapgen/src/mapgen/build/world_edge/narrow.py):"
+    ]
+    listed = config.boundary_local() if boundary.source == "custom" else None
+    for f in features:
+        x, n = f.point
+        lon, lat = map_to_wgs84(x + config.origin.x, n + config.origin.y, config.crs)
+        if f.angle_deg is not None:
+            what = f"a {f.angle_deg:.1f}° corner (width 0 at its tip)"
+        else:
+            what = f"{f.width_m:.3f} m wide"
+        line = (
+            f"  {f.kind} at x {x:.2f}, z {-n:.2f} (Godot local), lat {lat:.7f}, lon "
+            f"{lon:.7f}: {what}, ring s {f.s_start:.2f}..{f.s_end:.2f} "
+            f"(of {boundary.ring.length:.2f})"
+        )
+        if listed:
+            ends = [_nearest_entry(listed, f.a), _nearest_entry(listed, f.b)]
+            line += ", nearest boundary_wgs84 entries (0-based) " + (
+                str(ends[0]) if ends[0] == ends[1] else f"{ends[0]} and {ends[1]}"
+            )
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _nearest_entry(points: Sequence[tuple[float, float]], at: tuple[float, float]) -> int:
+    """The index of the `boundary_wgs84` entry (in local metres) nearest to `at`."""
+    return min(range(len(points)), key=lambda k: math.dist(points[k], at))
 
 
 @dataclass
@@ -466,7 +510,7 @@ def build_world_edge(
         spawn_result,
         dropped_buildings,
         (low, high, cliff_bottom, void_bottom, void_top),
-        len(quads),
+        quads,
         area,
     )
     folder = work_dir / STAGE_DIR
@@ -490,7 +534,7 @@ def _report(
     spawn: SpawnResult,
     dropped: Sequence[dict[str, Any]],
     heights: tuple[float, float, float, float, float],
-    prisms: int,
+    quads: Sequence[Quad],
     area: BuildArea,
 ) -> dict[str, Any]:
     low, high, cliff_bottom, void_bottom, void_top = heights
@@ -524,7 +568,7 @@ def _report(
             "fences_water": fence_types.get("water", 0),
             "water_crossings": len(water["crossings"]),
             "water_lines": len(water["lines"]),
-            "void_prisms": prisms,
+            "void_prisms": len(quads),
             "touched_without_crossing": len(touched),
             "dropped_buildings": len(dropped),
         },
@@ -553,6 +597,13 @@ def _report(
             "cliff_bottom_y": round(cliff_bottom, 3),
             "void_bottom_y": round(void_bottom, 3),
             "void_top_y": round(void_top, 3),
+        },
+        "void": {
+            "prisms": len(quads),
+            "min_ring_distance_m": (
+                round(float(ring_distances(ring, quads).min()), 6) if quads else None
+            ),
+            "arc_excess_m": ARC_EXCESS_M,
         },
         "spawn": spawn.report(),
     }

@@ -50,19 +50,24 @@ stage output in the work folder, so they test what the game will load.
   `mml:` footprint overlaps an `osm:` footprint by `OVERLAP_M2` or more (footprints from
   `03-buildings/buildings.geojson`).
 - World edge (docs/specs/world-edge-pipeline.md, `check_world_edge`): `boundary.json`
-  matches its committed schema, map id and area; every `area_edge` node is in exactly one
-  roadblock with the role of its edge; roadblocks are at least the merge distance apart;
-  roadblocks and fences close the ring (ends within 1 mm, lengths add up within 1 mm); no
-  fence touches a road graph edge (1 mm); no fence runs over the ring stretch of a road,
-  path or deck surface (`04-roads/roads.geojson`) by more than 1 mm, except the stretches
-  listed as touched without a crossing; fences over water (more than 1 mm) are water
-  fences and water fences lie in water; fence ends are at `Heightfield.sample` (1 mm),
-  no longer than `fence.max_segment_m` and land fences within the terrain deviation; no
-  building in `buildings.json` has any part of its footprint (`03-buildings`) outside the
-  `boundary.json` ring or within `building_clearance_m` of it (any boundary source);
-  10,000 sampled points of the void band lie in a prism and no prism reaches over the
-  playable area; the spawn area is inside the test area and its open ground passes the
-  spawn check.
+  matches its committed schema, map id and area; its ring has no spike or notch narrower
+  than `min_feature_width_m` (`world_edge/narrow.py`); every `area_edge` node is in
+  exactly one roadblock with the role of its edge; roadblocks are at least the merge
+  distance apart; roadblocks and fences close the ring (ends within 1 mm, lengths add up
+  within 1 mm); no fence touches a road graph edge (1 mm); no fence runs over the ring
+  stretch of a road, path or deck surface (`04-roads/roads.geojson`) by more than 1 mm,
+  except the stretches listed as touched without a crossing; fences over water (more
+  than 1 mm) are water fences and water fences lie in water; fence ends are at
+  `Heightfield.sample` (1 mm), no longer than `fence.max_segment_m` and land fences
+  within the terrain deviation; no building in `buildings.json` has any part of its
+  footprint (`03-buildings`) outside the `boundary.json` ring or within
+  `building_clearance_m` of it (any boundary source); every void prism footprint is at
+  least `void.inner_offset_m` - 1 mm from the ring (exact polygon distance to the whole
+  ring); 10,000 sampled points of the void band (`void.in_band`: outside the ring, less
+  than `inner_offset_m + width_m` from the whole ring and more than `inner_offset_m`
+  from it, or more than `inner_offset_m + ARC_EXCESS_M` near ring vertices) lie in a
+  prism and no prism reaches over the playable area; the spawn area is inside the test
+  area and its open ground passes the spawn check.
 - Cliff (`check_cliff`, criterion 14): the tiles the boundary passes through are
   found from geometry (`boundary_tiles`: a written tile whose bounds meet the ring in a
   straight stretch over 1 mm whose midpoint, moved 1 mm into the playable area, lies in
@@ -1508,6 +1513,7 @@ def check_world_edge(
     """The world edge checks on a staged pack; returns the number of roadblocks."""
     from mapgen.build.world_edge.fences import max_deviation
     from mapgen.build.world_edge.model import BOUNDARY_NAME, BOUNDARY_SCHEMA, BoundaryError
+    from mapgen.build.world_edge.narrow import narrow_features
     from mapgen.build.world_edge.ring import Ring, interval_gap
     from mapgen.build.world_edge.spawn import clear_radius, crossing_buildings
     from mapgen.build.world_edge.void import (
@@ -1515,6 +1521,7 @@ def check_world_edge(
         footprint_problems,
         point_in_quads,
         quads_overlapping,
+        ring_distances,
     )
 
     path = pack_dir / BOUNDARY_NAME
@@ -1540,6 +1547,18 @@ def check_world_edge(
     )
     _require(abs(ring.length - document["boundary"]["length_m"]) <= MM, "boundary length_m is off")
     polygon = ring.polygon()
+    # The ring the game loads has no spike or notch under min_feature_width_m.
+    narrow = narrow_features(ring, cfg.min_feature_width_m)
+    _require(
+        not narrow,
+        f"the boundary ring has {len(narrow)} spike(s) or notch(es) narrower than "
+        f"world_edge.min_feature_width_m ({cfg.min_feature_width_m:g} m), first: "
+        + (
+            f"{narrow[0].kind} at x {narrow[0].point[0]:.2f}, z {-narrow[0].point[1]:.2f}"
+            if narrow
+            else ""
+        ),
+    )
 
     # Roadblocks and roles (criteria 4-6).
     graph = _json(pack_dir / "road_graph.json")
@@ -1698,6 +1717,22 @@ def check_world_edge(
     _require(
         not bad_footprints,
         f"{len(bad_footprints)} void footprints aren't convex quads: {bad_footprints[:3]}",
+    )
+    # No footprint point closer to the ring than inner_offset_m (exact polygon distance,
+    # 1 mm for rounding): barrier pieces reach 1.0 m outward, the trigger starts beyond.
+    distances = ring_distances(ring, quads)
+    close = np.flatnonzero(distances < cfg.void.inner_offset_m - MM)
+    _require(
+        len(close) == 0,
+        f"{len(close)} void prisms come closer to the ring than void.inner_offset_m "
+        f"({cfg.void.inner_offset_m:g} m), e.g. "
+        + ", ".join(
+            f"prism {k} at {distances[k]:.3f} m near x {quads[k][0][0]:.2f}, "
+            f"z {-quads[k][0][1]:.2f}"
+            for k in close[:5].tolist()
+        )
+        if len(close)
+        else "",
     )
     samples = band_samples(ring, cfg.void.inner_offset_m, cfg.void.width_m, BAND_SAMPLES)
     inside = point_in_quads(quads, samples)
