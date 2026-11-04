@@ -209,7 +209,7 @@ TODO: the pack formats of markers (parking spots, gameplay points of interest) a
 
 ### MapLoader (Godot)
 
-A node in the `World` scene. It reads the map id from settings or a menu, checks the manifest's schema version, and instances tiles. It loads all tiles at first and adds streaming near the camera later. It also places barrier scenes from `boundary.json`.
+A node in the `World` scene. It reads the map id from settings or a menu, checks the manifest's schema version, and instances tiles. It loads all tiles at first and adds streaming near the camera later. It also places the world edge from `boundary.json`: the barriers and the void trigger under `MapLoader/Edge` (ADR 0017).
 
 After the tiles it reads `road_graph.json` into `MapLoader.RoadGraph`, then `buildings.json` and `pois.json` into `MapLoader.Places` (a `PlaceIndex`), then `boundary.json` into `MapLoader.Boundary`. Each is null, with an error naming the pack path and `/regen-map`, when its file is missing or invalid; the tiles still load. Road, path and bridge collision bodies are in the group `map_roads`, terrain bodies in `map_terrain`, building collision bodies in `map_buildings`. Each building body is named after its glTF collision node, so `MapLoader.BuildingOf(body)` resolves it through `PlaceIndex.TryGetBuildingByNode`.
 
@@ -244,10 +244,13 @@ Projects (all `net10.0`, ADR 0007):
 - `SpawnPicker` draws points uniformly by area over the open-ground polygons (holes excluded) from an injected `Random`, so a seed gives the same sequence.
 - `PlayerState.Position` is the player's last committed position (Godot local metres). `PositionChanged` fires only when it changes; death leaves it as it is.
 - `OnFootMotion` holds the on-foot movement maths: camera-relative target velocity, acceleration and deceleration limits, air control, turning, and `JumpVelocity`.
-- `FallReset.IsBelow` is the temporary fall rule (more than a depth below the slab's bottom).
+- `Edge/EdgeGeometry` (ADR 0017): whether a point is in a void prism (a grid index over the prisms), the nearest ring point and its `s`, the outward direction at a point (out of the ring for points inside it too; ties to the lower `s`), the ledge height at an `s`, and the safety-net test (`y < cliff.bottom_y − margin`).
+- `Edge/BarrierLayout` turns the roadblocks and fences into piece and collision boxes (`BarrierParameters` from the barrier nodes' exports): at most 0.9 m above the base, at most 1.0 m outward, collision covering the ring with no gap over 0.1 m, shared posts at fence joints, roadblock stands on a ground height the engine supplies.
+- `Edge/VoidPull` is the acceleration that replaces gravity in a void fall (outward plus down).
+- `Edge/DeathSequence` is the death and respawn state machine (`Alive`, `Falling`, `DeathScreen`, `Respawning`, `Failed`): `EnterVoid` records the losses and calls `PlayerState.Die()`, `Advance(dt)` runs the timed states, `CompleteRespawn` and `Reset`. `DeathScreenText.Format` gives the death screen's three lines.
 - `RunToggle` is the gamepad run toggle: a press flips it, and while it is on, the move input going from outside its deadzone to inside turns it off.
 
-TODO: routing (with the traffic AI spec), mission state, and the respawn state machine.
+TODO: routing (with the traffic AI spec) and mission state.
 
 ### Gameplay (Godot C#)
 
@@ -258,11 +261,10 @@ TODO: routing (with the traffic AI spec), mission state, and the respawn state m
 - Player camera (`scripts/player/PlayerCamera.cs`): a pivot that follows the player, a spring arm on the map's collision layer so the camera never clips into walls, mouse and right-stick orbit with clamped pitch, no automatic swing-back.
 - Input map: `move_*` (WASD, left stick), `run` (Shift, held), `run_toggle` (left-stick click, off again when the stick returns inside its deadzone), `jump` (Space, south face button), `camera_*` (right stick), `debug_camera` (the physical key left of 1: `Quoteleft` and `Section`), and the `debug_*` actions. Gamepad events listen to any device. Only the current camera's owner reads input.
 - Debug camera toggle (debug builds only): `debug_camera` switches between the player camera and the debug camera, which starts at the player camera's transform. While it is current the player gets no input and the player camera doesn't orbit; switching back restores the player camera and its mouse capture. Without a player it does nothing.
-- Temporary fall respawn: a player more than `FallRespawnDepth` below `cliff.bottom_y` respawns in the spawn area, with no death. The world-edge death spec replaces it.
 - HUD street label (ADR 0013): the street of the nearest road graph edge within 40 m of the player, or of the ground below the camera until there is a player, in every build. Never business names.
 - Place inspector (debug builds only): a crosshair and a panel with the pack's data for the building or point of interest under the screen centre, including raw names and the override sources. Its text comes from `Roadman.Core`'s `PlaceText`.
 - Vehicle (`VehicleBody3D`), chase camera, HUD with minimap, input map.
-- World edge: barrier scenes, the void `Area3D` and its death sequence, space backdrop.
+- World edge (ADR 0017, `docs/specs/world-edge-game.md`): `Roadblock`, `LandFence` and `WaterFence` items (`scripts/world/edge/`), each a `StaticBody3D` on `CollisionLayers.Barrier` (layer 3, in the player's mask, not the camera's), with the visuals batched per piece mesh and type in `MultiMeshInstance3D`s; only vehicles break them (bodies implementing `IBarrierBreaker`; the vehicles spec adds real ones), and they are restored on respawn and reload. The void trigger `Area3D` (one convex shape per prism) and a safety net below the slab send the player into the death sequence (input off, collision mask cleared, `VoidPull` instead of gravity, the `DeathCamera` pull-back, the timed `DeathScreen`, a respawn from the spawn area); `IVoidFaller` bodies handle their own fall and other rigid bodies fall and are freed. A procedural sky shader draws a starfield below the horizon.
 - Missions refer to marker ids in the pack, never to raw coordinates.
 
 TODO: traffic AI, pedestrian AI, police, missions. Each of these gets a spec in `docs/specs/` before implementation.

@@ -48,6 +48,12 @@ public partial class StreetLabelHud : CanvasLayer
     [Export]
     public int HudLayer { get; set; } = 10;
 
+    /// <summary>
+    /// While true the label shows nothing (no reference point), whatever <see cref="Target"/> and the camera are: the
+    /// death sequence sets it from the death screen until the respawn.
+    /// </summary>
+    public bool Suppressed { get; set; }
+
     /// <summary>The map loader whose road graph is used; set before adding the node.</summary>
     public MapLoader? Loader { get; set; }
 
@@ -92,8 +98,11 @@ public partial class StreetLabelHud : CanvasLayer
 
     public override void _PhysicsProcess(double delta) => UpdateStreet();
 
-    /// <summary>Finds the reference point and updates the label from it; returns the label text.</summary>
-    public string UpdateStreet() => UpdateStreetAt(ReferencePoint());
+    /// <summary>
+    /// Finds the reference point and updates the label from it (none while <see cref="Suppressed"/>); returns the label
+    /// text.
+    /// </summary>
+    public string UpdateStreet() => UpdateStreetAt(Suppressed ? null : ReferencePoint());
 
     /// <summary>
     /// Updates the label for <paramref name="reference"/> (null: no reference point, so the label is empty); returns

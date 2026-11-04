@@ -1,11 +1,17 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Godot;
+using Roadman.Autoload;
+using Roadman.Core;
+using Roadman.Core.Edge;
 using Roadman.Core.Maps;
 using Roadman.Core.Player;
 using Roadman.Core.Tools;
 using Roadman.Debug;
 using Roadman.Hud;
 using Roadman.OnFoot;
+using Roadman.Scenes.Edge;
 
 namespace Roadman.Scenes;
 
@@ -27,7 +33,16 @@ namespace Roadman.Scenes;
 /// In debug builds <c>debug_camera</c> (the physical key left of 1) switches between the player camera and the debug
 /// camera (<see cref="ToggleDebugCamera"/>). The debug camera starts at the player camera's transform; while it is
 /// current the player gets no input and the player camera doesn't orbit. Switching back restores the player camera and
-/// the mouse capture it had. Without a player the toggle does nothing.
+/// the mouse capture it had. Without a player, or outside <see cref="DeathState.Alive"/>, the toggle does nothing.
+/// </para>
+/// <para>
+/// The world edge (<c>docs/specs/world-edge-game.md</c>): the player entering the <see cref="VoidTrigger"/>, or falling
+/// below the safety net (<see cref="SafetyNetMargin"/> under <c>cliff.bottom_y</c>), starts the death sequence
+/// (<see cref="Death"/>): it falls out under <see cref="VoidPull"/> with no collision while the <see cref="DeathCamera"/>
+/// pulls back, the <see cref="DeathScreen"/> follows, and it respawns in the spawn area. Other bodies:
+/// <see cref="IVoidFaller"/>s get <see cref="IVoidFaller.EnterVoid"/> once, other <see cref="RigidBody3D"/>s fall under
+/// the pull (<see cref="VoidFall"/>) or, below the safety net, are freed. The safety net checks the player and the bodies
+/// given to <see cref="TrackVoidBody"/>.
 /// </para>
 /// </summary>
 public partial class World : Node3D
@@ -39,11 +54,28 @@ public partial class World : Node3D
     [Signal]
     public delegate void PlayerSpawnedEventHandler(Vector3 position);
 
-    /// <summary>The temporary fall respawn put the player back at <paramref name="position"/>.</summary>
+    /// <summary>The player respawned at <paramref name="position"/> (its feet) after a death in the void.</summary>
     [Signal]
     public delegate void PlayerRespawnedEventHandler(Vector3 position);
 
     private const int MaxSpawnShapeHits = 32;
+
+    /// <summary>The sky shader: the day sky above the horizon, a starfield below it.</summary>
+    public const string SkyShaderPath = "res://materials/sky/space_sky.gdshader";
+
+    /// <summary>The project setting with the default gravity, m/s².</summary>
+    public const string GravitySetting = "physics/3d/default_gravity";
+
+    /// <summary>Gravity before <see cref="_Ready"/> reads <see cref="GravitySetting"/>, m/s².</summary>
+    private const float DefaultGravity = 9.8f;
+
+    // Starting values of the world-edge exports (docs/specs/world-edge-game.md, "Exports"), also their first "last
+    // valid value" for ApplyEdgeExports.
+    private const float DefaultFallTime = 3f;
+    private const float DefaultScreenTime = 3f;
+    private const float DefaultMaxFallTime = 10f;
+    private const float DefaultSafetyNetMargin = 20f;
+    private const float DefaultVoidOutwardAcceleration = 4f;
 
     /// <summary>Toggles between the player camera and the debug camera (debug builds only).</summary>
     public const string DebugCameraAction = "debug_camera";
@@ -53,6 +85,18 @@ public partial class World : Node3D
     private bool _screenshotRun;
     private bool _mapSignalsHooked;
     private bool _playerCameraHadMouse;
+    private readonly Dictionary<Node3D, Action> _trackedBodies = [];
+    private readonly HashSet<ulong> _voidFallers = [];
+    private float? _voidDownAcceleration;
+    private EdgeExportValues _validEdgeExports = new()
+    {
+        FallTime = DefaultFallTime,
+        ScreenTime = DefaultScreenTime,
+        MaxFallTime = DefaultMaxFallTime,
+        SafetyNetMargin = DefaultSafetyNetMargin,
+        VoidOutwardAcceleration = DefaultVoidOutwardAcceleration,
+    };
+    private float _projectGravity = DefaultGravity;
 
     [Export]
     public Vector3 SunRotationDegrees { get; set; } = new(-50f, -30f, 0f);
@@ -84,11 +128,38 @@ public partial class World : Node3D
     public int SpawnMaxAttempts { get; set; } = 50;
 
     /// <summary>
-    /// Temporary fall respawn: the player respawns when more than this many metres below the slab's bottom
-    /// (<c>cliff.bottom_y</c>).
+    /// The safety net's depth below the slab's bottom (<c>cliff.bottom_y</c>), m: a player or tracked body below it
+    /// that isn't falling yet is handled as if it entered the void.
     /// </summary>
-    [Export]
-    public float FallRespawnDepth { get; set; } = 20f;
+    [Export(PropertyHint.Range, "0,200,0.1,or_greater,suffix:m")]
+    public float SafetyNetMargin { get; set; } = DefaultSafetyNetMargin;
+
+    /// <summary>Seconds the player falls before the death screen.</summary>
+    [Export(PropertyHint.Range, "0,30,0.05,or_greater,suffix:s")]
+    public float FallTime { get; set; } = DefaultFallTime;
+
+    /// <summary>Seconds the death screen shows before the respawn.</summary>
+    [Export(PropertyHint.Range, "0,30,0.05,or_greater,suffix:s")]
+    public float ScreenTime { get; set; } = DefaultScreenTime;
+
+    /// <summary>Seconds after which a falling rigid body (not the player) is freed whatever its height.</summary>
+    [Export(PropertyHint.Range, "0,120,0.1,or_greater,suffix:s")]
+    public float MaxFallTime { get; set; } = DefaultMaxFallTime;
+
+    /// <summary>The void pull's outward acceleration, m/s².</summary>
+    [Export(PropertyHint.Range, "0,50,0.1,or_greater,suffix:m/s²")]
+    public float VoidOutwardAcceleration { get; set; } = DefaultVoidOutwardAcceleration;
+
+    /// <summary>
+    /// The void pull's downward acceleration, m/s². Until it is set, the project's default gravity
+    /// (<c>physics/3d/default_gravity</c>, read in <see cref="_Ready"/>), as the player falls under.
+    /// </summary>
+    [Export(PropertyHint.Range, "0,100,0.01,or_greater,suffix:m/s²")]
+    public float VoidDownAcceleration
+    {
+        get => _voidDownAcceleration ?? _projectGravity;
+        set => _voidDownAcceleration = value;
+    }
 
     /// <summary>Physics frames to wait for the terrain collision before the spawn gives up.</summary>
     [Export]
@@ -141,10 +212,36 @@ public partial class World : Node3D
     /// <summary>The place inspector (I); null outside debug builds.</summary>
     public PlaceInspector? Inspector { get; private set; }
 
+    /// <summary>The death and respawn state machine, over <c>GameState</c>'s <see cref="PlayerState"/>.</summary>
+    public DeathSequence Death { get; private set; } = null!;
+
+    /// <summary>The pull that replaces gravity in the void; its values come from the exports each physics frame.</summary>
+    public VoidPull VoidPull { get; } = new();
+
+    /// <summary>The death sequence's camera; in every build, current only during a death.</summary>
+    public DeathCamera DeathCamera { get; private set; } = null!;
+
+    /// <summary>The death screen; in every build, hidden outside a death.</summary>
+    public DeathScreen DeathScreen { get; private set; } = null!;
+
+    /// <summary>The falls of plain rigid bodies into the void.</summary>
+    public VoidFall VoidFall { get; private set; } = null!;
+
+    /// <summary>The bodies besides the player that the safety net checks (<see cref="TrackVoidBody"/>).</summary>
+    public IReadOnlyCollection<Node3D> TrackedVoidBodies => _trackedBodies.Keys;
+
     public override void _Ready()
     {
+        _projectGravity = ProjectSettings.GetSetting(GravitySetting, DefaultGravity).AsSingle();
         AddChild(CreateEnvironment());
         AddChild(CreateSun());
+
+        Death = new DeathSequence(GameState.Instance?.Player ?? new PlayerState());
+        Death.StateChanged += OnDeathStateChanged;
+        DeathCamera = new DeathCamera { Name = "DeathCamera" };
+        AddChild(DeathCamera);
+        VoidFall = new VoidFall { Name = "VoidFall" };
+        AddChild(VoidFall);
 
         MapLoader = new MapLoader { Name = "MapLoader" };
         AddChild(MapLoader);
@@ -152,6 +249,8 @@ public partial class World : Node3D
 
         Hud = new StreetLabelHud { Name = "StreetLabelHud", Loader = MapLoader };
         AddChild(Hud);
+        DeathScreen = new DeathScreen { Name = "DeathScreen" };
+        AddChild(DeathScreen);
 
         if (DebugBuild.IsDebug)
         {
@@ -228,15 +327,22 @@ public partial class World : Node3D
 
     public override void _PhysicsProcess(double delta)
     {
-        // TEMPORARY fall respawn (docs/specs/player-on-foot.md, "Temporary fall respawn"): the world-edge death spec
-        // replaces this with the void trigger and the death sequence; remove it then.
-        if (Player is not null
-            && IsInstanceValid(Player)
-            && MapLoader.Boundary is { } boundary
-            && FallReset.IsBelow(Player.GlobalPosition.Y, boundary.Cliff.BottomY, FallRespawnDepth))
+        ApplyEdgeExports();
+        if (Death.State is DeathState.Falling or DeathState.DeathScreen)
         {
-            RespawnPlayer();
+            Death.Advance(delta);
         }
+
+        // The respawn runs here, after Advance has returned, not in the StateChanged handler: completing it there would
+        // raise Respawning->Alive while DeathScreen->Respawning is still being announced, so handlers subscribed after
+        // World's would hear the two in the wrong order.
+        if (Death.State == DeathState.Respawning)
+        {
+            RespawnAfterDeath();
+        }
+
+        CheckPlayerInVoid();
+        CheckSafetyNet();
     }
 
     public override void _UnhandledInput(InputEvent @event)
@@ -253,10 +359,14 @@ public partial class World : Node3D
     /// reading input; whether the player camera held the mouse is remembered. Back: their input is on again and the
     /// player camera becomes current, capturing the mouse only if it held it before.
     /// </summary>
-    /// <returns>False when it did nothing: not a debug build, no debug camera, no player, or a screenshot run.</returns>
+    /// <returns>
+    /// False when it did nothing: not a debug build, no debug camera, no player, a screenshot run, or the death sequence
+    /// running (<see cref="Death"/> not <see cref="DeathState.Alive"/>).
+    /// </returns>
     public bool ToggleDebugCamera()
     {
         if (!DebugBuild.IsDebug
+            || Death.State != DeathState.Alive
             || _screenshotRun
             || Camera is null || !IsInstanceValid(Camera)
             || Player is null || !IsInstanceValid(Player)
@@ -444,35 +554,413 @@ public partial class World : Node3D
     }
 
     /// <summary>
-    /// The temporary fall respawn: runs the draw procedure again for the existing player and puts it there with zero
-    /// velocity, emitting <see cref="SignalName.PlayerRespawned"/>. No death: money and gear stay. On failure pushes
-    /// the spawn error and frees the player.
+    /// Adds <paramref name="body"/> to the bodies the safety net checks each physics frame besides the player (loose
+    /// barrier pieces, later vehicles and characters). Tracking an already tracked body does nothing.
+    /// <para>
+    /// It is dropped (<see cref="UntrackVoidBody"/>, which also disconnects its <see cref="Node.TreeExiting"/> handler)
+    /// when it leaves the tree for any reason: freed, or only removed, for example to be reparented. A body that comes
+    /// back into the tree isn't tracked again by itself; track it after it is added (Part B's loose pieces: once they
+    /// are under <c>Barriers/LoosePieces</c>). Every body is also dropped on a map load or failed load.
+    /// </para>
     /// </summary>
-    /// <returns>True when the player was put back; false without a player or when every draw failed.</returns>
-    public bool RespawnPlayer()
+    public void TrackVoidBody(Node3D body)
     {
-        if (Player is null || !IsInstanceValid(Player))
+        if (!IsInstanceValid(body) || _trackedBodies.ContainsKey(body))
+        {
+            return;
+        }
+
+        void OnTreeExiting() => UntrackVoidBody(body);
+        _trackedBodies[body] = OnTreeExiting;
+        body.TreeExiting += OnTreeExiting;
+    }
+
+    /// <summary>
+    /// Removes <paramref name="body"/> from the safety net's bodies and disconnects its <see cref="Node.TreeExiting"/>
+    /// handler. Does nothing for a body that isn't tracked.
+    /// </summary>
+    public void UntrackVoidBody(Node3D body)
+    {
+        if (!_trackedBodies.Remove(body, out var handler))
+        {
+            return;
+        }
+
+        if (IsInstanceValid(body))
+        {
+            body.TreeExiting -= handler;
+        }
+    }
+
+    /// <summary>Drops every tracked body, disconnecting their handlers.</summary>
+    private void UntrackAllVoidBodies()
+    {
+        foreach (var body in _trackedBodies.Keys.ToList())
+        {
+            UntrackVoidBody(body);
+        }
+    }
+
+    /// <summary>
+    /// Handles <paramref name="body"/> entering the void (from the <see cref="VoidTrigger"/> or the safety net) with the
+    /// unit horizontal <paramref name="outward"/>: the player starts the death sequence (only in
+    /// <see cref="DeathState.Alive"/>), an <see cref="IVoidFaller"/> gets <see cref="IVoidFaller.EnterVoid"/> once, and
+    /// any other <see cref="RigidBody3D"/> falls under the pull (<see cref="VoidFall"/>) or, when
+    /// <paramref name="freeRigidBodies"/> (the safety net), is freed. Other bodies and bodies already falling are
+    /// ignored.
+    /// </summary>
+    /// <returns>True when it did something.</returns>
+    public bool HandleVoidEntry(Node3D body, Vector3 outward, bool freeRigidBodies = false)
+    {
+        if (!IsInstanceValid(body) || body.IsQueuedForDeletion())
         {
             return false;
         }
 
-        if (!DrawSpawn(out var position, out var facing))
+        if (body == Player)
         {
-            FailSpawn("no player respawn", LastSpawnFailure);
+            return StartDeath(outward);
+        }
+
+        if (body is IVoidFaller faller)
+        {
+            if (!_voidFallers.Add(body.GetInstanceId()))
+            {
+                return false;
+            }
+
+            faller.EnterVoid(outward);
+            return true;
+        }
+
+        if (body is RigidBody3D rigid && !VoidFall.IsFalling(rigid))
+        {
+            if (freeRigidBodies)
+            {
+                UntrackVoidBody(rigid);
+                rigid.QueueFree();
+                return true;
+            }
+
+            return VoidFall.Track(rigid, outward);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Step 1 of the death sequence (<c>docs/specs/world-edge-game.md</c>, "Death sequence"): records the losses and
+    /// calls <c>Die()</c> (<see cref="DeathSequence.EnterVoid"/>), turns the player's and its camera's input off, clears
+    /// the player's collision mask, replaces its gravity with <see cref="VoidPull"/> along <paramref name="outward"/>,
+    /// and starts the <see cref="DeathCamera"/> from the player camera. Does nothing without a player or outside
+    /// <see cref="DeathState.Alive"/>.
+    /// </summary>
+    /// <returns>True when the sequence started.</returns>
+    public bool StartDeath(Vector3 outward)
+    {
+        if (Player is null || !IsInstanceValid(Player) || PlayerCamera is null || !IsInstanceValid(PlayerCamera)
+            || Death.State != DeathState.Alive)
+        {
+            return false;
+        }
+
+        outward.Y = 0f;
+        outward = outward.LengthSquared() > 0f ? outward.Normalized() : Vector3.Right;
+        var position = Player.GlobalPosition;
+        ApplyEdgeExports();
+        if (!Death.EnterVoid(new VoidEntry(
+            new LocalPoint(position.X, position.Y, position.Z), new PlanarPoint(outward.X, outward.Z))))
+        {
+            return false;
+        }
+
+        Player.InputEnabled = false;
+        PlayerCamera.InputEnabled = false;
+        Player.CollisionMask = 0;
+        var pull = VoidPull.Acceleration(new LocalPoint(outward.X, 0, outward.Z));
+        Player.GravityOverride = new Vector3((float)pull.X, (float)pull.Y, (float)pull.Z);
+
+        var (target, lookAt) = DeathCameraTarget(position, outward);
+        DeathCamera.Begin(PlayerCamera.Camera.GlobalTransform, PlayerCamera.Camera.Fov, target, lookAt);
+        DebugCameraActive = false;
+        GD.Print(FormattableString.Invariant(
+            $"Player: entered the void at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}), outward ({outward.X:0.###}, {outward.Z:0.###})"));
+        return true;
+    }
+
+    /// <summary>
+    /// The death camera's end point and look-at for an entry at <paramref name="position"/>: the nearest ring point at
+    /// the ledge's height (<see cref="EdgeGeometry.LedgeHeightAt"/>), + <paramref name="outward"/> ×
+    /// <see cref="DeathCamera.PullBackDistance"/> + up × <see cref="DeathCamera.PullBackHeight"/>; looking at the ring
+    /// point <see cref="DeathCamera.LookAtDrop"/> below the ledge. Without edge geometry (or items) the entry's own
+    /// position stands in for the ring point.
+    /// </summary>
+    public (Vector3 Target, Vector3 LookAt) DeathCameraTarget(Vector3 position, Vector3 outward)
+    {
+        var ring = position;
+        if (MapLoader.EdgeGeometry is { } geometry)
+        {
+            var nearest = geometry.NearestRingPoint(position.X, position.Z);
+            var ledge = (double)position.Y;
+            if (geometry.Boundary.Roadblocks.Count + geometry.Boundary.Fences.Count > 0)
+            {
+                ledge = geometry.LedgeHeightAt(nearest.S);
+            }
+
+            ring = new Vector3((float)nearest.Point.X, (float)ledge, (float)nearest.Point.Z);
+        }
+
+        var target = ring + (outward * DeathCamera.PullBackDistance) + (Vector3.Up * DeathCamera.PullBackHeight);
+        var lookAt = ring + (Vector3.Down * DeathCamera.LookAtDrop);
+        return (target, lookAt);
+    }
+
+    private void OnBodyEnteredVoid(Node3D body, Vector3 outward) => HandleVoidEntry(body, outward);
+
+    /// <summary>
+    /// The safety net: the player and every tracked body below <see cref="SafetyNetMargin"/> under the slab that isn't
+    /// falling yet are handled as void entries (rigid bodies freed).
+    /// </summary>
+    private void CheckSafetyNet()
+    {
+        if (MapLoader?.EdgeGeometry is not { } geometry)
+        {
+            return;
+        }
+
+        if (Player is not null && IsInstanceValid(Player) && Death.State == DeathState.Alive
+            && geometry.IsBelowSafetyNet(Player.GlobalPosition.Y, SafetyNetMargin))
+        {
+            var position = Player.GlobalPosition;
+            StartDeath(OutwardAt(geometry, position));
+        }
+
+        if (_trackedBodies.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var body in _trackedBodies.Keys.ToList())
+        {
+            if (!IsInstanceValid(body) || body.IsQueuedForDeletion())
+            {
+                UntrackVoidBody(body);
+                continue;
+            }
+
+            if (body == Player || !body.IsInsideTree() || !geometry.IsBelowSafetyNet(body.GlobalPosition.Y, SafetyNetMargin))
+            {
+                continue;
+            }
+
+            HandleVoidEntry(body, OutwardAt(geometry, body.GlobalPosition), freeRigidBodies: true);
+        }
+    }
+
+    /// <summary>
+    /// The player's own void test, each physics frame: the <see cref="VoidTrigger"/> reports a
+    /// <see cref="CharacterBody3D"/> only a frame after it overlaps a prism (Jolt), so the outermost points of its
+    /// capsule (at the centres of its two end spheres, moved one radius outward) are also tested against
+    /// <see cref="EdgeGeometry.IsInVoid"/>. The first of the two to see the entry starts the death sequence.
+    /// </summary>
+    private void CheckPlayerInVoid()
+    {
+        if (MapLoader?.EdgeGeometry is not { } geometry
+            || Player is null || !IsInstanceValid(Player) || !Player.IsInsideTree()
+            || Death.State != DeathState.Alive)
+        {
+            return;
+        }
+
+        var feet = Player.GlobalPosition;
+        var outward = OutwardAt(geometry, feet);
+        var radius = Player.CapsuleRadius;
+        var reach = outward * radius;
+        foreach (var height in new[] { radius, Mathf.Max(radius, Player.CapsuleHeight - radius) })
+        {
+            var point = feet + reach + (Vector3.Up * height);
+            if (geometry.IsInVoid(new LocalPoint(point.X, point.Y, point.Z)))
+            {
+                HandleVoidEntry(Player, outward);
+                return;
+            }
+        }
+    }
+
+    private static Vector3 OutwardAt(EdgeGeometry geometry, Vector3 position)
+    {
+        var outward = geometry.OutwardAt(position.X, position.Z);
+        return new Vector3((float)outward.X, 0f, (float)outward.Z);
+    }
+
+    /// <summary>
+    /// Shows the death screen on <see cref="DeathState.DeathScreen"/>. <see cref="DeathState.Respawning"/> is handled in
+    /// <see cref="_PhysicsProcess"/> once <see cref="DeathSequence.Advance"/> has returned, so every subscriber hears
+    /// the transitions in order.
+    /// </summary>
+    private void OnDeathStateChanged(DeathState from, DeathState to)
+    {
+        if (to == DeathState.DeathScreen)
+        {
+            ShowDeathScreen();
+        }
+    }
+
+    /// <summary>Step 2: the death screen fades in; the player is hidden and stopped; the street label shows nothing.</summary>
+    private void ShowDeathScreen()
+    {
+        if (Death.Losses is { } losses)
+        {
+            DeathScreen.ShowLosses(DeathScreenText.Format(losses));
+        }
+
+        if (Player is not null && IsInstanceValid(Player))
+        {
+            Player.Visible = false;
+            Player.Velocity = Vector3.Zero;
+            Player.SetPhysicsProcess(false);
+        }
+
+        Hud.Target = null;
+        Hud.Suppressed = true;
+    }
+
+    /// <summary>
+    /// Steps 3 and 4: restores the barriers and draws a spawn point; puts the player back there with everything on
+    /// again, or, when every draw fails, pushes the spawn error, frees the player and ends in
+    /// <see cref="DeathState.Failed"/>.
+    /// </summary>
+    private void RespawnAfterDeath()
+    {
+        MapLoader.Barriers?.RestoreAll();
+        if (Player is null || !IsInstanceValid(Player) || PlayerCamera is null || !IsInstanceValid(PlayerCamera)
+            || !DrawSpawn(out var position, out var facing))
+        {
+            FailSpawn("no player respawn", LastSpawnFailure ?? "there was no player to respawn");
+            DeathCamera.Stop();
             RemovePlayer();
-            return false;
+            DeathScreen.HideNow();
+            Death.CompleteRespawn(false);
+            return;
         }
 
-        Player.PlaceAt(position, facing);
-        PlayerCamera?.SnapToTarget();
+        var player = Player;
+        var camera = PlayerCamera;
+        player.GravityOverride = null;
+        player.CollisionMask = CollisionLayers.PlayerMask;
+        player.SetPhysicsProcess(true);
+        player.PlaceAt(position, facing);
+        player.Visible = !_screenshotRun;
+        player.InputEnabled = true;
+        camera.InputEnabled = true;
+        camera.PlaceBehind(facing);
+        if (!_screenshotRun)
+        {
+            camera.Activate();
+            Hud.Target = player;
+        }
+
+        DeathCamera.Stop();
+        DeathScreen.FadeOutAndHide();
+        Hud.Suppressed = false;
+        DebugCameraActive = false;
+        Death.CompleteRespawn(true);
         GD.Print(FormattableString.Invariant(
             $"Player: respawned at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}), draw {LastSpawnAttempts}"));
         EmitSignal(SignalName.PlayerRespawned, position);
-        return true;
+    }
+
+    /// <summary>
+    /// A map load or failed load: the death sequence back to <see cref="DeathState.Alive"/>, the death camera and
+    /// screen off, falling bodies freed and the tracked bodies forgotten.
+    /// </summary>
+    private void ResetWorldEdgeState()
+    {
+        Death.Reset();
+        DeathCamera.Stop();
+        DeathScreen.HideNow();
+        VoidFall.Clear();
+        UntrackAllVoidBodies();
+        _voidFallers.Clear();
+        Hud.Suppressed = false;
+        ApplyEdgeExports();
+    }
+
+    /// <summary>
+    /// Copies the world-edge exports into <see cref="Death"/>, <see cref="VoidPull"/> and <see cref="VoidFall"/>, each
+    /// physics frame. Each must be finite and at least 0: an export set out of range pushes one error and is set back
+    /// to its last valid value, which is used.
+    /// </summary>
+    private void ApplyEdgeExports()
+    {
+        FallTime = ValidEdgeExport(nameof(FallTime), FallTime, ref _validEdgeExports.FallTime);
+        ScreenTime = ValidEdgeExport(nameof(ScreenTime), ScreenTime, ref _validEdgeExports.ScreenTime);
+        MaxFallTime = ValidEdgeExport(nameof(MaxFallTime), MaxFallTime, ref _validEdgeExports.MaxFallTime);
+        SafetyNetMargin = ValidEdgeExport(nameof(SafetyNetMargin), SafetyNetMargin, ref _validEdgeExports.SafetyNetMargin);
+        VoidOutwardAcceleration = ValidEdgeExport(nameof(VoidOutwardAcceleration), VoidOutwardAcceleration, ref _validEdgeExports.VoidOutwardAcceleration);
+        if (!IsValidEdgeExport(VoidDownAcceleration))
+        {
+            // Back to the last valid setting, which may be "unset" (the project gravity).
+            PushInvalidEdgeExport(nameof(VoidDownAcceleration), VoidDownAcceleration, _validEdgeExports.VoidDownAcceleration ?? _projectGravity);
+            _voidDownAcceleration = _validEdgeExports.VoidDownAcceleration;
+        }
+        else
+        {
+            _validEdgeExports.VoidDownAcceleration = _voidDownAcceleration;
+        }
+
+        Death.FallTime = FallTime;
+        Death.ScreenTime = ScreenTime;
+        VoidPull.OutwardAcceleration = VoidOutwardAcceleration;
+        VoidPull.DownAcceleration = VoidDownAcceleration;
+        VoidFall.Pull = VoidPull;
+        VoidFall.Geometry = MapLoader?.EdgeGeometry;
+        VoidFall.MaxFallTime = MaxFallTime;
+        VoidFall.SafetyNetMargin = SafetyNetMargin;
+    }
+
+    private static bool IsValidEdgeExport(float value) => float.IsFinite(value) && value >= 0f;
+
+    /// <summary>
+    /// <paramref name="value"/> when it is valid (it becomes <paramref name="lastValid"/>); otherwise pushes one error
+    /// and returns <paramref name="lastValid"/>.
+    /// </summary>
+    private static float ValidEdgeExport(string name, float value, ref float lastValid)
+    {
+        if (IsValidEdgeExport(value))
+        {
+            lastValid = value;
+            return value;
+        }
+
+        PushInvalidEdgeExport(name, value, lastValid);
+        return lastValid;
+    }
+
+    private static void PushInvalidEdgeExport(string name, float value, float kept) =>
+        GD.PushError(FormattableString.Invariant($"World: {name} must be finite and at least 0, is {value}; keeping {kept}"));
+
+    /// <summary>The last valid value of each world-edge export (<see cref="ApplyEdgeExports"/>).</summary>
+    private struct EdgeExportValues
+    {
+        public float FallTime;
+        public float ScreenTime;
+        public float MaxFallTime;
+        public float SafetyNetMargin;
+        public float VoidOutwardAcceleration;
+
+        /// <summary>Null: not set, so the project gravity.</summary>
+        public float? VoidDownAcceleration;
     }
 
     private void OnMapLoaded(int tileCount)
     {
+        ResetWorldEdgeState();
+        if (MapLoader.VoidTrigger is { } trigger)
+        {
+            trigger.BodyEnteredVoid += OnBodyEnteredVoid;
+        }
+
         RemovePlayer();
         SpawnWhenCollisionReadyAsync(++_spawnGeneration);
     }
@@ -480,6 +968,7 @@ public partial class World : Node3D
     private void OnMapLoadFailed(string message)
     {
         _spawnGeneration++;
+        ResetWorldEdgeState();
         RemovePlayer();
     }
 
@@ -602,7 +1091,9 @@ public partial class World : Node3D
 
     private WorldEnvironment CreateEnvironment()
     {
-        var sky = new Sky { SkyMaterial = new ProceduralSkyMaterial() };
+        // The day sky above the horizon and a starfield below it (materials/sky/space_sky.gdshader); its radiance pass
+        // keeps the former procedural ground, so ambient and reflected light are unchanged.
+        var sky = new Sky { SkyMaterial = new ShaderMaterial { Shader = GD.Load<Shader>(SkyShaderPath) } };
         var environment = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Sky,

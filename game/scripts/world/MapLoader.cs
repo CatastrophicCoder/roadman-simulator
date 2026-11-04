@@ -2,7 +2,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Godot;
+using Roadman.Core.Edge;
 using Roadman.Core.Maps;
+using Roadman.Scenes.Edge;
+using VoidTrigger = Roadman.Scenes.Edge.VoidTrigger;
 
 namespace Roadman.Scenes;
 
@@ -12,7 +15,9 @@ namespace Roadman.Scenes;
 /// already in map-local coordinates). All tiles load at once; streaming comes later.
 /// After the tiles it reads <c>road_graph.json</c> into <see cref="RoadGraph"/>, then <c>buildings.json</c> and
 /// <c>pois.json</c> into <see cref="Places"/>, then <c>boundary.json</c> into <see cref="Boundary"/>; a missing or
-/// invalid file is reported, and the tiles stay loaded.
+/// invalid file is reported, and the tiles stay loaded. With a boundary it builds the world edge under the <c>Edge</c>
+/// child (<c>docs/specs/world-edge-game.md</c>): <see cref="EdgeGeometry"/> and the <see cref="VoidTrigger"/> before
+/// <see cref="SignalName.MapLoaded"/>, and the <see cref="Barriers"/> once the terrain collision is queryable.
 /// Building collision bodies are in <see cref="BuildingGroup"/>; <see cref="BuildingOf"/> resolves one to its building.
 /// Errors are pushed with the pack path and the <c>/regen-map</c> hint; the game keeps running without a map.
 /// </summary>
@@ -140,6 +145,35 @@ public partial class MapLoader : Node3D
     /// <summary>Path of the boundary file in the pack.</summary>
     public string BoundaryPath => $"{PackPath}/{MapPack.BoundaryFile}";
 
+    /// <summary>
+    /// The tuned barrier sizes, grouped per type (<see cref="Roadman.Scenes.Edge.BarrierSettings"/>). Every <see cref="Barriers"/>
+    /// this loader creates uses this resource, so a change lasts across reloads and takes effect at the next load.
+    /// </summary>
+    [Export]
+    public BarrierSettings BarrierSettings { get; set; } = new();
+
+    /// <summary>Physics frames the barriers wait for the terrain collision before they give up.</summary>
+    [Export]
+    public int EdgePhysicsWaitFrames { get; set; } = 30;
+
+    /// <summary>
+    /// Queries on the loaded world edge (ring, void prisms, safety net); null without a <see cref="Boundary"/>.
+    /// </summary>
+    public EdgeGeometry? EdgeGeometry { get; private set; }
+
+    /// <summary>The void trigger (<c>Edge/VoidTrigger</c>), built before <see cref="SignalName.MapLoaded"/>; null without a <see cref="Boundary"/>.</summary>
+    public VoidTrigger? VoidTrigger { get; private set; }
+
+    /// <summary>
+    /// The barriers (<c>Edge/Barriers</c>), created before <see cref="SignalName.MapLoaded"/> and built once the terrain
+    /// collision is queryable (<see cref="Barriers.IsBuilt"/>, <see cref="WaitForWorldEdgeAsync"/>); null without a
+    /// <see cref="Boundary"/>.
+    /// </summary>
+    public Barriers? Barriers { get; private set; }
+
+    /// <summary>Parent of the world edge's nodes (<see cref="VoidTrigger"/>, <see cref="Barriers"/>); always there.</summary>
+    public Node3D Edge { get; private set; } = null!;
+
     /// <summary>The map id in use: <see cref="MapId"/>, or the project setting when that is empty.</summary>
     public string ResolvedMapId =>
         string.IsNullOrEmpty(MapId) ? ProjectSettings.GetSetting(MapIdSetting, DefaultMapId).AsString() : MapId;
@@ -151,6 +185,7 @@ public partial class MapLoader : Node3D
     public override void _Ready()
     {
         EnsureTilesNode();
+        EnsureEdgeNode();
         TerrainMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/terrain.tres");
         BuildingMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/building.tres");
         RoadMaterial ??= GD.Load<Material>($"{PlaceholderMaterialsPath}/road.tres");
@@ -166,6 +201,7 @@ public partial class MapLoader : Node3D
     public bool Load()
     {
         EnsureTilesNode();
+        EnsureEdgeNode();
         Unload();
 
         var mapId = ResolvedMapId;
@@ -220,6 +256,11 @@ public partial class MapLoader : Node3D
         Places = LoadPlaces(mapId, manifest);
         PrepareBuildingBodies(mapId);
         Boundary = LoadBoundary(mapId, manifest);
+        if (Boundary is not null)
+        {
+            CreateWorldEdge(Boundary);
+        }
+
         EmitSignal(SignalName.MapLoaded, LoadedTileCount);
         return complete;
     }
@@ -318,6 +359,40 @@ public partial class MapLoader : Node3D
     }
 
     /// <summary>
+    /// Waits until the <see cref="Barriers"/> are built, at most <paramref name="maxPhysicsFrames"/> physics frames.
+    /// </summary>
+    /// <returns>True once they are built; false without a boundary, on a reload meanwhile, or on timeout.</returns>
+    public async Task<bool> WaitForWorldEdgeAsync(int maxPhysicsFrames = 60)
+    {
+        var barriers = Barriers;
+        if (barriers is null)
+        {
+            return false;
+        }
+
+        var tree = GetTree();
+        for (var frame = 0; ; frame++)
+        {
+            if (!IsInstanceValid(barriers) || barriers != Barriers || !IsInsideTree())
+            {
+                return false;
+            }
+
+            if (barriers.IsBuilt)
+            {
+                return true;
+            }
+
+            if (frame >= maxPhysicsFrames)
+            {
+                return false;
+            }
+
+            await ToSignal(tree, SceneTree.SignalName.PhysicsFrame);
+        }
+    }
+
+    /// <summary>
     /// The terrain mesh of a loaded tile (the <c>terrain</c> node under <paramref name="tile"/>, a child of
     /// <see cref="Tiles"/>), or null when the tile has none.
     /// </summary>
@@ -369,6 +444,15 @@ public partial class MapLoader : Node3D
             child.QueueFree();
         }
 
+        foreach (var child in Edge.GetChildren())
+        {
+            Edge.RemoveChild(child);
+            child.QueueFree();
+        }
+
+        EdgeGeometry = null;
+        VoidTrigger = null;
+        Barriers = null;
         Manifest = null;
         RoadGraph = null;
         Places = null;
@@ -506,11 +590,40 @@ public partial class MapLoader : Node3D
         return boundary;
     }
 
+    /// <summary>
+    /// Creates <see cref="EdgeGeometry"/>, the <see cref="VoidTrigger"/> and the <see cref="Barriers"/> under
+    /// <see cref="Edge"/>; the barriers build themselves once the terrain collision is queryable.
+    /// </summary>
+    private void CreateWorldEdge(Boundary boundary)
+    {
+        EdgeGeometry = new EdgeGeometry(boundary);
+        VoidTrigger = VoidTrigger.Create(EdgeGeometry);
+        Edge.AddChild(VoidTrigger);
+        Barriers = new Barriers { Name = "Barriers", Settings = BarrierSettings ?? new BarrierSettings() };
+        Edge.AddChild(Barriers);
+        GD.Print($"MapLoader: void trigger with {VoidTrigger.ShapeCount} prisms; building {boundary.Roadblocks.Count} roadblocks and {boundary.Fences.Count} fences");
+        if (IsInsideTree())
+        {
+            Barriers.BuildWhenCollisionReadyAsync(this, boundary, EdgePhysicsWaitFrames);
+        }
+    }
+
     private bool Fail(string message)
     {
         GD.PushError($"MapLoader: {message}");
         EmitSignal(SignalName.MapLoadFailed, message);
         return false;
+    }
+
+    private void EnsureEdgeNode()
+    {
+        if (Edge is not null && IsInstanceValid(Edge))
+        {
+            return;
+        }
+
+        Edge = new Node3D { Name = "Edge" };
+        AddChild(Edge);
     }
 
     private void EnsureTilesNode()

@@ -6,7 +6,6 @@ using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using GdUnit4;
 using Godot;
-using Roadman.Autoload;
 using Roadman.Core.Maps;
 using Roadman.Core.Player;
 using Roadman.Core.Tools;
@@ -23,7 +22,8 @@ namespace Roadman.Tests;
 /// <summary>
 /// The player on foot in Godot, <c>docs/specs/player-on-foot.md</c> (<c>Ac</c> numbers are its acceptance criteria):
 /// spawn, spawn failure, movement, jump, collision, the third-person camera with the mouse and the gamepad, the debug
-/// camera toggle and the release layout, the temporary fall respawn and the street label. They run on whichever Somero pack is built (full, or the CI test area from the
+/// camera toggle and the release layout, and the street label (criterion 20, the temporary fall respawn, is replaced by
+/// docs/specs/world-edge-game.md). They run on whichever Somero pack is built (full, or the CI test area from the
 /// committed fixture), so every position is derived from the loaded pack: the spawn area's open ground from
 /// <see cref="MapLoader.Boundary"/>, roads, bridges and <c>span_end</c> nodes from <see cref="MapLoader.RoadGraph"/>,
 /// walls from the building collision bodies, heights from ray hits. Motion is scripted per physics frame through
@@ -73,11 +73,6 @@ public class PlayerOnFootTest
     private const float WallDistance = 1f;
 
     private const float YawStepDegrees = 15f;
-
-    /// <summary>Criterion 20: the depths below the slab's bottom that do and don't respawn.</summary>
-    private const float RespawnDepth = 21f;
-
-    private const float NoRespawnDepth = 19f;
 
     /// <summary>
     /// Criteria 10 and 17: physics frames allowed after the ideal stop before a stop counts as failed. The ideal stop
@@ -1645,76 +1640,6 @@ public class PlayerOnFootTest
         AssertThat(exitCode).IsEqual(ScreenshotExitCode.Error);
         AssertBool(errors.Any(e => e.Contains("--inspect needs the place inspector, which only debug builds have")))
             .OverrideFailureMessage(string.Join("; ", errors)).IsTrue();
-    }
-
-    // ----- Criterion 20: temporary fall respawn -----
-
-    [TestCase]
-    public async Task Ac20_PlayerMoreThan20MetresBelowTheSlab_RespawnsOnOpenGroundWithinOneFrameKeepingMoneyAndGear()
-    {
-        AssertPackPresent();
-        using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
-        var world = (World)runner.Scene()!;
-        AssertBool(await WaitForSpawn(world)).IsTrue();
-        var player = world.Player!;
-        var boundary = world.MapLoader.Boundary!;
-        var state = GameState.Instance.Player;
-        const string gear = "player-on-foot-test-item";
-        const int money = 123;
-        state.AddMoney(money);
-        state.AddGear(gear);
-        var moneyBefore = state.Money;
-        var gearBefore = state.Gear.ToList();
-        var died = 0;
-        void OnDied() => died++;
-        void OnEventsDied() => died++;
-        state.Died += OnDied;
-        Events.Instance.PlayerDied += OnEventsDied;
-        var respawns = new List<Vector3>();
-        var velocityAtRespawn = Vector3.One;
-        world.PlayerRespawned += position =>
-        {
-            respawns.Add(position);
-            velocityAtRespawn = player.Velocity;
-        };
-
-        try
-        {
-            var spawn = player.GlobalPosition;
-            var slabBottom = (float)boundary.Cliff.BottomY;
-
-            // 19 m below: no respawn in the frames it takes to fall the remaining 1 m (√(2 · 1 m / g)).
-            var safeFrames = Mathf.FloorToInt(Mathf.Sqrt(2f * (world.FallRespawnDepth - NoRespawnDepth) / player.Gravity) * Engine.PhysicsTicksPerSecond) - 1;
-            player.PlaceAt(new Vector3(spawn.X, slabBottom - NoRespawnDepth, spawn.Z), 0f);
-            await PhysicsFrames(world, safeFrames);
-            AssertInt(respawns.Count).OverrideFailureMessage($"respawned at {NoRespawnDepth} m below the slab").IsEqual(0);
-            // Nothing is under the slab: placed there with zero velocity it only falls.
-            AssertFloat(player.GlobalPosition.Y).IsLessEqual(slabBottom - NoRespawnDepth);
-            AssertFloat(player.GlobalPosition.Y).IsGreaterEqual(slabBottom - world.FallRespawnDepth);
-
-            // 21 m below, falling: respawned in the next physics frame with zero velocity.
-            player.PlaceAt(new Vector3(spawn.X, slabBottom - RespawnDepth, spawn.Z), 0f);
-            player.Velocity = new Vector3(1f, -30f, 1f);
-            await PhysicsFrames(world, 1);
-
-            AssertInt(respawns.Count).IsEqual(1);
-            var back = respawns[0];
-            GD.Print(Invariant($"PlayerOnFootTest: Ac20 slab bottom {slabBottom}, respawned at {back} (draw {world.LastSpawnAttempts})"));
-            AssertThat(velocityAtRespawn).IsEqual(Vector3.Zero);
-            AssertBool(SpawnPicker.Contains(boundary.SpawnArea.OpenGround, back.X, back.Z)).IsTrue();
-            AssertFloat(player.GlobalPosition.Y).IsGreater(slabBottom);
-            AssertThat(world.Player).IsSame(player);
-            AssertInt(state.Money).IsEqual(moneyBefore);
-            AssertThat(state.Gear.ToList()).IsEqual(gearBefore);
-            AssertInt(died).IsEqual(0);
-        }
-        finally
-        {
-            state.Died -= OnDied;
-            Events.Instance.PlayerDied -= OnEventsDied;
-            state.RemoveGear(gear);
-            state.TrySpend(money);
-        }
     }
 
     // ----- Criterion 21: street label follows the player -----

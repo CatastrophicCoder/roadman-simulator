@@ -33,7 +33,11 @@ public class WorldSceneTest
 
         var environment = world.GetNodeOrNull<WorldEnvironment>("WorldEnvironment");
         AssertThat(environment).IsNotNull();
-        AssertThat(environment!.Environment.Sky.SkyMaterial).IsInstanceOf<ProceduralSkyMaterial>();
+        // The day sky with a starfield below the horizon (docs/specs/world-edge-game.md, "Space backdrop").
+        AssertThat(environment!.Environment.Sky.SkyMaterial).IsInstanceOf<ShaderMaterial>();
+        var shader = ((ShaderMaterial)environment.Environment.Sky.SkyMaterial).Shader;
+        AssertThat(shader).IsNotNull();
+        AssertThat(shader!.ResourcePath).IsEqual(Roadman.Scenes.World.SkyShaderPath);
     }
 
     [TestCase]

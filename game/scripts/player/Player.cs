@@ -8,8 +8,8 @@ namespace Roadman.OnFoot;
 
 /// <summary>
 /// The player on foot (<c>docs/specs/player-on-foot.md</c>), a <see cref="CharacterBody3D"/> built in code: a capsule
-/// on its own collision layer (<see cref="CollisionLayers.Player"/>) that collides with the map
-/// (<see cref="CollisionLayers.Map"/>), and a placeholder model (body, head and a cap whose brim shows the facing).
+/// on its own collision layer (<see cref="CollisionLayers.Player"/>) that collides with the map and the world-edge
+/// barriers (<see cref="CollisionLayers.PlayerMask"/>), and a placeholder model (body, head and a cap whose brim shows the facing).
 /// Each physics frame it reads <c>move_*</c> (WASD or the left stick, radial deadzone), <c>run</c> (Shift, held),
 /// <c>run_toggle</c> (the left-stick click, through <see cref="RunToggle"/>) and <c>jump</c> (Space or the south face
 /// button), moves with <see cref="OnFootMotion"/>
@@ -106,6 +106,13 @@ public partial class Player : CharacterBody3D
     /// </summary>
     public bool InputEnabled { get; set; } = true;
 
+    /// <summary>
+    /// When set, replaces the whole movement step (the void fall, <c>docs/specs/world-edge-game.md</c>): each physics
+    /// frame the velocity grows by this acceleration × delta, and no input, run, jump, floor or gravity logic runs. The
+    /// velocity at the moment it is set is kept. Null: normal movement.
+    /// </summary>
+    public Vector3? GravityOverride { get; set; }
+
     /// <summary>The camera whose yaw makes movement camera-relative; null means yaw 0 (forward is −Z, north).</summary>
     public PlayerCamera? Camera { get; set; }
 
@@ -155,7 +162,7 @@ public partial class Player : CharacterBody3D
     public override void _Ready()
     {
         CollisionLayer = CollisionLayers.Player;
-        CollisionMask = CollisionLayers.Map;
+        CollisionMask = CollisionLayers.PlayerMask;
         Gravity = ProjectSettings.GetSetting("physics/3d/default_gravity", 9.8f).AsSingle();
         ApplyExports();
 
@@ -166,6 +173,14 @@ public partial class Player : CharacterBody3D
 
     public override void _PhysicsProcess(double delta)
     {
+        if (GravityOverride is { } acceleration)
+        {
+            Velocity += acceleration * (float)delta;
+            MoveAndSlide();
+            CommitPosition();
+            return;
+        }
+
         ApplyExports();
 
         var move = InputEnabled

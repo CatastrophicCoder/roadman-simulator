@@ -1,0 +1,7 @@
+[gd_resource type="StandardMaterial3D" format=3]
+
+[resource]
+resource_name = "PlaceholderFenceWire"
+albedo_color = Color(0.55, 0.56, 0.58, 1)
+metallic = 0.6
+roughness = 0.5

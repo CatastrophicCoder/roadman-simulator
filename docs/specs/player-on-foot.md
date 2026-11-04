@@ -115,6 +115,9 @@ The first playable (milestone 2, "On foot", in `docs/project-outline.md`): one p
 
 ### Temporary fall respawn
 
+Replaced by `docs/specs/world-edge-game.md` (see "Amendments", 2026-11-04); this section records the original rule.
+
+
 - Until the world-edge death spec replaces it: when `FallReset.IsBelow(player y, boundary.cliff.bottom_y, FallRespawnDepth)` holds in a physics frame, the player respawns. That means more than 20 m below the slab's bottom; on Somero, below y 31.8.
 - The respawn runs the same draw procedure as the first spawn and sets the velocity to zero. It doesn't call `PlayerState.Die()` and clears no money or gear.
 - `World.PlayerRespawned(position)` is emitted. If no draw passes, an error is pushed as for a failed spawn and the player is freed.
@@ -298,6 +301,7 @@ New actions in `project.godot`, each with keyboard and gamepad events (`device` 
   2. "Half tilt" (criterion 17) is the raw stick value halfway between the action's deadzone and full tilt: 0.6 raw with the 0.2 deadzone, which `Input.GetVector` remaps to 0.5 strength, so half the speed.
   3. `debug_camera` is bound to both physical `Key.Quoteleft` (the key left of 1 on Windows and US Macs) and `Key.Section` (left of 1 on ISO Macs, such as the Finnish layout). On ISO Macs `Quoteleft` is the `<>` key beside left Shift, so it toggles too; acceptable for a debug-only key.
 - 2026-11-03, the user's playtest of part A: `WalkSpeed` doubled to 2.8 m/s and `RunSpeed` raised 50 % to 7.5 m/s; the rest felt right. Gamepad buttons are named generically (south, east, west and north face buttons, left and right sticks, left-stick click), and in-game button prompts will use generic glyphs.
+- 2026-11-04, `docs/specs/world-edge-game.md` (ADR 0017): the temporary fall respawn ("Temporary fall respawn"), the `FallReset` part of criterion 5 and criterion 20 are replaced by that spec. `FallReset`, `World.FallRespawnDepth` and `World.RespawnPlayer()` are gone; a fall off the slab is caught by the void trigger or the safety net and runs the death sequence, which calls `PlayerState.Die()`. `World.PlayerRespawned` now fires after a death respawn.
 
 ## Open questions
 
