@@ -1614,6 +1614,32 @@ public class PlayerOnFootTest
     }
 
     /// <summary>
+    /// World-edge spec criterion 25's release half: with <see cref="DebugBuild.Override"/> false, a
+    /// <see cref="ScreenshotTool"/> asked for <c>--death fall</c> or <c>--death screen</c> finishes with
+    /// <see cref="ScreenshotExitCode.Error"/> (1) when it is added and pushes "--death needs a debug build", before the
+    /// headless refusal. In a debug build the same request passes the build check and stops at the headless refusal.
+    /// </summary>
+    [TestCase]
+    public void WorldEdgeAc25_DeathFlagOutsideADebugBuild_ExitsWithErrorAndSaysItNeedsADebugBuild()
+    {
+        foreach (var death in new[] { DeathShot.Fall, DeathShot.Screen })
+        {
+            DebugBuild.Override = false;
+            var (exitCode, errors) = RunScreenshotToolReady(ToolArgs() with { Death = death });
+            AssertThat(exitCode).OverrideFailureMessage($"--death {death}").IsEqual(ScreenshotExitCode.Error);
+            AssertBool(errors.Any(e => e.Contains("--death needs a debug build"))).OverrideFailureMessage($"--death {death}: {string.Join("; ", errors)}").IsTrue();
+            AssertBool(errors.Any(e => e.Contains("--headless"))).OverrideFailureMessage("the headless refusal ran before the build check").IsFalse();
+
+            AssertThat(DisplayServer.GetName()).OverrideFailureMessage("the contrast needs the headless run of .runsettings").IsEqual("headless");
+            DebugBuild.Override = true;
+            (exitCode, errors) = RunScreenshotToolReady(ToolArgs() with { Death = death });
+            AssertThat(exitCode).IsEqual(ScreenshotExitCode.Error);
+            AssertBool(errors.Any(e => e.Contains("--death needs a debug build"))).OverrideFailureMessage(string.Join("; ", errors)).IsFalse();
+            AssertBool(errors.Any(e => e.Contains("rendering is disabled with --headless"))).OverrideFailureMessage(string.Join("; ", errors)).IsTrue();
+        }
+    }
+
+    /// <summary>
     /// Outside a debug build the world has no road graph view (criterion 19's release layout), so a
     /// <see cref="ScreenshotTool"/> asked for <c>--road-graph</c> without it exits 1 and says why (game/CLAUDE.md,
     /// "Screenshots": "Exit 1 in a non-debug build").

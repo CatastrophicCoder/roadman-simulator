@@ -6,12 +6,15 @@ namespace Roadman.Scenes.Edge;
 /// <summary>
 /// The tuned sizes of the world-edge barriers (<c>docs/specs/world-edge-game.md</c>, "Barriers", "Exports"), grouped
 /// per barrier type in the inspector: <c>Roadblock</c>, <c>Land Fence</c> (its post values are also the water
-/// fences'), <c>Water Fence</c> and <c>Collision</c> (every type). The properties carry the group's name as a prefix
+/// fences'), <c>Water Fence</c>, <c>Collision</c> (every type) and <c>Breaking</c> (when an item breaks, and its loose
+/// pieces). The properties carry the group's name as a prefix
 /// (<see cref="LandFencePostSpacing"/> shows as Land Fence → Post Spacing).
 /// <para>
 /// <see cref="MapLoader.BarrierSettings"/> holds one, which every <see cref="Barriers"/> it creates uses, so a value set
 /// there (in code, or a saved <c>.tres</c> assigned to it) lasts across map reloads. A change takes effect at the next
-/// build (a map load). <see cref="ToParameters"/> checks the values (<see cref="BarrierParameters"/>).
+/// build (a map load), except the <c>Breaking</c> values, which <see cref="Barriers"/> reads each physics frame while a
+/// breaker exists. <see cref="ToParameters"/> checks the layout values (<see cref="BarrierParameters"/>),
+/// <see cref="ToBreakParameters"/> the breaking ones (<see cref="BreakParameters"/>).
 /// </para>
 /// </summary>
 [GlobalClass]
@@ -127,6 +130,36 @@ public partial class BarrierSettings : Resource
     /// <summary>How far collision boxes reach past both ends of an item, so neighbouring items overlap, m.</summary>
     [Export(PropertyHint.Range, "0,1,0.01,or_greater,suffix:m")]
     public float JointOverlap { get; set; } = 0.1f;
+
+    // ----- Breaking -----
+
+    /// <summary>A breaker moving at least this fast breaks an item it touches, m/s.</summary>
+    [ExportGroup("Breaking", "Breaking")]
+    [Export(PropertyHint.Range, "0,50,0.1,or_greater,suffix:m/s")]
+    public float BreakingSpeed { get; set; } = 3.0f;
+
+    /// <summary>Density of a loose piece, kg/m³ (its mass is its volume times this).</summary>
+    [Export(PropertyHint.Range, "1,10000,1,or_greater,suffix:kg/m³")]
+    public float BreakingPieceDensity { get; set; } = 300f;
+
+    /// <summary>The lightest a loose piece gets, kg.</summary>
+    [Export(PropertyHint.Range, "0.01,100,0.01,or_greater,suffix:kg")]
+    public float BreakingMinPieceMass { get; set; } = 0.5f;
+
+    /// <summary>Margin of the breakers' sweep queries against the unbroken items, m.</summary>
+    [Export(PropertyHint.Range, "0,0.5,0.005,or_greater,suffix:m")]
+    public float BreakingSweepMargin { get; set; } = 0.04f;
+
+    /// <summary>The breaking parameters from these values.</summary>
+    /// <exception cref="System.ArgumentException">A value is out of its range (<see cref="BreakParameters"/>).</exception>
+    public BreakParameters ToBreakParameters() =>
+        new()
+        {
+            BreakSpeed = BreakingSpeed,
+            PieceDensity = BreakingPieceDensity,
+            MinPieceMass = BreakingMinPieceMass,
+            SweepMargin = BreakingSweepMargin,
+        };
 
     /// <summary>The layout parameters from these values.</summary>
     /// <exception cref="System.ArgumentException">A value is out of its range (<see cref="BarrierParameters"/>).</exception>

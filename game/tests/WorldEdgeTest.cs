@@ -30,7 +30,8 @@ namespace Roadman.Tests;
 /// criteria): the barriers and the void trigger the map loader builds (7, 8), the player against the barriers (9, 10),
 /// the spring arm through them (11), the death sequence (13 to 16), the seeded respawn (18), a failed respawn (19), the
 /// debug camera toggle during the sequence (20), a map reload during it (21), the safety net (22) and other bodies in
-/// the void (23). Criteria 12 and 17 need the vehicle breaker of Part B; criterion 23's "loose piece" here is a plain
+/// the void (23). Part B's criteria 12 and 17, the loose pieces' safety net and the death screen's dismiss press are in
+/// <see cref="WorldEdgeBreakingTest"/>, which reuses the <c>internal</c> helpers here; criterion 23's "loose piece" here is a plain
 /// <see cref="RigidBody3D"/> on <see cref="CollisionLayers.Barrier"/> given to <see cref="World.TrackVoidBody"/>, and its
 /// <see cref="IVoidFaller"/> is <see cref="TestVoidFaller"/>.
 /// <para>
@@ -52,22 +53,22 @@ public class WorldEdgeTest
     private const string MapId = "somero";
 
     /// <summary>A fixed seed, so the spawn and every derived placement are the same on each run.</summary>
-    private const int TestSeed = 20261104;
+    internal const int TestSeed = 20261104;
 
     /// <summary>Criterion 19: the seed the respawn draws are reset to, so the test can predict them.</summary>
     private const int RespawnSeed = 7;
 
     /// <summary>Physics frames allowed for the barriers to be built after the spawn.</summary>
-    private const int EdgeWaitFrames = 60;
+    internal const int EdgeWaitFrames = 60;
 
     /// <summary>Criterion 16: physics frames after the respawn before the player must be on the floor.</summary>
-    private const int RespawnSettleFrames = 120;
+    internal const int RespawnSettleFrames = 120;
 
     /// <summary>
     /// Fall and screen time for criteria that don't measure them (13 checks only the entry, 18 to 22 the states and
     /// the respawn), so a death takes 1 s instead of 6 s.
     /// </summary>
-    private const float ShortTime = 0.5f;
+    internal const float ShortTime = 0.5f;
 
     /// <summary>Criterion 13: how far outward of the boundary the player is placed on the ledge.</summary>
     private const float LedgeEntryDistance = 1.5f;
@@ -88,22 +89,22 @@ public class WorldEdgeTest
     private const float FallCorridorMargin = 2f;
 
     /// <summary>The height above the ledge or ground a placed body starts at, so it doesn't start in the surface.</summary>
-    private const float PlaceLift = 0.05f;
+    internal const float PlaceLift = 0.05f;
 
     /// <summary>Shortest item the player runs into or stands at: the capsule (0.6 m wide) hits its middle.</summary>
-    private const float MinItemLength = 2f;
+    internal const float MinItemLength = 2f;
 
     /// <summary>Criterion 9: how far inside the barrier the run starts ("a few metres").</summary>
-    private const float RunStartDistance = 4f;
+    internal const float RunStartDistance = 4f;
 
     /// <summary>Criterion 9: the spec's time limit for the stop.</summary>
-    private const float StopWithinSeconds = 3f;
+    internal const float StopWithinSeconds = 3f;
 
     /// <summary>Criteria 9 and 10: the run-up's speed must reach <see cref="Player.RunSpeed"/> within this fraction.</summary>
     private const float SpeedTolerance = 0.05f;
 
     /// <summary>Criterion 9: largest change of the player's distance from the barrier line over the last half second that still counts as stopped, m.</summary>
-    private const float StoppedDrift = 0.01f;
+    internal const float StoppedDrift = 0.01f;
 
     /// <summary>Criteria 14 and 23: the spec's tolerance on the velocity change per physics step (± 1 %).</summary>
     private const float PullTolerance = 0.01f;
@@ -115,13 +116,13 @@ public class WorldEdgeTest
     private const float LookAtToleranceDegrees = 0.1f;
 
     /// <summary>Criterion 22: "just" below or above the safety net, m.</summary>
-    private const float NetOffset = 0.01f;
+    internal const float NetOffset = 0.01f;
 
     /// <summary>Criteria 9 to 11: steepest ground along a run-up or under a standing point, degrees.</summary>
-    private const float MaxRouteSlopeDegrees = 15f;
+    internal const float MaxRouteSlopeDegrees = 15f;
 
     /// <summary>Spacing of the samples along test routes, m (a search resolution, not a tolerance).</summary>
-    private const float SampleStep = 0.25f;
+    internal const float SampleStep = 0.25f;
 
     /// <summary>Criterion 11: distances inward of a post at which the player is tried, m.</summary>
     private static readonly float[] ArmStandDistances = [3.8f, 4.4f, 3.2f];
@@ -174,7 +175,7 @@ public class WorldEdgeTest
 
     /// <summary>
     /// One barrier item per roadblock and fence of <c>boundary.json</c>, of the right type, named after its id, under
-    /// <c>MapLoader/Edge/Barriers</c>, each a <see cref="StaticBody3D"/> on <see cref="CollisionLayers.Barrier"/> with
+    /// <c>MapLoader/Edge/Barriers</c>, each a <see cref="StaticBody3D"/> on <see cref="CollisionLayers.BarrierStatic"/> with
     /// its collision boxes and no visual children; the visuals in one <see cref="MultiMeshInstance3D"/> per type and
     /// piece kind; no <see cref="RigidBody3D"/> anywhere; a <see cref="VoidTriggerArea"/> with one shape per prism; no
     /// errors. A map reload rebuilds both, with the same counts.
@@ -356,7 +357,7 @@ public class WorldEdgeTest
             {
                 Shape = prism.Shape,
                 Transform = prism.GlobalTransform,
-                CollisionMask = CollisionLayers.Barrier,
+                CollisionMask = CollisionLayers.BarrierStatic,
                 CollideWithBodies = true,
                 CollideWithAreas = false,
             };
@@ -651,7 +652,7 @@ public class WorldEdgeTest
                         shortest = Mathf.Min(shortest, camera.SpringArm.SpringLength);
                         var from = camera.GlobalPosition;
                         var to = camera.Camera.GlobalPosition;
-                        var barrierHit = space.IntersectRay(PhysicsRayQueryParameters3D.Create(from, to, CollisionLayers.Barrier));
+                        var barrierHit = space.IntersectRay(PhysicsRayQueryParameters3D.Create(from, to, CollisionLayers.BarrierStatic));
                         if (barrierHit.Count > 0 && barrierHit["collider"].AsGodotObject() is BarrierItem hit && hit.ItemId == layout.Id)
                         {
                             barrierHits++;
@@ -1697,7 +1698,7 @@ public class WorldEdgeTest
                 problems.Add($"{id}: not a child of Edge/Barriers");
             }
 
-            if (item.CollisionLayer != CollisionLayers.Barrier)
+            if (item.CollisionLayer != CollisionLayers.BarrierStatic)
             {
                 problems.Add($"{id}: layer {item.CollisionLayer}");
             }
@@ -1743,6 +1744,7 @@ public class WorldEdgeTest
         AssertInt((int)trigger.CollisionMask & (int)CollisionLayers.Map).IsEqual(0);
         AssertInt((int)trigger.CollisionMask & (int)CollisionLayers.Player).IsEqual((int)CollisionLayers.Player);
         AssertInt((int)trigger.CollisionMask & (int)CollisionLayers.Barrier).IsEqual((int)CollisionLayers.Barrier);
+        AssertInt((int)trigger.CollisionMask & (int)CollisionLayers.BarrierStatic).IsEqual(0);
 
         GD.Print(Invariant(
             $"WorldEdgeTest: Ac7 {barriers.ItemCount} items, {barriers.PieceCount} pieces in {batches.Count} batches, {prismShapes.Count} trigger shapes"));
@@ -1796,7 +1798,7 @@ public class WorldEdgeTest
     // ===== Helpers: criteria 9 to 11 =====
 
     /// <summary>A barrier item's line in Godot terms: start, end, unit horizontal along, unit horizontal outward normal.</summary>
-    private readonly record struct ItemFrame(BarrierItemLayout Layout, Vector3 Start, Vector3 End, Vector3 Along, Vector3 Across, float Length)
+    internal readonly record struct ItemFrame(BarrierItemLayout Layout, Vector3 Start, Vector3 End, Vector3 Along, Vector3 Across, float Length)
     {
         public Vector3 At(float t) => Start.Lerp(End, t);
     }
@@ -1858,7 +1860,7 @@ public class WorldEdgeTest
         return Invariant($"item {item.Length:0.##} m long; ") + string.Join("; ", parts);
     }
 
-    private static ItemFrame FrameOf(BarrierItemLayout layout)
+    internal static ItemFrame FrameOf(BarrierItemLayout layout)
     {
         var start = ToVector(layout.Start);
         var end = ToVector(layout.End);
@@ -2033,7 +2035,7 @@ public class WorldEdgeTest
         {
             Shape = new CapsuleShape3D { Radius = player.CapsuleRadius, Height = player.CapsuleHeight },
             Transform = new Transform3D(Basis.Identity, feet + (Vector3.Up * (PlaceLift + (player.CapsuleHeight / 2f)))),
-            CollisionMask = CollisionLayers.Map | CollisionLayers.Barrier,
+            CollisionMask = CollisionLayers.PlayerMask,
             CollideWithBodies = true,
             CollideWithAreas = false,
             Exclude = [player.GetRid()],
@@ -2049,7 +2051,7 @@ public class WorldEdgeTest
         return feet;
     }
 
-    private static bool IsGround(Node body) => body.IsInGroup(MapLoader.TerrainGroup) || body.IsInGroup(MapLoader.RoadGroup);
+    internal static bool IsGround(Node body) => body.IsInGroup(MapLoader.TerrainGroup) || body.IsInGroup(MapLoader.RoadGroup);
 
     /// <summary>
     /// Criterion 11: whether the spring arm from <paramref name="pivot"/> aimed through <paramref name="aim"/> (at the
@@ -2080,14 +2082,14 @@ public class WorldEdgeTest
             return false;
         }
 
-        var through = space.IntersectRay(PhysicsRayQueryParameters3D.Create(pivot, end, CollisionLayers.Barrier));
+        var through = space.IntersectRay(PhysicsRayQueryParameters3D.Create(pivot, end, CollisionLayers.BarrierStatic));
         return through.Count > 0 && through["collider"].AsGodotObject() is BarrierItem;
     }
 
     // ===== Helpers: the death sequence =====
 
     /// <summary>A ledge point 1.5 m outward of a land fence's midpoint, its fence, and the outward direction there.</summary>
-    private readonly record struct LedgeEntry(Vector3 Feet, ItemFrame Item);
+    internal readonly record struct LedgeEntry(Vector3 Feet, ItemFrame Item);
 
     /// <summary>
     /// The first land fence in ring order at least <see cref="MinItemLength"/> long whose midpoint has the ledge
@@ -2099,7 +2101,7 @@ public class WorldEdgeTest
     /// still moves outward (criterion 14). <paramref name="accept"/>, when given, must also accept the entry's feet
     /// (<paramref name="acceptWhat"/> says what it asks for in the failure message).
     /// </summary>
-    private static LedgeEntry FindLedgeEntry(World world, Func<Vector3, bool>? accept = null, string? acceptWhat = null)
+    internal static LedgeEntry FindLedgeEntry(World world, Func<Vector3, bool>? accept = null, string? acceptWhat = null)
     {
         var loader = world.MapLoader;
         var geometry = loader.EdgeGeometry!;
@@ -2204,14 +2206,14 @@ public class WorldEdgeTest
         return true;
     }
 
-    private readonly record struct EntryResult(int Frames, Transform3D PlayerCameraTransform, float PlayerCameraFov);
+    internal readonly record struct EntryResult(int Frames, Transform3D PlayerCameraTransform, float PlayerCameraFov);
 
     /// <summary>
     /// Places the player on <paramref name="entry"/> at the start of a physics frame (facing outward) and returns how
     /// many physics frames later the death sequence had started, with the player camera's transform and field of view
     /// from the last frame handler before the entry (the world's checks run after it, so as the death camera saw them).
     /// </summary>
-    private static async Task<EntryResult> PlaceOnLedgeAndWaitForEntry(World world, LedgeEntry entry)
+    internal static async Task<EntryResult> PlaceOnLedgeAndWaitForEntry(World world, LedgeEntry entry)
     {
         var player = world.Player!;
         var camera = world.PlayerCamera!;
@@ -2245,7 +2247,7 @@ public class WorldEdgeTest
     /// <see cref="PlaceOnLedgeAndWaitForEntry"/> waits. How fast is criterion 13's check alone, so a slow entry fails
     /// there and not in every criterion that only needs a death.
     /// </summary>
-    private static void AssertEntered(EntryResult result) =>
+    internal static void AssertEntered(EntryResult result) =>
         AssertInt(result.Frames).OverrideFailureMessage("placing the player on the ledge didn't start the death sequence").IsGreater(0);
 
     private static async Task<Vector3> RespawnPositionOfARun(int seed)
@@ -2336,7 +2338,7 @@ public class WorldEdgeTest
     // ===== Helpers: criteria 22 and 23 =====
 
     /// <summary>The safety net's height and an x/z inside the ring, outside every void prism (the player's spawn).</summary>
-    private static (float Net, float X, float Z) SafetyNetPoint(World world)
+    internal static (float Net, float X, float Z) SafetyNetPoint(World world)
     {
         var boundary = world.MapLoader.Boundary!;
         var geometry = world.MapLoader.EdgeGeometry!;
@@ -2363,7 +2365,7 @@ public class WorldEdgeTest
         return body;
     }
 
-    private static bool IsFreed(Node node) => !GodotObject.IsInstanceValid(node) || node.IsQueuedForDeletion();
+    internal static bool IsFreed(Node node) => !GodotObject.IsInstanceValid(node) || node.IsQueuedForDeletion();
 
     private sealed record LaunchTrace(
         List<(Vector3 Position, Vector3 Velocity, bool Falling, double Distance)> Samples,
@@ -2462,7 +2464,7 @@ public class WorldEdgeTest
 
     // ===== Helpers: world and frames =====
 
-    private static World NewWorld(int? seed, float? fallTime = null, float? screenTime = null)
+    internal static World NewWorld(int? seed, float? fallTime = null, float? screenTime = null)
     {
         var world = GD.Load<PackedScene>(WorldScenePath).Instantiate<World>();
         world.Seed = seed;
@@ -2480,7 +2482,7 @@ public class WorldEdgeTest
     }
 
     /// <summary>The runner's world once its player has spawned and its barriers are built.</summary>
-    private static async Task<World> StartWorld(ISceneRunner runner)
+    internal static async Task<World> StartWorld(ISceneRunner runner)
     {
         var world = (World)runner.Scene()!;
         AssertBool(await WaitForSpawn(world)).OverrideFailureMessage("the player didn't spawn").IsTrue();
@@ -2490,17 +2492,17 @@ public class WorldEdgeTest
         return world;
     }
 
-    private static Task<bool> WaitForSpawn(World world) =>
+    internal static Task<bool> WaitForSpawn(World world) =>
         WaitUntil(world, () => world.Player is not null, world.SpawnPhysicsWaitFrames + 30);
 
-    private static PlayerState PlayerStateOfGame()
+    internal static PlayerState PlayerStateOfGame()
     {
         AssertThat(GameState.Instance).OverrideFailureMessage("no GameState autoload").IsNotNull();
         return GameState.Instance.Player;
     }
 
     /// <summary>Physics steps of 1/<paramref name="ticks"/> s until <paramref name="seconds"/> is reached (as <see cref="DeathSequence"/> counts).</summary>
-    private static int FramesFor(double seconds, int ticks)
+    internal static int FramesFor(double seconds, int ticks)
     {
         var frames = 0;
         var time = 0.0;
@@ -2514,7 +2516,7 @@ public class WorldEdgeTest
         return frames;
     }
 
-    private static async Task PhysicsFrames(Node node, int count)
+    internal static async Task PhysicsFrames(Node node, int count)
     {
         var tree = node.GetTree();
         for (var i = 0; i < count; i++)
@@ -2523,7 +2525,7 @@ public class WorldEdgeTest
         }
     }
 
-    private static async Task<bool> WaitUntil(Node node, Func<bool> condition, int maxPhysicsFrames)
+    internal static async Task<bool> WaitUntil(Node node, Func<bool> condition, int maxPhysicsFrames)
     {
         for (var i = 0; i < maxPhysicsFrames && !condition(); i++)
         {
@@ -2539,7 +2541,7 @@ public class WorldEdgeTest
     /// it: an exception thrown in a signal handler doesn't reach the test. An exception thrown by
     /// <paramref name="step"/> ends the drive and is rethrown here, so a broken step can't keep the frames going.
     /// </summary>
-    private static async Task Drive(Node node, Func<int, bool> step, int maxFrames)
+    internal static async Task Drive(Node node, Func<int, bool> step, int maxFrames)
     {
         var tree = node.GetTree();
         var frame = 0;
@@ -2636,7 +2638,7 @@ public class WorldEdgeTest
     }
 
     /// <summary>An item type or feature the criterion needs is missing: allowed (N/A) only on the test-area pack.</summary>
-    private static void AssertNotFullPack(World world, string criterion, string what)
+    internal static void AssertNotFullPack(World world, string criterion, string what)
     {
         var area = world.MapLoader.Manifest!.Area;
         GD.Print($"WorldEdgeTest: {criterion} N/A: the '{area}' pack {what} (allowed by the spec on the test-area pack only)");
@@ -2648,22 +2650,22 @@ public class WorldEdgeTest
     /// <summary>Criterion 9 and 10's run-up: the distance to reach <paramref name="speed"/> at <paramref name="acceleration"/>.</summary>
     private static float RunUpDistance(float speed, float acceleration) => speed * speed / (2f * acceleration);
 
-    private static float Slope(Vector3 a, Vector3 b) =>
+    internal static float Slope(Vector3 a, Vector3 b) =>
         Mathf.RadToDeg(Mathf.Atan2(Mathf.Abs(a.Y - b.Y), Mathf.Max(Horizontal(a - b).Length(), 1e-6f)));
 
     /// <summary>Largest difference of the two bases' columns.</summary>
     private static float BasisDifference(Basis a, Basis b) =>
         Mathf.Max((a.Column0 - b.Column0).Length(), Mathf.Max((a.Column1 - b.Column1).Length(), (a.Column2 - b.Column2).Length()));
 
-    private static float YawOf(Vector3 direction) => Mathf.Atan2(-direction.X, -direction.Z);
+    internal static float YawOf(Vector3 direction) => Mathf.Atan2(-direction.X, -direction.Z);
 
-    private static Vector3 Horizontal(Vector3 v) => new(v.X, 0f, v.Z);
+    internal static Vector3 Horizontal(Vector3 v) => new(v.X, 0f, v.Z);
 
-    private static Vector3 ToVector(LocalPoint p) => new((float)p.X, (float)p.Y, (float)p.Z);
+    internal static Vector3 ToVector(LocalPoint p) => new((float)p.X, (float)p.Y, (float)p.Z);
 
-    private static Vector3 ToVector(PlanarPoint p) => new((float)p.X, 0f, (float)p.Z);
+    internal static Vector3 ToVector(PlanarPoint p) => new((float)p.X, 0f, (float)p.Z);
 
-    private static IEnumerable<Node> Descendants(Node root)
+    internal static IEnumerable<Node> Descendants(Node root)
     {
         foreach (var child in root.GetChildren())
         {
@@ -2675,9 +2677,9 @@ public class WorldEdgeTest
         }
     }
 
-    private static string Invariant(FormattableString text) => FormattableString.Invariant(text);
+    internal static string Invariant(FormattableString text) => FormattableString.Invariant(text);
 
-    private static void AssertPackPresent()
+    internal static void AssertPackPresent()
     {
         foreach (var file in new[] { MapPack.ManifestFile, MapPack.RoadGraphFile, MapPack.BuildingsFile, MapPack.PoisFile, MapPack.BoundaryFile })
         {

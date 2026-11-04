@@ -45,7 +45,8 @@ public class DeathSequenceTests
         Assert.Null(_sequence.Losses);
         Assert.Null(_sequence.Entry);
         Assert.Equal(3.0, _sequence.FallTime);
-        Assert.Equal(3.0, _sequence.ScreenTime);
+        Assert.Equal(5.0, _sequence.ScreenTime);
+        Assert.Equal(2.0, _sequence.MinScreenTime);
     }
 
     [Fact]
@@ -122,14 +123,14 @@ public class DeathSequenceTests
     }
 
     [Fact]
-    public void Advance_SixtyHertz_ReachesDeathScreenOnStep180AndRespawningOnStep360() // criterion 3
+    public void Advance_SixtyHertz_ReachesDeathScreenOnStep180AndRespawningOnStep480() // criterion 3
     {
         _sequence.EnterVoid(Entry);
         _changes.Clear();
         var deathScreenStep = 0;
         var respawningStep = 0;
 
-        for (var step = 1; step <= 400; step++)
+        for (var step = 1; step <= 600; step++)
         {
             _sequence.Advance(Step);
             if (deathScreenStep == 0 && _sequence.State == DeathState.DeathScreen)
@@ -144,7 +145,7 @@ public class DeathSequenceTests
         }
 
         Assert.Equal(180, deathScreenStep);
-        Assert.Equal(360, respawningStep);
+        Assert.Equal(480, respawningStep);
         Assert.Equal(
             [(DeathState.Falling, DeathState.DeathScreen), (DeathState.DeathScreen, DeathState.Respawning)],
             _changes);
@@ -208,7 +209,7 @@ public class DeathSequenceTests
 
         _sequence.Advance(3.0);
         Assert.Equal(DeathState.DeathScreen, _sequence.State);
-        _sequence.Advance(3.0 - 1e-6);
+        _sequence.Advance(5.0 - 1e-6);
         Assert.Equal(DeathState.DeathScreen, _sequence.State);
         _sequence.Advance(1e-6);
         Assert.Equal(DeathState.Respawning, _sequence.State);
@@ -224,7 +225,7 @@ public class DeathSequenceTests
         Assert.Equal(DeathState.DeathScreen, _sequence.State);
         Assert.Equal(0.5, _sequence.TimeInState, 1e-9);
 
-        _sequence.Advance(2.5);
+        _sequence.Advance(4.5);
         Assert.Equal(DeathState.Respawning, _sequence.State);
     }
 
@@ -240,7 +241,7 @@ public class DeathSequenceTests
         Assert.Equal(
             [(DeathState.Falling, DeathState.DeathScreen), (DeathState.DeathScreen, DeathState.Respawning)],
             _changes);
-        Assert.Equal(4.0, _sequence.TimeInState, 1e-9);
+        Assert.Equal(2.0, _sequence.TimeInState, 1e-9);
     }
 
     [Fact]
@@ -305,6 +306,196 @@ public class DeathSequenceTests
     {
         Assert.ThrowsAny<ArgumentException>(() => _sequence.FallTime = value);
         Assert.ThrowsAny<ArgumentException>(() => _sequence.ScreenTime = value);
+    }
+
+    // ----- Dismiss (criterion 3; Part B plan amendment 1) -----
+
+    [Theory]
+    [InlineData(-1.0)]
+    [InlineData(-1e-9)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void MinScreenTime_NegativeOrNonFinite_ThrowsAndKeepsTheValue(double value)
+    {
+        Assert.ThrowsAny<ArgumentException>(() => _sequence.MinScreenTime = value);
+        Assert.Equal(2.0, _sequence.MinScreenTime);
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(1.5)]
+    [InlineData(10.0)]
+    public void MinScreenTime_ZeroOrPositive_IsKept(double value)
+    {
+        _sequence.MinScreenTime = value;
+        Assert.Equal(value, _sequence.MinScreenTime);
+    }
+
+    [Fact]
+    public void Dismiss_JustBeforeMinScreenTime_ReturnsFalseAndChangesNothing() // criterion 3
+    {
+        MoveTo(DeathState.DeathScreen);
+        _sequence.Advance(_sequence.MinScreenTime - 1e-6);
+        _changes.Clear();
+        var time = _sequence.TimeInState;
+
+        Assert.False(_sequence.Dismiss());
+
+        Assert.Equal(DeathState.DeathScreen, _sequence.State);
+        Assert.Equal(time, _sequence.TimeInState);
+        Assert.Empty(_changes);
+    }
+
+    [Fact]
+    public void Dismiss_ExactlyAtMinScreenTime_MovesToRespawningWithOneStateChanged() // criterion 3
+    {
+        MoveTo(DeathState.DeathScreen);
+        _sequence.Advance(_sequence.MinScreenTime);
+        _changes.Clear();
+
+        Assert.True(_sequence.Dismiss());
+
+        Assert.Equal(DeathState.Respawning, _sequence.State);
+        Assert.Equal(0, _sequence.TimeInState);
+        Assert.Equal([(DeathState.DeathScreen, DeathState.Respawning)], _changes);
+    }
+
+    [Fact]
+    public void Dismiss_AfterMinScreenTime_MovesToRespawning() // criterion 3
+    {
+        MoveTo(DeathState.DeathScreen);
+        _sequence.Advance(_sequence.MinScreenTime + 1.0);
+        _changes.Clear();
+
+        Assert.True(_sequence.Dismiss());
+
+        Assert.Equal(DeathState.Respawning, _sequence.State);
+        Assert.Equal([(DeathState.DeathScreen, DeathState.Respawning)], _changes);
+    }
+
+    [Fact]
+    public void Dismiss_SixtyHertz_FalseOnStep119TrueOnStep120() // criterion 3: 2 s at 1/60 s steps
+    {
+        MoveTo(DeathState.DeathScreen);
+        for (var step = 1; step <= 119; step++)
+        {
+            _sequence.Advance(Step);
+        }
+
+        Assert.False(_sequence.Dismiss());
+        Assert.Equal(DeathState.DeathScreen, _sequence.State);
+
+        _sequence.Advance(Step); // step 120: 2.0 s
+        Assert.True(_sequence.Dismiss());
+        Assert.Equal(DeathState.Respawning, _sequence.State);
+    }
+
+    [Fact]
+    public void Dismiss_EarlyPressIsNotKept_ALaterAdvanceStaysOnTheScreenUntilScreenTime() // criterion 3
+    {
+        MoveTo(DeathState.DeathScreen);
+        _sequence.Advance(_sequence.MinScreenTime / 2);
+        Assert.False(_sequence.Dismiss());
+        _changes.Clear();
+
+        _sequence.Advance(_sequence.ScreenTime - (_sequence.MinScreenTime / 2) - 1e-6);
+
+        Assert.Equal(DeathState.DeathScreen, _sequence.State);
+        Assert.Empty(_changes);
+        _sequence.Advance(1e-6);
+        Assert.Equal(DeathState.Respawning, _sequence.State);
+    }
+
+    [Fact]
+    public void Dismiss_TimeCarriedIntoTheDeathScreen_Counts() // criterion 3
+    {
+        _sequence.EnterVoid(Entry);
+
+        _sequence.Advance(_sequence.FallTime + _sequence.MinScreenTime); // one step through Falling into DeathScreen
+
+        Assert.Equal(DeathState.DeathScreen, _sequence.State);
+        Assert.True(_sequence.Dismiss());
+        Assert.Equal(DeathState.Respawning, _sequence.State);
+    }
+
+    [Theory]
+    [InlineData(DeathState.Alive)]
+    [InlineData(DeathState.Falling)]
+    [InlineData(DeathState.Respawning)]
+    [InlineData(DeathState.Failed)]
+    public void Dismiss_OtherStates_ReturnsFalseAndChangesNothing(DeathState state) // criterion 3
+    {
+        MoveTo(state);
+        if (state == DeathState.Falling)
+        {
+            // Long enough in Falling that the time alone would allow a dismiss on the death screen.
+            _sequence.Advance(Math.Min(_sequence.MinScreenTime, _sequence.FallTime) * 0.9);
+            Assert.Equal(DeathState.Falling, _sequence.State);
+        }
+        else
+        {
+            _sequence.Advance(_sequence.MinScreenTime + 1.0);
+        }
+
+        _changes.Clear();
+        var time = _sequence.TimeInState;
+        var losses = _sequence.Losses;
+
+        Assert.False(_sequence.Dismiss());
+
+        Assert.Equal(state, _sequence.State);
+        Assert.Equal(time, _sequence.TimeInState);
+        Assert.Same(losses, _sequence.Losses);
+        Assert.Empty(_changes);
+    }
+
+    [Fact]
+    public void Dismiss_Twice_SecondReturnsFalse() // criterion 3
+    {
+        MoveTo(DeathState.DeathScreen);
+        _sequence.Advance(_sequence.MinScreenTime);
+
+        Assert.True(_sequence.Dismiss());
+        Assert.False(_sequence.Dismiss());
+        Assert.Equal(DeathState.Respawning, _sequence.State);
+    }
+
+    [Fact]
+    public void Dismiss_ThenCompleteRespawn_EndsAlive() // criterion 3
+    {
+        MoveTo(DeathState.DeathScreen);
+        _sequence.Advance(_sequence.MinScreenTime);
+        _sequence.Dismiss();
+        _changes.Clear();
+
+        _sequence.CompleteRespawn(true);
+
+        Assert.Equal(DeathState.Alive, _sequence.State);
+        Assert.Equal([(DeathState.Respawning, DeathState.Alive)], _changes);
+    }
+
+    [Fact]
+    public void Dismiss_MinScreenTimeZero_WorksAtOnceOnTheDeathScreen()
+    {
+        _sequence.MinScreenTime = 0;
+        MoveTo(DeathState.DeathScreen);
+
+        Assert.True(_sequence.Dismiss());
+        Assert.Equal(DeathState.Respawning, _sequence.State);
+    }
+
+    [Fact]
+    public void Dismiss_MinScreenTimeAboveScreenTime_NeverDismisses_TheScreenEndsByItself()
+    {
+        _sequence.MinScreenTime = _sequence.ScreenTime + 1;
+        MoveTo(DeathState.DeathScreen);
+        _sequence.Advance(_sequence.ScreenTime - 1e-6);
+
+        Assert.False(_sequence.Dismiss());
+        Assert.Equal(DeathState.DeathScreen, _sequence.State);
+        _sequence.Advance(1e-6);
+        Assert.Equal(DeathState.Respawning, _sequence.State);
     }
 
     [Theory]
@@ -386,7 +577,7 @@ public class DeathSequenceTests
         _sequence.Advance(1); // Alive: no change
         _sequence.EnterVoid(Entry);
         _sequence.EnterVoid(Entry); // ignored
-        for (var i = 0; i < 400; i++)
+        for (var i = 0; i < 600; i++)
         {
             _sequence.Advance(Step);
         }

@@ -39,10 +39,16 @@ namespace Roadman.Scenes;
 /// The world edge (<c>docs/specs/world-edge-game.md</c>): the player entering the <see cref="VoidTrigger"/>, or falling
 /// below the safety net (<see cref="SafetyNetMargin"/> under <c>cliff.bottom_y</c>), starts the death sequence
 /// (<see cref="Death"/>): it falls out under <see cref="VoidPull"/> with no collision while the <see cref="DeathCamera"/>
-/// pulls back, the <see cref="DeathScreen"/> follows, and it respawns in the spawn area. Other bodies:
+/// pulls back, the <see cref="DeathScreen"/> follows (any key or gamepad button press dismisses it after
+/// <see cref="MinScreenTime"/>, else it closes after <see cref="ScreenTime"/>), and it respawns in the spawn area. Other bodies:
 /// <see cref="IVoidFaller"/>s get <see cref="IVoidFaller.EnterVoid"/> once, other <see cref="RigidBody3D"/>s fall under
 /// the pull (<see cref="VoidFall"/>) or, below the safety net, are freed. The safety net checks the player and the bodies
-/// given to <see cref="TrackVoidBody"/>.
+/// given to <see cref="TrackVoidBody"/>, including the loose pieces of every barrier item that breaks.
+/// </para>
+/// <para>
+/// With <c>-- --perf &lt;spawn|roadblock&gt; &lt;out.json&gt; ...</c> (debug builds only) it adds a <see cref="PerfTool"/>,
+/// which measures frame times; <c>--no-world-edge</c> and <c>--no-space-sky</c> switch off
+/// <see cref="MapLoader.WorldEdgeEnabled"/> and <see cref="SpaceSkyEnabled"/> before the environment and the map are made.
 /// </para>
 /// </summary>
 public partial class World : Node3D
@@ -72,7 +78,8 @@ public partial class World : Node3D
     // Starting values of the world-edge exports (docs/specs/world-edge-game.md, "Exports"), also their first "last
     // valid value" for ApplyEdgeExports.
     private const float DefaultFallTime = 3f;
-    private const float DefaultScreenTime = 3f;
+    private const float DefaultScreenTime = 5f;
+    private const float DefaultMinScreenTime = 2f;
     private const float DefaultMaxFallTime = 10f;
     private const float DefaultSafetyNetMargin = 20f;
     private const float DefaultVoidOutwardAcceleration = 4f;
@@ -92,6 +99,7 @@ public partial class World : Node3D
     {
         FallTime = DefaultFallTime,
         ScreenTime = DefaultScreenTime,
+        MinScreenTime = DefaultMinScreenTime,
         MaxFallTime = DefaultMaxFallTime,
         SafetyNetMargin = DefaultSafetyNetMargin,
         VoidOutwardAcceleration = DefaultVoidOutwardAcceleration,
@@ -114,6 +122,14 @@ public partial class World : Node3D
 
     [Export]
     public float TonemapExposure { get; set; } = 1f;
+
+    /// <summary>
+    /// Whether the sky is the space sky (<see cref="SkyShaderPath"/>: the day sky with a starfield below the horizon).
+    /// False: Godot's plain <see cref="ProceduralSkyMaterial"/> day sky, for the performance measurement. Read once, when
+    /// the environment is made in <see cref="_Ready"/>.
+    /// </summary>
+    [Export]
+    public bool SpaceSkyEnabled { get; set; } = true;
 
     /// <summary>Debug camera start, relative to the terrain at the map origin. The camera looks at that point.</summary>
     [Export]
@@ -138,9 +154,16 @@ public partial class World : Node3D
     [Export(PropertyHint.Range, "0,30,0.05,or_greater,suffix:s")]
     public float FallTime { get; set; } = DefaultFallTime;
 
-    /// <summary>Seconds the death screen shows before the respawn.</summary>
+    /// <summary>Seconds the death screen shows before the respawn when nothing dismisses it.</summary>
     [Export(PropertyHint.Range, "0,30,0.05,or_greater,suffix:s")]
     public float ScreenTime { get; set; } = DefaultScreenTime;
+
+    /// <summary>
+    /// Seconds the death screen shows before a key or gamepad button press can dismiss it (<see cref="_Input"/>); a press
+    /// earlier is ignored.
+    /// </summary>
+    [Export(PropertyHint.Range, "0,30,0.05,or_greater,suffix:s")]
+    public float MinScreenTime { get; set; } = DefaultMinScreenTime;
 
     /// <summary>Seconds after which a falling rigid body (not the player) is freed whatever its height.</summary>
     [Export(PropertyHint.Range, "0,120,0.1,or_greater,suffix:s")]
@@ -230,9 +253,30 @@ public partial class World : Node3D
     /// <summary>The bodies besides the player that the safety net checks (<see cref="TrackVoidBody"/>).</summary>
     public IReadOnlyCollection<Node3D> TrackedVoidBodies => _trackedBodies.Keys;
 
+    /// <summary>The performance tool of a <c>--perf</c> run; null otherwise.</summary>
+    public PerfTool? Perf { get; private set; }
+
     public override void _Ready()
     {
         _projectGravity = ProjectSettings.GetSetting(GravitySetting, DefaultGravity).AsSingle();
+
+        // Read before the environment and the map loader are made: --no-space-sky and --no-world-edge change both.
+        PerfArgs? perf = null;
+        string? perfError = null;
+        try
+        {
+            perf = PerfArgs.Parse(OS.GetCmdlineUserArgs());
+        }
+        catch (ArgumentException ex)
+        {
+            perfError = ex.Message;
+        }
+
+        if (perf is { SpaceSky: false })
+        {
+            SpaceSkyEnabled = false;
+        }
+
         AddChild(CreateEnvironment());
         AddChild(CreateSun());
 
@@ -244,6 +288,15 @@ public partial class World : Node3D
         AddChild(VoidFall);
 
         MapLoader = new MapLoader { Name = "MapLoader" };
+        if (perf is not null)
+        {
+            MapLoader.WorldEdgeEnabled = perf.WorldEdge;
+            if (perf.MapId is { } perfMapId)
+            {
+                MapLoader.MapId = perfMapId;
+            }
+        }
+
         AddChild(MapLoader);
         HookMapSignals();
 
@@ -277,8 +330,29 @@ public partial class World : Node3D
             return;
         }
 
+        if (perfError is not null)
+        {
+            GD.PushError($"Perf: {perfError}");
+            GetTree().Quit(PerfExitCode.Error);
+            return;
+        }
+
+        if (perf is not null && !DebugBuild.IsDebug)
+        {
+            GD.PushError($"Perf: {PerfArgs.PerfFlag} needs a debug build");
+            GetTree().Quit(PerfExitCode.Error);
+            return;
+        }
+
         _screenshotRun = screenshot is not null;
         ResetSpawnRandom(Seed ?? SeedFromCommandLine());
+
+        if (perf is not null)
+        {
+            // Added before Load() so it hears MapLoaded or MapLoadFailed.
+            Perf = new PerfTool { Name = "PerfTool", Request = perf, Loader = MapLoader, World = this };
+            AddChild(Perf);
+        }
 
         if (screenshot is not null)
         {
@@ -344,6 +418,31 @@ public partial class World : Node3D
         CheckPlayerInVoid();
         CheckSafetyNet();
     }
+
+    /// <summary>
+    /// On the death screen, a new key press (not an echo) or gamepad button press calls
+    /// <see cref="DeathSequence.Dismiss"/>; when that ends the screen (at or after <see cref="MinScreenTime"/>), the event
+    /// is marked handled and the respawn runs in the next physics frame. Mouse buttons and joypad motion (sticks and
+    /// analog triggers) never count; a press before <see cref="MinScreenTime"/> is ignored.
+    /// </summary>
+    public override void _Input(InputEvent @event)
+    {
+        if (Death?.State == DeathState.DeathScreen && IsDismissPress(@event) && Death.Dismiss())
+        {
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="event"/> may dismiss the death screen: a keyboard key pressed (not an echo), or a gamepad
+    /// button pressed. Mouse buttons, mouse motion and joypad motion (including analog triggers) never do.
+    /// </summary>
+    public static bool IsDismissPress(InputEvent @event) => @event switch
+    {
+        InputEventKey { Pressed: true, Echo: false } => true,
+        InputEventJoypadButton { Pressed: true } => true,
+        _ => false,
+    };
 
     public override void _UnhandledInput(InputEvent @event)
     {
@@ -717,6 +816,23 @@ public partial class World : Node3D
 
     private void OnBodyEnteredVoid(Node3D body, Vector3 outward) => HandleVoidEntry(body, outward);
 
+    /// <summary>Hands the loose pieces of a broken barrier item to the safety net (<see cref="TrackVoidBody"/>).</summary>
+    private void TrackLoosePieces(Barriers barriers, string itemId)
+    {
+        if (!IsInstanceValid(barriers))
+        {
+            return;
+        }
+
+        foreach (var piece in barriers.LoosePiecesOf(itemId))
+        {
+            if (piece.IsInsideTree())
+            {
+                TrackVoidBody(piece);
+            }
+        }
+    }
+
     /// <summary>
     /// The safety net: the player and every tracked body below <see cref="SafetyNetMargin"/> under the slab that isn't
     /// falling yet are handled as void entries (rigid bodies freed).
@@ -895,6 +1011,7 @@ public partial class World : Node3D
     {
         FallTime = ValidEdgeExport(nameof(FallTime), FallTime, ref _validEdgeExports.FallTime);
         ScreenTime = ValidEdgeExport(nameof(ScreenTime), ScreenTime, ref _validEdgeExports.ScreenTime);
+        MinScreenTime = ValidEdgeExport(nameof(MinScreenTime), MinScreenTime, ref _validEdgeExports.MinScreenTime);
         MaxFallTime = ValidEdgeExport(nameof(MaxFallTime), MaxFallTime, ref _validEdgeExports.MaxFallTime);
         SafetyNetMargin = ValidEdgeExport(nameof(SafetyNetMargin), SafetyNetMargin, ref _validEdgeExports.SafetyNetMargin);
         VoidOutwardAcceleration = ValidEdgeExport(nameof(VoidOutwardAcceleration), VoidOutwardAcceleration, ref _validEdgeExports.VoidOutwardAcceleration);
@@ -911,6 +1028,7 @@ public partial class World : Node3D
 
         Death.FallTime = FallTime;
         Death.ScreenTime = ScreenTime;
+        Death.MinScreenTime = MinScreenTime;
         VoidPull.OutwardAcceleration = VoidOutwardAcceleration;
         VoidPull.DownAcceleration = VoidDownAcceleration;
         VoidFall.Pull = VoidPull;
@@ -945,6 +1063,7 @@ public partial class World : Node3D
     {
         public float FallTime;
         public float ScreenTime;
+        public float MinScreenTime;
         public float MaxFallTime;
         public float SafetyNetMargin;
         public float VoidOutwardAcceleration;
@@ -959,6 +1078,11 @@ public partial class World : Node3D
         if (MapLoader.VoidTrigger is { } trigger)
         {
             trigger.BodyEnteredVoid += OnBodyEnteredVoid;
+        }
+
+        if (MapLoader.Barriers is { } barriers)
+        {
+            barriers.ItemBroken += (itemId, _) => TrackLoosePieces(barriers, itemId);
         }
 
         RemovePlayer();
@@ -1092,8 +1216,12 @@ public partial class World : Node3D
     private WorldEnvironment CreateEnvironment()
     {
         // The day sky above the horizon and a starfield below it (materials/sky/space_sky.gdshader); its radiance pass
-        // keeps the former procedural ground, so ambient and reflected light are unchanged.
-        var sky = new Sky { SkyMaterial = new ShaderMaterial { Shader = GD.Load<Shader>(SkyShaderPath) } };
+        // keeps the former procedural ground, so ambient and reflected light are unchanged. Without the space sky:
+        // ProceduralSkyMaterial's defaults, which the shader's day sky copies.
+        Material skyMaterial = SpaceSkyEnabled
+            ? new ShaderMaterial { Shader = GD.Load<Shader>(SkyShaderPath) }
+            : new ProceduralSkyMaterial();
+        var sky = new Sky { SkyMaterial = skyMaterial };
         var environment = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Sky,

@@ -27,6 +27,7 @@ public sealed class EdgeGeometry
     private readonly PlanarPoint[][] _prisms;
     private readonly Dictionary<(long X, long Z), List<int>> _voidCells = [];
     private readonly (double SStart, double SEnd, double StartY, double EndY)[] _items;
+    private double? _voidInnerOffset;
 
     /// <exception cref="ArgumentNullException"><paramref name="boundary"/> is null.</exception>
     public EdgeGeometry(Boundary boundary)
@@ -165,6 +166,14 @@ public sealed class EdgeGeometry
     }
 
     /// <summary>
+    /// How far outside the ring the void trigger starts (the pack's <c>void.inner_offset_m</c>, which
+    /// <c>boundary.json</c> doesn't store): the smallest ring distance of any void prism footprint corner, m. The
+    /// pipeline keeps every prism at least that far out (within 1 mm), so a point this far plus a margin outward of a ring
+    /// point is in the trigger. Computed on first use; 0 when the trigger has no prisms.
+    /// </summary>
+    public double VoidInnerOffset => _voidInnerOffset ??= ComputeVoidInnerOffset();
+
+    /// <summary>
     /// The nearest point on the closed ring (segments i to i + 1, and the last point to the first). Ties within
     /// <see cref="Epsilon"/> go to the lower s: the first segment in ring order wins, so ring point 0 has s 0, never
     /// <see cref="BoundaryRing.LengthM"/>.
@@ -193,6 +202,20 @@ public sealed class EdgeGeometry
         var dx = (x - point.X) / distance;
         var dz = (z - point.Z) / distance;
         return IsInsideRing(x, z) ? new PlanarPoint(-dx, -dz) : new PlanarPoint(dx, dz);
+    }
+
+    private double ComputeVoidInnerOffset()
+    {
+        var smallest = double.PositiveInfinity;
+        foreach (var prism in _prisms)
+        {
+            foreach (var corner in prism)
+            {
+                smallest = Math.Min(smallest, Nearest(corner.X, corner.Z).Distance);
+            }
+        }
+
+        return double.IsPositiveInfinity(smallest) ? 0 : smallest;
     }
 
     /// <summary>

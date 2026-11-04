@@ -20,7 +20,11 @@ public partial class VoidTrigger : Area3D
     [Signal]
     public delegate void BodyEnteredVoidEventHandler(Node3D body, Vector3 outward);
 
-    /// <summary>The layers the trigger monitors.</summary>
+    /// <summary>
+    /// The layers the trigger monitors: the player, loose barrier pieces (<see cref="CollisionLayers.Barrier"/>) and
+    /// vehicles. Not the map, and not the unbroken barrier items (<see cref="CollisionLayers.BarrierStatic"/>), which
+    /// never move and would cost physics time each step.
+    /// </summary>
     public const uint MonitoredLayers = CollisionLayers.Player | CollisionLayers.Barrier | CollisionLayers.Vehicle;
 
     /// <summary>The geometry the outward directions come from; set by <see cref="Create"/>.</summary>

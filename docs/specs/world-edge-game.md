@@ -45,6 +45,7 @@ Out of scope (later specs): vehicles and the car-through-roadblock test with a r
   - States: `Alive`, `Falling`, `DeathScreen`, `Respawning`, `Failed`.
   - `EnterVoid(entry)` in `Alive` records the losses (`Losses`: the money and the gear item ids the player has), then calls `PlayerState.Die()` and moves to `Falling`. So `Die()` runs at the moment the player enters the void (decided). In any other state it does nothing, so a body can't die twice in one sequence.
   - `Advance(dt)`: `Falling` lasts `FallTime`, then `DeathScreen`; `DeathScreen` lasts `ScreenTime`, then `Respawning`. A negative or non-finite `dt` is an `ArgumentException`.
+  - `Dismiss()`: in `DeathScreen` once `TimeInState` is at least `MinScreenTime`, moves to `Respawning` and returns true; earlier, and in every other state, it changes nothing and returns false.
   - `CompleteRespawn(success)` in `Respawning` moves to `Alive` or `Failed`; in another state it is an `InvalidOperationException`.
   - `Reset()` returns to `Alive` from any state (map reload).
   - Events: `StateChanged(from, to)`. Only state changes raise it.
@@ -83,7 +84,7 @@ Per type:
 
 **Restoring** (decided). When the player respawns after a death, and on a map reload, every broken item is rebuilt as it was at load (static body and visible instances back), and every loose piece still in the scene is freed.
 
-**Collision layers.** Barrier items and loose pieces get their own layer, `CollisionLayers.Barrier`. The player's mask includes it. The camera's spring arm doesn't (decided), and neither do the map rays (street label, inspector, `MapLoader` ground rays).
+**Collision layers.** Unbroken barrier items are on `CollisionLayers.BarrierStatic`, which the void trigger doesn't monitor; loose pieces are on `CollisionLayers.Barrier`, which it does (amendment 5 of Part B). The player's mask includes both. The camera's spring arm doesn't (decided), and neither do the map rays (street label, inspector, `MapLoader` ground rays).
 
 ### Void trigger
 
@@ -111,7 +112,7 @@ Replaces the temporary fall respawn (decided). It catches anything that leaves t
    - The player's collision mask is cleared (decided), so it can't catch on the ledge, the cliff or a barrier, and falls cleanly. Its collision layer stays, so the trigger and the safety net still see it.
    - Gravity is replaced by `VoidPull` with the entry's `outward`; the player keeps its velocity at entry.
    - A `DeathCamera` (a `Camera3D` added by `World`, in every build) starts at the player camera's global transform and `Fov` and becomes current. Over `PullBackTime` it moves (smoothstep) to the entry point's nearest ring point + `outward × PullBackDistance` + `PullBackHeight` up, looking at the ring point `LookAtDrop` below the ledge. It looks down past the edge, so the slab's edge and cliff face stand against the starfield below the horizon. The camera has no collision.
-2. **Death screen** (`ScreenTime`, timed): the `DeathScreen` `CanvasLayer` fades in over `FadeTime`. The player is hidden and its physics stopped. Then it moves on by itself.
+2. **Death screen**: the `DeathScreen` `CanvasLayer` fades in over `FadeTime`. The player is hidden and its physics stopped. Once it has been shown for `MinScreenTime`, a new press of any keyboard key or gamepad button (not an echo; mouse buttons and the analog triggers don't count) dismisses it (`DeathSequence.Dismiss()`), and the respawn runs in the next physics frame. A press before `MinScreenTime` is ignored, not kept for later. Without a press it moves on by itself after `ScreenTime`.
 3. **Respawning:** broken barriers are restored (see "Restoring"). The existing spawn draw procedure (`SpawnPicker`, ray and capsule checks, `SpawnMaxAttempts`) places the player in `spawn_area.open_ground` with zero velocity and a random facing. Normal gravity, its collision mask and input come back, the player is shown, the player camera turns behind it (`PlaceBehind`) and becomes current, the death screen fades out, and `World.PlayerRespawned(position)` fires. The player camera captures the mouse again under its existing rule (current and focused).
 4. **Respawn failure:** the spawn error is pushed (path, reason, `/regen-map <id>`) as for a failed first spawn, the player is freed, the death screen is hidden and the state is `Failed`. Debug builds fall back to the debug camera.
 
@@ -154,7 +155,7 @@ Accepted as starting points (decided); tuned in the playtest.
 | --- | --- | --- |
 | `LandFence.PostSpacing` (also water fences) | 2.5 m | Breaks a 20 m segment (`fence.max_segment_m`) into 8 bays; 4,398 fence posts on B |
 | `Roadblock`, `LandFence`, `WaterFence` height | 0.9 m | The decided maximum (ADR 0016) |
-| `BreakSpeed` | 3 m/s | Low enough that a vehicle moving faster than walking pace drives through |
+| `BreakSpeed` (`BarrierSettings.BreakingSpeed`) | 3 m/s | Low enough that a vehicle moving faster than walking pace drives through |
 | `VoidPull.OutwardAcceleration` | 4 m/s² | From rest at the trigger's inner edge, the capsule clears the 2 m ledge (1.3 m plus its 0.3 m radius) in about 0.9 s |
 | `VoidPull.DownAcceleration` | project gravity (9.8 m/s²) | Falls like normal gravity once off the ledge |
 | `FallTime` | 3.0 s | A drop of about 44 m from rest, past the cliff's bottom where the face is shortest (30 m) |
@@ -162,19 +163,20 @@ Accepted as starting points (decided); tuned in the playtest.
 | `PullBackDistance` | 60 m | At a 70° vertical field of view the frame is about 84 m tall there, more than the cliff's 30 to 81.6 m |
 | `PullBackHeight` | −10 m | Below the ledge, so the slab's edge reads against the starfield rather than the town |
 | `LookAtDrop` | 15 m | The same framing as the `world-edge` preset (look-at 15 m below the ledge) |
-| `ScreenTime` | 3.0 s | Long enough to read three short lines |
+| `MinScreenTime` | 2.0 s | No dismissing before this, so a button held or mashed during the fall doesn't skip the screen unread |
+| `ScreenTime` | 5.0 s | Closes by itself after this when nothing is pressed |
 | `FadeTime` | 0.5 s | Not abrupt |
 | `MaxFallTime` | 10 s | Frees loose pieces that land on something and never leave the trigger |
 | `SafetyNetMargin` | 20 m | The temporary rule's depth; equal to `void.width_m`, so on Somero the net is at the trigger's floor (y 31.8) |
 
 ### Performance
 
-The world edge (barriers, trigger, safety net and backdrop together) costs **under 1 ms per frame** on the full Somero pack (decided). Measured on the user's development Mac, with the world edge built and with it left out (a `MapLoader` export for the measurement), as the difference in mean frame time over 600 frames:
+The world edge (barriers, trigger, safety net and backdrop together) costs **under 1 ms per frame** on the full Somero pack (decided). Measured on the user's development Mac, with the world edge built and with it left out (`MapLoader.WorldEdgeEnabled` and `World.SpaceSkyEnabled` exports for the measurement; see amendment 3 of Part B), as the difference in mean cost per frame over 600 frames (method below):
 
 - standing at the spawn;
 - standing beside the road 52 north roadblock (`roadblock:cut:way/1445392542:0`, the `world-edge` preset's), looking along the fence.
 
-Process and physics time come from a headless run (`Performance` monitors); rendering from a windowed run like the screenshots. The check is a script or test that skips when the full pack isn't there (CI has only the test-area pack), and the implementation reports the figures.
+Process and physics time come from a headless run (the mean real frame time at a fixed rate of one physics step per frame, with no frame cap, so a frame's time is its process and physics work; the `Performance` time monitors hold only the peak of each second, so they are reported for information only); rendering from a windowed run like the screenshots (the viewport's measured render time, CPU and GPU parts, from `RenderingServer`). Each configuration runs 3 times, alternating with and without the world edge, and each cost is the median with minus the median without. The budget check: the headless cost plus the windowed render-time cost is under 1 ms, at each spot. The check is a script that skips when the full pack isn't there (CI has only the test-area pack), and the implementation reports the figures.
 
 ### Screenshots
 
@@ -192,11 +194,11 @@ Process and physics time come from a headless run (`Performance` monitors); rend
 
 1. `EdgeGeometry.IsInVoid` is true for 10,000 points sampled in the void band of the test-area and full packs' `boundary.json` (between 1 m and 21 m outside the ring, between `bottom_y` and `top_y`) and false for 10,000 points inside the boundary. `OutwardAt` returns unit vectors pointing out of the ring, including at a convex and a concave corner, and resolves ties to the lower `s`. `IsBelowSafetyNet` is false at exactly `bottom_y − margin` and true just below.
 2. `BarrierLayout`, for every roadblock and fence in both packs: every piece's top is at most 0.9 m above its base (fence line or, for roadblocks, a base given by the test), no piece reaches more than 1.0 m outward, the items' collision footprints cover the ring with no gap over 0.1 m, posts are at most `PostSpacing` apart, and no two items put a post at the same end.
-3. `DeathSequence`: `EnterVoid` in `Alive` records the money and gear as `Losses`, then calls `Die()` once (money and gear cleared, `Died` raised once) and moves to `Falling`; a second `EnterVoid` in any other state changes nothing. `Advance` moves through `DeathScreen` to `Respawning` at `FallTime` and `FallTime + ScreenTime` (boundaries exact, per step and across steps); `CompleteRespawn(true/false)` gives `Alive` / `Failed`, and in another state throws; `Reset()` returns to `Alive`; a negative or non-finite `dt` throws.
+3. `DeathSequence`: `EnterVoid` in `Alive` records the money and gear as `Losses`, then calls `Die()` once (money and gear cleared, `Died` raised once) and moves to `Falling`; a second `EnterVoid` in any other state changes nothing. `Advance` moves through `DeathScreen` to `Respawning` at `FallTime` and `FallTime + ScreenTime` (boundaries exact, per step and across steps); `Dismiss()` moves `DeathScreen` to `Respawning` at or after `MinScreenTime` (boundary exact) and returns false, changing nothing, before it and in every other state; `CompleteRespawn(true/false)` gives `Alive` / `Failed`, and in another state throws; `Reset()` returns to `Alive`; a negative or non-finite `dt` throws.
 4. `VoidPull` gives `outward × OutwardAcceleration + down × DownAcceleration` and rejects a non-unit or non-horizontal `outward`.
 5. `DeathScreenText.Format` gives "The Earth is flat", "You fell off the edge of the world" and the losses line, for losses with money and two items (ids in ordinal order), with money only (`Gear lost: none`), and with nothing (`Money lost: 0 · Gear lost: none`).
 6. `FallReset`, `World.FallRespawnDepth` and the temporary respawn code are gone; no file in `game/` or `docs/` describes the temporary fall respawn as current behaviour.
-7. On the test-area pack, the headless `World` places one barrier item per roadblock and fence, of the right type, named after its id, under `MapLoader/Edge/Barriers`, each a `StaticBody3D` on `CollisionLayers.Barrier`, with the visuals in batched `MultiMeshInstance3D`s and no `RigidBody3D` in the scene; and a `VoidTrigger` with one shape per prism; no errors pushed. On a map reload both are rebuilt with the same counts. With `boundary.json` missing, there are no barriers and no trigger, and the existing error is the only one.
+7. On the test-area pack, the headless `World` places one barrier item per roadblock and fence, of the right type, named after its id, under `MapLoader/Edge/Barriers`, each a `StaticBody3D` on `CollisionLayers.BarrierStatic` (not monitored by the trigger), with the visuals in batched `MultiMeshInstance3D`s and no `RigidBody3D` in the scene; and a `VoidTrigger` with one shape per prism; no errors pushed. On a map reload both are rebuilt with the same counts. With `boundary.json` missing, there are no barriers and no trigger, and the existing error is the only one.
 8. No barrier item overlaps a `map_buildings` body or a void prism, and every roadblock stand's base is within 0.05 m of the ground or road hit under it.
 9. Walking at `RunSpeed` into a fence, a water fence and a roadblock (positions taken from `boundary.json`, not hard-coded) stops the player inside the boundary within 3 s, and no item breaks.
 10. From a run-up at `RunSpeed`, the player jumps a land fence segment where the terrain under it is lowest relative to its line, and lands beyond it.
@@ -205,7 +207,7 @@ Process and physics time come from a headless run (`Performance` monitors); rend
 13. A player placed 1.5 m outward of a boundary point on the ledge enters the void within one physics frame: `Died` fires once, money and gear are empty, the wanted level is 0, the losses hold what it had, its input is off, its collision mask is 0 and `DeathCamera` is current.
 14. During `Falling`, the player moves outward and down: its distance from the ring grows and its y falls every frame, and its velocity changes by `VoidPull` per step (± 1 %), not by gravity alone.
 15. The death camera starts at the player camera's transform and `Fov`, reaches its target (± 0.01 m) at `PullBackTime` and stays there, and looks at the ring point `LookAtDrop` below the ledge.
-16. At `FallTime` the death screen is visible with the three lines and the player hidden; at `FallTime + ScreenTime` the player is inside `spawn_area.open_ground` on the floor within 120 physics frames, with zero velocity at placement, input on, its collision mask back, normal gravity, the player camera current and behind it, the death screen hidden, and `PlayerRespawned` fired once.
+16. At `FallTime` the death screen is visible with the three lines and the player hidden; at `FallTime + ScreenTime` the player is inside `spawn_area.open_ground` on the floor within 120 physics frames, with zero velocity at placement, input on, its collision mask back, normal gravity, the player camera current and behind it, the death screen hidden, and `PlayerRespawned` fired once. On the death screen, a key press or gamepad button press just before `MinScreenTime` changes nothing (and isn't kept); one at `MinScreenTime` or later starts the same respawn in the next physics frame; a mouse button press never does.
 17. After criterion 12 broke a roadblock, a player death and respawn rebuilds it (static body back, instances visible, no loose pieces left); a map reload does the same.
 18. With `--seed <n>`, two runs of the same death respawn at the same point.
 19. A respawn where every draw fails (blocking bodies, as in the player-on-foot tests) pushes the spawn error, frees the player, hides the death screen and leaves the state `Failed`; a debug build is on the debug camera.
@@ -216,7 +218,7 @@ Process and physics time come from a headless run (`Performance` monitors); rend
 24. Screenshot `world-edge` (full pack) shows the red-and-white roadblock across road 52 with fences on both sides, and the starfield below the horizon past the edge. Checked by eye.
 25. Screenshots `--death fall` and `--death screen` on `world-edge` show the slab's edge and cliff against the starfield, and the death screen with its three lines. Checked by eye. Outside a debug build, or with `--player` or `--inspect`, `--death` exits 1. On a test-area pack it is N/A (exit 2).
 26. Every other preset keeps its exit code; the street-level images show no visible lighting change from the new sky (checked by eye against the previous images).
-27. Performance: on the full Somero pack, the world edge adds under 1 ms to the mean frame time at the spawn and beside the road 52 north roadblock, in the headless and the windowed measurement; the implementation reports the figures and the barrier item and piece counts.
+27. Performance: on the full Somero pack, at the spawn and beside the road 52 north roadblock, the world edge's headless cost (mean frame time at one physics step per frame) plus its windowed render-time cost (medians of 3 alternating runs, see "Performance") is under 1 ms; the implementation reports the figures and the barrier item and piece counts.
 28. No code, asset or text names or imitates another game (reviewer check).
 29. `/verify` passes: dotnet build, test and format, pytest and ruff (unchanged), the headless import and run, gdUnit4, the export check and the screenshots.
 30. Playtest (the user): the barriers read as roadblocks and fences, are easy to jump, and the death sequence and screen feel right; the starting values are tuned and recorded in the exports.
@@ -247,7 +249,7 @@ Process and physics time come from a headless run (`Performance` monitors); rend
   5. Breaking is detected before the physics step (a sweep of each breaker's shape along its motion), so a breaker isn't stopped by the static body first (Part B).
   6. The sky shader draws the old ground colour below the horizon in the radiance pass, so the lighting doesn't change.
   7. The performance measurement is a separate script, not part of `/verify` (Part B).
-  8. The death screen stays timed (`ScreenTime`), with no dismiss input.
+  8. The death screen stays timed (`ScreenTime`), with no dismiss input. (Replaced by amendment 1 of Part B.)
 - 2026-11-04, implementation of part A:
   1. `EdgeGeometry.LedgeHeightAt(s)` gives the ledge height for the death camera (linear between the covering item's end heights, ADR 0015).
   2. The mouse is released while the death camera is current (the player camera's existing rule, as with the debug camera) and captured again at the respawn; the run toggle keeps its state.
@@ -261,6 +263,14 @@ Process and physics time come from a headless run (`Performance` monitors); rend
   1. Building collision is the extruded footprint (ADR 0006 amendment): the old minimum rotated rectangle of `osm:way/1494929523` reached 3.7 m past the boundary, so two fences stood inside it.
   2. Void prisms stay at least `void.inner_offset_m` from the whole ring, and the build fails on boundary notches or spikes narrower than 3 m (`world_edge.min_feature_width_m`; ADR 0015 amendment). Near convex corners the prisms lie up to 5 cm outside the 1 m circle (the user's choice, for fewer shapes), so criterion 1's band samples start at 1.05 m instead of 1 m.
   3. Boundary B was cleaned to pass that rule. The figures in "Context" change to: ring 10,330 m, 162 points; 41 roadblocks (34 drivable), unchanged; 735 fences (718 land, 17 water); 530 void prisms. The road 52 roadblocks and the `world-edge` preset are unchanged.
+
+- 2026-11-04, plan of part B (the user's decisions):
+  1. The death screen can be dismissed: any keyboard key or gamepad button pressed after `MinScreenTime` (2 s) dismisses it; without a press it closes after `ScreenTime`, now 5 s. Mouse buttons and the analog triggers don't count. Replaces amendment 8 of the plan; ADR 0017 has a note.
+  2. Breaking: each physics frame, before the step, every breaker (a `PhysicsBody3D` implementing `IBarrierBreaker`, in the group `Barriers.BreakerGroup`) sweeps its collision shapes along its velocity over the step against the barrier layer. An item it hits breaks when the breaker's speed (`IBarrierBreaker.BreakerVelocity`; the item is static, so this is the relative speed) is at least `BreakSpeed`. `BreakSpeed` and the loose pieces' density are in `BarrierSettings` ("Breaking").
+  3. Performance: `MapLoader.WorldEdgeEnabled` (barriers, trigger and edge geometry, so no safety net either) and `World.SpaceSkyEnabled` (false: a plain procedural day sky). The "without" runs switch both off, so the 1 ms budget covers the whole world edge, sky included; a third run with only the sky off gives the sky's share, reported separately.
+  4. `--death fall` holds the sequence in `Falling` (and `--death screen` on the death screen) while the capture settles, because only 0.5 s lies between the end of `PullBackTime` and the death screen.
+  5. Collision layers (decided after a first measurement that read the `Performance` time monitors, which hold the peak of each second, and so showed about 1 ms; measured correctly (amendment 6), the trigger monitoring the 776 static items cost 0.11 ms headless at the spawn and 0.07 ms at the road 52 roadblock, and with this split 0.011 and 0.007 ms): unbroken items go on a new layer, `CollisionLayers.BarrierStatic`, which the void trigger doesn't monitor (a static item never moves into the void); loose pieces stay on `CollisionLayers.Barrier`, which it does. The player's mask and the loose pieces' mask cover both; the spring arm and map rays neither. Replaces "Barrier items and loose pieces get their own layer, `CollisionLayers.Barrier`" under "Collision layers" and the layer in criterion 7; ADR 0017 has the change.
+  6. The performance measurement is as amended under "Performance": headless runs measure the mean real frame time at one physics step per frame (`--fixed-fps`, no frame cap) rather than the peak-holding `Performance` monitors; windowed runs measure render time (CPU and GPU) rather than real frame time, 3 alternating runs per configuration, medians, and the budget is the headless cost plus the windowed render cost.
 
 ## Open questions
 

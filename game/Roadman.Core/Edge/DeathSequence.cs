@@ -11,7 +11,10 @@ public enum DeathState
     /// <summary>Falling into the void, for <see cref="DeathSequence.FallTime"/>.</summary>
     Falling,
 
-    /// <summary>The death screen, for <see cref="DeathSequence.ScreenTime"/>.</summary>
+    /// <summary>
+    /// The death screen, for <see cref="DeathSequence.ScreenTime"/>, or until <see cref="DeathSequence.Dismiss"/> after
+    /// <see cref="DeathSequence.MinScreenTime"/>.
+    /// </summary>
     DeathScreen,
 
     /// <summary>Waiting for the engine to place the player again (<see cref="DeathSequence.CompleteRespawn"/>).</summary>
@@ -35,7 +38,8 @@ public sealed record VoidEntry(LocalPoint Position, PlanarPoint Outward);
 /// The death and respawn state machine (<c>docs/specs/world-edge-game.md</c>, "Death sequence"): <see cref="EnterVoid"/>
 /// in <see cref="DeathState.Alive"/> records the losses, calls <see cref="PlayerState.Die"/> and starts the fall;
 /// <see cref="Advance"/> moves through <see cref="DeathState.Falling"/> and <see cref="DeathState.DeathScreen"/> to
-/// <see cref="DeathState.Respawning"/>; <see cref="CompleteRespawn"/> ends it. <see cref="StateChanged"/> is raised
+/// <see cref="DeathState.Respawning"/>, or <see cref="Dismiss"/> ends the death screen early once it has been shown for
+/// <see cref="MinScreenTime"/>; <see cref="CompleteRespawn"/> ends it. <see cref="StateChanged"/> is raised
 /// only on real changes.
 /// </summary>
 public sealed class DeathSequence
@@ -45,7 +49,8 @@ public sealed class DeathSequence
 
     private readonly PlayerState _player;
     private double _fallTime = 3.0;
-    private double _screenTime = 3.0;
+    private double _screenTime = 5.0;
+    private double _minScreenTime = 2.0;
 
     /// <exception cref="ArgumentNullException"><paramref name="player"/> is null.</exception>
     public DeathSequence(PlayerState player)
@@ -71,6 +76,17 @@ public sealed class DeathSequence
     {
         get => _screenTime;
         set => _screenTime = CheckDuration(value, nameof(ScreenTime));
+    }
+
+    /// <summary>
+    /// Seconds the death screen must have been shown before <see cref="Dismiss"/> ends it. It may exceed
+    /// <see cref="ScreenTime"/>; then the screen only ends by itself.
+    /// </summary>
+    /// <exception cref="ArgumentException">Set to a negative or non-finite value.</exception>
+    public double MinScreenTime
+    {
+        get => _minScreenTime;
+        set => _minScreenTime = CheckDuration(value, nameof(MinScreenTime));
     }
 
     /// <summary>The current state; starts at <see cref="DeathState.Alive"/>.</summary>
@@ -160,6 +176,23 @@ public sealed class DeathSequence
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Dismisses the death screen (a key or button press): in <see cref="DeathState.DeathScreen"/> once
+    /// <see cref="TimeInState"/> is at least <see cref="MinScreenTime"/> (minus <see cref="BoundaryTolerance"/>), moves to
+    /// <see cref="DeathState.Respawning"/>. Earlier, and in every other state, it changes nothing; the press isn't kept.
+    /// </summary>
+    /// <returns>True when it moved to <see cref="DeathState.Respawning"/>.</returns>
+    public bool Dismiss()
+    {
+        if (State != DeathState.DeathScreen || TimeInState < MinScreenTime - BoundaryTolerance)
+        {
+            return false;
+        }
+
+        ChangeState(DeathState.Respawning, 0);
+        return true;
     }
 
     /// <summary>

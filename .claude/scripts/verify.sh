@@ -215,6 +215,22 @@ else
       *) report FAIL "screenshot player" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
     esac
   fi
+  # The death sequence at the world edge: the death camera's frame and the death screen (docs/specs/world-edge-game.md,
+  # criterion 25). N/A on a test-area pack, as the world-edge preset is.
+  for death in fall screen; do
+    log="$LOGS/screenshot-world-edge-death-$death.log"
+    if ! grep -qx "world-edge" <<<"$PRESETS"; then
+      report N/A "screenshot death $death" "pack has no world-edge preset"
+      continue
+    fi
+    screenshot_preset "$GODOT_BIN" "$MAP_ID" world-edge "$SHOTS/world-edge-death-$death.png" "$log" --death "$death" --seed 1
+    case $? in
+      0) report PASS "screenshot death $death" "build/screenshots/world-edge-death-$death.png" ;;
+      2) report N/A "screenshot death $death" "outside built area (log: $log)" ;;
+      124) report FAIL "screenshot death $death" "timed out after ${GODOT_SCREENSHOT_TIMEOUT:-120}s (log: $log)" ;;
+      *) report FAIL "screenshot death $death" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
+    esac
+  done
 fi
 
 echo "verify summary (logs: $LOGS)"

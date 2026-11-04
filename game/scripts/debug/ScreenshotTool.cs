@@ -5,6 +5,7 @@ using Path = System.IO.Path;
 using System.Linq;
 using System.Threading.Tasks;
 using Godot;
+using Roadman.Core.Edge;
 using Roadman.Core.Maps;
 using Roadman.Core.Tools;
 using Roadman.Hud;
@@ -14,7 +15,7 @@ namespace Roadman.Debug;
 
 /// <summary>
 /// Renders the world from a named camera preset to a PNG and quits:
-/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--seed &lt;n&gt;]</c>.
+/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--seed &lt;n&gt;]</c>.
 /// <para>
 /// The image comes from its own <see cref="SubViewport"/> of <see cref="ImageSize"/>, so it doesn't depend on the
 /// window size, display scaling or where the window is. Rendering needs a real display server: the tool refuses to
@@ -26,6 +27,18 @@ namespace Roadman.Debug;
 /// shown; the street label follows it. Once it is on the floor, the capture camera copies the player camera's transform
 /// and field of view every frame for <see cref="SettleFrames"/> frames, so the image is the third-person view. The
 /// player camera itself never becomes current: the capture camera renders in its own viewport.
+/// </para>
+/// <para>
+/// With <c>--death &lt;fall|screen&gt;</c> (debug builds only; <c>docs/specs/world-edge-game.md</c>, "Screenshots"), after
+/// the usual checks the spawned player is put at the ring point nearest the preset's look-at x/z,
+/// <see cref="EdgeGeometry.VoidInnerOffset"/> + <see cref="DeathOutwardMargin"/> outward, at the ledge's height
+/// (<see cref="EdgeGeometry.LedgeHeightAt"/>), facing outward, which starts the death sequence. <c>fall</c> holds the
+/// sequence in <see cref="DeathState.Falling"/> (<see cref="Scenes.World.FallTime"/> set to <see cref="DeathHoldTime"/>)
+/// and captures the <see cref="Scenes.Edge.DeathCamera"/>'s frame once its pull-back has ended; <c>screen</c> holds it on
+/// the death screen (<see cref="Scenes.World.ScreenTime"/> set to <see cref="DeathHoldTime"/>), moves the
+/// <see cref="Hud.DeathScreen"/> into the capture viewport and captures it once it has faded in. The capture camera copies
+/// the death camera's transform and field of view every settle frame; the death camera is current only in the window's
+/// viewport, whose 3D view isn't rendered.
 /// </para>
 /// </summary>
 public partial class ScreenshotTool : Node
@@ -77,6 +90,34 @@ public partial class ScreenshotTool : Node
     /// </summary>
     [Export]
     public int PlayerFloorWaitFrames { get; set; } = 60;
+
+    /// <summary>
+    /// <c>--death</c>: how far beyond the void trigger's inner edge (<see cref="EdgeGeometry.VoidInnerOffset"/>) the player
+    /// is put, m (the spec's <c>void.inner_offset_m</c> + 1 m).
+    /// </summary>
+    [Export]
+    public float DeathOutwardMargin { get; set; } = 1f;
+
+    /// <summary>
+    /// <c>--death</c>: what <see cref="Scenes.World.FallTime"/> (<c>fall</c>) or <see cref="Scenes.World.ScreenTime"/>
+    /// (<c>screen</c>) is set to, s, so the sequence holds in the captured stage while the image settles; also
+    /// <see cref="Scenes.World.MinScreenTime"/> (both), so no key press in the window dismisses the death screen.
+    /// </summary>
+    [Export]
+    public float DeathHoldTime { get; set; } = 3600f;
+
+    /// <summary>
+    /// <c>--death</c>: physics frames to wait for the death sequence to start after the player is placed. The world tests
+    /// the player against the void prisms each physics frame, so it starts in the first; 10 is a tenfold allowance.
+    /// </summary>
+    [Export]
+    public int DeathStartWaitFrames { get; set; } = 10;
+
+    /// <summary>
+    /// <c>--death</c>: seconds beyond the stage's own length (the pull-back, or the fall plus the fade) to wait for it.
+    /// </summary>
+    [Export]
+    public float DeathStageMarginSeconds { get; set; } = 5f;
 
     /// <summary>
     /// Whether <see cref="Finish"/> quits the scene tree with the exit code (the command-line run). Tests set it false
@@ -175,6 +216,12 @@ public partial class ScreenshotTool : Node
             return;
         }
 
+        if (Request.Death is not null && !DebugBuild.IsDebug)
+        {
+            Finish(ScreenshotExitCode.Error, $"{ScreenshotArgs.DeathFlag} needs a debug build");
+            return;
+        }
+
         if (DisplayServer.GetName() == "headless")
         {
             Finish(
@@ -203,6 +250,12 @@ public partial class ScreenshotTool : Node
         if (Request.Player && World is null)
         {
             Finish(ScreenshotExitCode.Error, "--player needs the World set on the ScreenshotTool before it is added");
+            return;
+        }
+
+        if (Request.Death is not null && World is null)
+        {
+            Finish(ScreenshotExitCode.Error, $"{ScreenshotArgs.DeathFlag} needs the World set on the ScreenshotTool before it is added");
             return;
         }
 
@@ -403,7 +456,13 @@ public partial class ScreenshotTool : Node
         GD.Print(FormattableString.Invariant(
             $"Screenshot: preset '{preset.Name}' camera at ({camera.X:0.###}, {camera.Y:0.###}, {camera.Z:0.###}), looking at ({target.X:0.###}, {target.Y:0.###}, {target.Z:0.###})"));
 
-        if (Request!.Player)
+        if (Request!.Death is { } death)
+        {
+            await CaptureDeathAsync(death, placement);
+            return;
+        }
+
+        if (Request.Player)
         {
             if (await PlacePlayerAsync(placement) is not { } playerCamera)
             {
@@ -468,22 +527,9 @@ public partial class ScreenshotTool : Node
     {
         var world = World!;
         var loader = Loader!;
-        var maxSpawnFrames = world.SpawnPhysicsWaitFrames + PlayerSpawnMarginFrames;
         var tree = GetTree();
-        for (var frame = 0; !HasPlayer(world) && world.LastSpawnFailure is null && frame < maxSpawnFrames; frame++)
+        if (!await WaitForPlayerAsync(ScreenshotArgs.PlayerFlag))
         {
-            await ToSignal(tree, SceneTree.SignalName.PhysicsFrame);
-            if (_finished || !IsInsideTree())
-            {
-                return null;
-            }
-        }
-
-        if (!HasPlayer(world))
-        {
-            var reason = world.LastSpawnFailure
-                ?? FormattableString.Invariant($"no spawn within {maxSpawnFrames} physics frames");
-            Finish(ScreenshotExitCode.Error, $"--player: the player didn't spawn ({reason}); {MapPack.RegenHint(loader.ResolvedMapId)}");
             return null;
         }
 
@@ -542,6 +588,161 @@ public partial class ScreenshotTool : Node
             FormattableString.Invariant(
                 $"--player: the player isn't on the floor after {PlayerFloorWaitFrames} physics frames at ({feet.X:0.###}, {feet.Y:0.###}, {feet.Z:0.###})"));
         return null;
+    }
+
+    /// <summary>
+    /// Waits for the world's spawned player (up to <see cref="Scenes.World.SpawnPhysicsWaitFrames"/> +
+    /// <see cref="PlayerSpawnMarginFrames"/> physics frames, or until the spawn failed); finishes with an error naming
+    /// <paramref name="flag"/> and <see cref="Scenes.World.LastSpawnFailure"/> when there is none.
+    /// </summary>
+    private async Task<bool> WaitForPlayerAsync(string flag)
+    {
+        var world = World!;
+        var maxSpawnFrames = world.SpawnPhysicsWaitFrames + PlayerSpawnMarginFrames;
+        var tree = GetTree();
+        for (var frame = 0; !HasPlayer(world) && world.LastSpawnFailure is null && frame < maxSpawnFrames; frame++)
+        {
+            await ToSignal(tree, SceneTree.SignalName.PhysicsFrame);
+            if (_finished || !IsInsideTree())
+            {
+                return false;
+            }
+        }
+
+        if (HasPlayer(world))
+        {
+            return true;
+        }
+
+        var reason = world.LastSpawnFailure
+            ?? FormattableString.Invariant($"no spawn within {maxSpawnFrames} physics frames");
+        Finish(ScreenshotExitCode.Error, $"{flag}: the player didn't spawn ({reason}); {MapPack.RegenHint(Loader!.ResolvedMapId)}");
+        return false;
+    }
+
+    /// <summary>
+    /// <c>--death</c>: holds the stage to capture, puts the player in the void beside the ring point nearest the preset's
+    /// look-at, waits for the stage (the pull-back's end, or the death screen faded in), then copies the death camera into
+    /// the capture camera for <see cref="SettleFrames"/> frames and saves.
+    /// </summary>
+    private async Task CaptureDeathAsync(DeathShot death, PresetResolution placement)
+    {
+        var world = World!;
+        var loader = Loader!;
+        var flag = $"{ScreenshotArgs.DeathFlag} {(death == DeathShot.Fall ? ScreenshotArgs.DeathFallValue : ScreenshotArgs.DeathScreenValue)}";
+        if (loader.EdgeGeometry is not { } geometry)
+        {
+            Finish(
+                ScreenshotExitCode.Error,
+                $"{flag}: no world edge (no readable {loader.BoundaryPath}, or MapLoader.WorldEdgeEnabled is false); {MapPack.RegenHint(loader.ResolvedMapId)}");
+            return;
+        }
+
+        if (geometry.Boundary.Roadblocks.Count + geometry.Boundary.Fences.Count == 0)
+        {
+            Finish(ScreenshotExitCode.Error, $"{flag}: {loader.BoundaryPath} has no roadblocks or fences, so there is no ledge height");
+            return;
+        }
+
+        if (!await WaitForPlayerAsync(flag))
+        {
+            return;
+        }
+
+        // A key pressed in the open window must not dismiss the death screen while the image settles.
+        world.MinScreenTime = DeathHoldTime;
+        if (death == DeathShot.Fall)
+        {
+            world.FallTime = DeathHoldTime;
+        }
+        else
+        {
+            world.ScreenTime = DeathHoldTime;
+            var screen = world.DeathScreen;
+            screen.GetParent()?.RemoveChild(screen);
+            _viewport!.AddChild(screen);
+        }
+
+        var lookAt = ToVector(placement.LookAt);
+        var ring = geometry.NearestRingPoint(lookAt.X, lookAt.Z);
+        var ringOutward = geometry.OutwardAt(ring.Point.X, ring.Point.Z);
+        var outward = new Vector3((float)ringOutward.X, 0f, (float)ringOutward.Z);
+        var distance = (float)geometry.VoidInnerOffset + DeathOutwardMargin;
+        var position = new Vector3((float)ring.Point.X, (float)geometry.LedgeHeightAt(ring.S), (float)ring.Point.Z) + (outward * distance);
+        var facing = Mathf.Atan2(-outward.X, -outward.Z);
+
+        var player = world.Player!;
+        var playerCamera = world.PlayerCamera!;
+        player.InputEnabled = false;
+        playerCamera.InputEnabled = false;
+        player.PlaceAt(position, facing);
+        player.Visible = true;
+        playerCamera.PlaceBehind(facing);
+        GD.Print(FormattableString.Invariant(
+            $"Screenshot: {flag} at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###})"));
+
+        var tree = GetTree();
+        for (var frame = 0; world.Death.State == DeathState.Alive && frame < DeathStartWaitFrames; frame++)
+        {
+            await ToSignal(tree, SceneTree.SignalName.PhysicsFrame);
+            if (_finished || !IsInsideTree())
+            {
+                return;
+            }
+        }
+
+        if (world.Death.State == DeathState.Alive)
+        {
+            Finish(
+                ScreenshotExitCode.Error,
+                FormattableString.Invariant(
+                    $"{flag}: the death sequence didn't start within {DeathStartWaitFrames} physics frames of placing the player at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###})"));
+            return;
+        }
+
+        var deathCamera = world.DeathCamera;
+        var stageSeconds = death == DeathShot.Fall
+            ? deathCamera.PullBackTime
+            : world.FallTime + world.DeathScreen.FadeTime;
+        var maxFrames = Mathf.CeilToInt((stageSeconds + DeathStageMarginSeconds) * Engine.PhysicsTicksPerSecond);
+        bool Reached() => death == DeathShot.Fall
+            ? world.Death.State == DeathState.Falling && deathCamera.IsFinished
+            : world.Death.State == DeathState.DeathScreen && world.DeathScreen.Opacity >= 1f;
+        for (var frame = 0; !Reached() && frame < maxFrames; frame++)
+        {
+            await ToSignal(tree, SceneTree.SignalName.PhysicsFrame);
+            if (_finished || !IsInsideTree())
+            {
+                return;
+            }
+        }
+
+        if (!Reached())
+        {
+            Finish(
+                ScreenshotExitCode.Error,
+                $"{flag}: the stage wasn't reached within {maxFrames} physics frames (death state {world.Death.State}, pull-back {(deathCamera.IsFinished ? "finished" : "running")}, death screen opacity {world.DeathScreen.Opacity.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)})");
+            return;
+        }
+
+        for (var i = 0; i < SettleFrames; i++)
+        {
+            _camera!.GlobalTransform = deathCamera.GlobalTransform;
+            _camera.Fov = deathCamera.Fov;
+            await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+            if (_finished || !IsInsideTree())
+            {
+                return;
+            }
+        }
+
+        if (!Reached())
+        {
+            Finish(ScreenshotExitCode.Error, $"{flag}: the death sequence left the stage while the image settled (death state {world.Death.State})");
+            return;
+        }
+
+        Save();
     }
 
     private static bool HasPlayer(World world) =>

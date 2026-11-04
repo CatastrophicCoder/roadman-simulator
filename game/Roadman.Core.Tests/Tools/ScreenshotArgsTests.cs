@@ -247,6 +247,105 @@ public class ScreenshotArgsTests
         Assert.Contains("[--player]", ex.Message);
     }
 
+    // ----- --death (docs/specs/world-edge-game.md, "Screenshots" and criterion 25) -----
+
+    [Theory]
+    [InlineData("fall", DeathShot.Fall)]
+    [InlineData("screen", DeathShot.Screen)]
+    public void Ac25_Parse_Death_FallOrScreen(string value, DeathShot expected)
+    {
+        var args = ScreenshotArgs.Parse(["--screenshot", "world-edge", "a.png", "--death", value]);
+
+        Assert.Equal(new ScreenshotArgs("world-edge", "a.png", null, Death: expected), args);
+    }
+
+    [Fact]
+    public void Ac25_Parse_Death_InAnyPositionWithOtherFlags()
+    {
+        var before = ScreenshotArgs.Parse(["--death", "screen", "--map", "somero", "--screenshot", "world-edge", "a.png", "--seed", "1"]);
+        var between = ScreenshotArgs.Parse(["--screenshot", "world-edge", "a.png", "--orthophoto", "--death", "fall", "--road-graph"]);
+
+        Assert.Equal(new ScreenshotArgs("world-edge", "a.png", null, "somero", Death: DeathShot.Screen), before);
+        Assert.Equal(new ScreenshotArgs("world-edge", "a.png", null, null, Orthophoto: true, RoadGraph: true, Death: DeathShot.Fall), between);
+    }
+
+    [Fact]
+    public void Ac25_Parse_WithoutDeath_LeavesItNull()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--player"])!.Death);
+    }
+
+    [Fact]
+    public void Ac25_Parse_WithoutScreenshotFlag_IgnoresDeath()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--death", "fall"]));
+        Assert.Null(ScreenshotArgs.Parse(["--death", "nonsense"]));
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--death")]
+    [InlineData("--screenshot", "a", "a.png", "--death", "")]
+    [InlineData("--screenshot", "a", "a.png", "--death", " ")]
+    [InlineData("--screenshot", "a", "a.png", "--death", "--map", "x")]
+    public void Ac25_Parse_DeathValueMissing_ThrowsNamingTheValues(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--death", ex.Message);
+        Assert.Contains("fall", ex.Message);
+        Assert.Contains("screen", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("Fall")]
+    [InlineData("SCREEN")]
+    [InlineData("falling")]
+    [InlineData("respawn")]
+    [InlineData("1")]
+    public void Ac25_Parse_DeathOtherValue_ThrowsNamingIt(string value)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--death", value]));
+        Assert.Contains("--death", ex.Message);
+        Assert.Contains($"'{value}'", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--death", "fall", "--death", "screen")]
+    [InlineData("--screenshot", "a", "a.png", "--death", "fall", "--death", "fall")]
+    [InlineData("--death", "screen", "--screenshot", "a", "a.png", "--death", "screen")]
+    public void Ac25_Parse_DeathRepeated_Throws(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--death", ex.Message);
+        Assert.Contains("more than once", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--death", "fall", "--player")]
+    [InlineData("--player", "--screenshot", "a", "a.png", "--death", "screen")]
+    public void Ac25_Parse_DeathWithPlayer_ThrowsNamingBoth(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--death", ex.Message);
+        Assert.Contains("--player", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--death", "fall", "--inspect")]
+    [InlineData("--inspect", "--screenshot", "a", "a.png", "--death", "screen")]
+    public void Ac25_Parse_DeathWithInspect_ThrowsNamingBoth(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--death", ex.Message);
+        Assert.Contains("--inspect", ex.Message);
+    }
+
+    [Fact]
+    public void Ac25_Parse_UnknownArgument_ListsDeathInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--dead"]));
+        Assert.Contains("[--death <fall|screen>]", ex.Message);
+    }
+
     [Theory]
     [InlineData(3, 3, null)]
     [InlineData(2, 3, ScreenshotExitCode.Error)]

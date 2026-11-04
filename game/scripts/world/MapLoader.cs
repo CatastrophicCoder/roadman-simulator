@@ -152,22 +152,32 @@ public partial class MapLoader : Node3D
     [Export]
     public BarrierSettings BarrierSettings { get; set; } = new();
 
+    /// <summary>
+    /// Whether a load builds the world edge (<see cref="EdgeGeometry"/>, the <see cref="VoidTrigger"/> and the
+    /// <see cref="Barriers"/>) from the <see cref="Boundary"/>. False leaves all three null, so there is no safety net or
+    /// void test either; the <see cref="Boundary"/> is still read (the spawn needs it). For the performance measurement
+    /// (<c>--perf ... --no-world-edge</c>); read at each <see cref="Load"/>.
+    /// </summary>
+    [Export]
+    public bool WorldEdgeEnabled { get; set; } = true;
+
     /// <summary>Physics frames the barriers wait for the terrain collision before they give up.</summary>
     [Export]
     public int EdgePhysicsWaitFrames { get; set; } = 30;
 
     /// <summary>
-    /// Queries on the loaded world edge (ring, void prisms, safety net); null without a <see cref="Boundary"/>.
+    /// Queries on the loaded world edge (ring, void prisms, safety net); null without a <see cref="Boundary"/> or with
+    /// <see cref="WorldEdgeEnabled"/> false.
     /// </summary>
     public EdgeGeometry? EdgeGeometry { get; private set; }
 
-    /// <summary>The void trigger (<c>Edge/VoidTrigger</c>), built before <see cref="SignalName.MapLoaded"/>; null without a <see cref="Boundary"/>.</summary>
+    /// <summary>The void trigger (<c>Edge/VoidTrigger</c>), built before <see cref="SignalName.MapLoaded"/>; null without a <see cref="Boundary"/> or with <see cref="WorldEdgeEnabled"/> false.</summary>
     public VoidTrigger? VoidTrigger { get; private set; }
 
     /// <summary>
     /// The barriers (<c>Edge/Barriers</c>), created before <see cref="SignalName.MapLoaded"/> and built once the terrain
     /// collision is queryable (<see cref="Barriers.IsBuilt"/>, <see cref="WaitForWorldEdgeAsync"/>); null without a
-    /// <see cref="Boundary"/>.
+    /// <see cref="Boundary"/> or with <see cref="WorldEdgeEnabled"/> false.
     /// </summary>
     public Barriers? Barriers { get; private set; }
 
@@ -256,9 +266,13 @@ public partial class MapLoader : Node3D
         Places = LoadPlaces(mapId, manifest);
         PrepareBuildingBodies(mapId);
         Boundary = LoadBoundary(mapId, manifest);
-        if (Boundary is not null)
+        if (Boundary is not null && WorldEdgeEnabled)
         {
             CreateWorldEdge(Boundary);
+        }
+        else if (Boundary is not null)
+        {
+            GD.Print("MapLoader: world edge disabled (WorldEdgeEnabled false): no edge geometry, void trigger or barriers");
         }
 
         EmitSignal(SignalName.MapLoaded, LoadedTileCount);

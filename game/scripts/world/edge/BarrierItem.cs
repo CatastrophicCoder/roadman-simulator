@@ -6,7 +6,7 @@ namespace Roadman.Scenes.Edge;
 
 /// <summary>
 /// The static body of one world-edge barrier item (a <c>boundary.json</c> roadblock or fence): on
-/// <see cref="CollisionLayers.Barrier"/>, colliding with nothing itself, with one <see cref="CollisionShape3D"/> (a
+/// <see cref="CollisionLayers.BarrierStatic"/>, colliding with nothing itself, with one <see cref="CollisionShape3D"/> (a
 /// <see cref="ConvexPolygonShape3D"/> of its 8 corners) per <see cref="BarrierItemLayout.Collision"/> box. It has no
 /// visual children; <see cref="Barriers"/> draws the pieces in batches. The body sits at the item's start, and the
 /// shapes' points are relative to it.
@@ -47,7 +47,7 @@ public partial class BarrierItem : StaticBody3D
         Layout = layout;
         ItemId = layout.Id;
         Name = layout.Id.ValidateNodeName();
-        CollisionLayer = CollisionLayers.Barrier;
+        CollisionLayer = CollisionLayers.BarrierStatic;
         CollisionMask = 0;
         var origin = ToVector(layout.Start);
         Position = origin;
