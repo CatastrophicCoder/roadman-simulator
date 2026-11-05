@@ -30,7 +30,7 @@ public partial class LoadingScreen : Control
         ProcessMode = ProcessModeEnum.Always;
         UiBuild.FullRect(this, "Background", UiTheme.Background);
         var centre = new CenterContainer { Name = "Centre", MouseFilter = MouseFilterEnum.Ignore };
-        centre.SetAnchorsPreset(LayoutPreset.FullRect);
+        centre.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         AddChild(centre);
         var box = new VBoxContainer { Name = "Box", CustomMinimumSize = new Vector2(760f, 0f) };
         centre.AddChild(box);

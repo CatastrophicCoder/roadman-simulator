@@ -461,4 +461,96 @@ public class ScreenshotArgsTests
         var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.jpg"]));
         Assert.Contains(".png", ex.Message);
     }
+
+    // ----- --menu (docs/specs/menu-settings-save.md, "Screenshots" and criterion 24) -----
+
+    [Theory]
+    [InlineData("main", MenuShot.Main)]
+    [InlineData("pause", MenuShot.Pause)]
+    [InlineData("settings", MenuShot.Settings)]
+    [InlineData("slots", MenuShot.Slots)]
+    public void Ac24_Parse_Menu_EachOfTheFourValues(string value, MenuShot expected)
+    {
+        var args = ScreenshotArgs.Parse(["--screenshot", "overview", "a.png", "--menu", value]);
+
+        Assert.Equal(new ScreenshotArgs("overview", "a.png", null, Menu: expected), args);
+    }
+
+    [Fact]
+    public void Ac24_Parse_Menu_InAnyPositionWithMapAndSeed()
+    {
+        var args = ScreenshotArgs.Parse(["--menu", "slots", "--map", "somero", "--screenshot", "overview", "a.png", "--seed", "3"]);
+
+        Assert.Equal(new ScreenshotArgs("overview", "a.png", null, "somero", Menu: MenuShot.Slots), args);
+    }
+
+    [Fact]
+    public void Ac24_Parse_WithoutMenu_LeavesItNull()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--screenshot", "a", "a.png"])!.Menu);
+    }
+
+    [Theory]
+    [InlineData("Main")]
+    [InlineData("PAUSE")]
+    [InlineData("setting")]
+    [InlineData("load")]
+    [InlineData("1")]
+    public void Ac24_Parse_MenuOtherValue_ThrowsNamingIt(string value)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--menu", value]));
+        Assert.Contains("--menu", ex.Message);
+        Assert.Contains($"'{value}'", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--menu")]
+    [InlineData("--screenshot", "a", "a.png", "--menu", "")]
+    [InlineData("--screenshot", "a", "a.png", "--menu", "--map", "x")]
+    public void Ac24_Parse_MenuValueMissing_ThrowsNamingTheValues(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--menu", ex.Message);
+        Assert.Contains("main|pause|settings|slots", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("--screenshot", "a", "a.png", "--menu", "main", "--menu", "pause")]
+    [InlineData("--screenshot", "a", "a.png", "--menu", "settings", "--menu", "settings")]
+    [InlineData("--menu", "slots", "--screenshot", "a", "a.png", "--menu", "slots")]
+    public void Ac24_Parse_MenuRepeated_Throws(params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.Contains("--menu", ex.Message);
+        Assert.Contains("more than once", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("--player", "--player")]
+    [InlineData("--inspect", "--inspect")]
+    [InlineData("--death", "--death", "fall")]
+    [InlineData("--death", "--death", "screen")]
+    [InlineData("--orthophoto", "--orthophoto")]
+    [InlineData("--road-graph", "--road-graph")]
+    public void Ac24_Parse_MenuWithAnotherDebugFlag_ThrowsNamingBoth(string other, params string[] flag)
+    {
+        foreach (var menu in new[] { "main", "pause", "settings", "slots" })
+        {
+            string[] after = ["--screenshot", "a", "a.png", "--menu", menu, .. flag];
+            string[] before = [.. flag, "--screenshot", "a", "a.png", "--menu", menu];
+            foreach (var args in new[] { after, before })
+            {
+                var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+                Assert.Contains("--menu", ex.Message);
+                Assert.Contains(other, ex.Message);
+            }
+        }
+    }
+
+    [Fact]
+    public void Ac24_Parse_UnknownArgument_ListsMenuInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--menus"]));
+        Assert.Contains("[--menu <main|pause|settings|slots>]", ex.Message);
+    }
 }

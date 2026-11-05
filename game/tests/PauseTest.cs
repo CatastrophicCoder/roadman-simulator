@@ -44,7 +44,7 @@ public class PauseTest
     private Node? _testBody;
 
     [BeforeTest]
-    public void SetUp() => _folder = NewTempFolder("pause");
+    public void SetUp() => _folder = BeginTest("pause");
 
     [AfterTest]
     public void CleanUp()
@@ -59,7 +59,7 @@ public class PauseTest
 
     /// <summary>
     /// Esc (the <c>pause</c> action) in a game pauses the tree, shows the pause menu with its five buttons (Resume
-    /// focused, Save enabled while alive, Settings disabled until Part B) and releases the mouse while the player
+    /// focused, Save and Settings enabled while alive) and releases the mouse while the player
     /// camera keeps wanting the capture. Over 60 paused frames, with W held and the debug keys tapped, the player's
     /// position, a falling rigid body and the play time don't change (the death sequence's time in state, which
     /// <c>World</c> doesn't advance while alive, is checked while paused in <c>Falling</c> and on the death screen by
@@ -96,8 +96,8 @@ public class PauseTest
         AssertThat(string.Join("|", menu.Buttons.Select(b => b.Text))).IsEqual("Resume|Save|Load|Settings|Quit to menu");
         AssertBool(menu.SaveButton.Disabled).OverrideFailureMessage("Save is disabled while alive").IsFalse();
         AssertBool(menu.SaveHint.Visible).IsFalse();
-        AssertBool(menu.SettingsButton.Disabled).IsTrue();
-        AssertThat(menu.SettingsButton.FocusMode).IsEqual(Control.FocusModeEnum.None);
+        AssertBool(menu.SettingsButton.Disabled).IsFalse();
+        AssertThat(menu.SettingsButton.FocusMode).IsEqual(Control.FocusModeEnum.All);
         AssertThat(FocusOwner(_main)).IsSame(menu.ResumeButton);
         AssertThat(Input.MouseMode).IsEqual(Input.MouseModeEnum.Visible);
         AssertBool(camera.MouseCaptured).IsFalse();
@@ -394,7 +394,7 @@ public class PauseTest
 
     /// <summary>
     /// The pause menu (alive, with one valid save so Load is enabled): focus on Resume, every enabled button reachable
-    /// (Settings never); Save opens the slot list in save mode, where every manual row, Back and no autosave row are
+    /// (Settings included); Save opens the slot list in save mode, where every manual row, Back and no autosave row are
     /// reachable; Quit to menu's dialog with its Quit and Cancel reachable, back cancels; then back resumes. The
     /// keyboard alone (Esc, arrows, Enter).
     /// </summary>

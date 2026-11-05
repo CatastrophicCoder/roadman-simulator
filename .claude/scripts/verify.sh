@@ -110,9 +110,8 @@ else
   report N/A "gdunit4 tests" "godot not on PATH and \$GODOT not set"
 fi
 
-# Headless startup (definition of done): Main starts a new game at once with
-# --new-game, so the run loads the project's map and spawns the player. Fails on
-# a non-zero exit, an ERROR line, a timeout or no spawn line in the log.
+# Headless startup (definition of done): headless_startup in lib.sh, the same
+# check CI runs against its test-area pack.
 START_MAP="$(sed -n 's|^map/id="\(.*\)"$|\1|p' "$ROOT/game/project.godot")"
 START_MAP="${START_MAP:-somero}"
 if ! GODOT_BIN="$(find_godot)"; then
@@ -123,19 +122,10 @@ elif [ ! -f "$ROOT/game/maps/$START_MAP/manifest.json" ]; then
   report N/A "headless startup" "no map pack at game/maps/$START_MAP (run /regen-map $START_MAP)"
 else
   log="$LOGS/headless-startup.log"
-  run_with_timeout "${GODOT_STARTUP_TIMEOUT:-300}" "$log" \
-    "$GODOT_BIN" --headless --path "$ROOT/game" --quit-after 120 -- --new-game
-  rc=$?
-  if [ "$rc" -eq 124 ]; then
-    report FAIL "headless startup" "timed out after ${GODOT_STARTUP_TIMEOUT:-300}s (log: $log)"
-  elif [ "$rc" -ne 0 ]; then
-    report FAIL "headless startup" "exit $rc: $(grep -m1 -E 'ERROR|crash' "$log") (log: $log)"
-  elif grep -qE '^(SCRIPT )?ERROR' "$log"; then
-    report FAIL "headless startup" "$(grep -m1 -E '^(SCRIPT )?ERROR' "$log") (log: $log)"
-  elif ! grep -q '^Player: spawned at' "$log"; then
-    report FAIL "headless startup" "no 'Player: spawned at' line within 120 frames (log: $log)"
+  if headless_startup "$GODOT_BIN" "$log"; then
+    report PASS "headless startup" "--new-game on $START_MAP: $STARTUP_DETAIL (log: $log)"
   else
-    report PASS "headless startup" "--new-game on $START_MAP: $(grep -m1 '^Player: spawned at' "$log") (log: $log)"
+    report FAIL "headless startup" "$STARTUP_DETAIL (log: $log)"
   fi
 fi
 
@@ -258,6 +248,22 @@ else
       2) report N/A "screenshot death $death" "outside built area (log: $log)" ;;
       124) report FAIL "screenshot death $death" "timed out after ${GODOT_SCREENSHOT_TIMEOUT:-120}s (log: $log)" ;;
       *) report FAIL "screenshot death $death" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
+    esac
+  done
+  # The menus over the overview preset: main menu, pause menu, settings view, slot list with sample saves
+  # (docs/specs/menu-settings-save.md, criterion 24).
+  for menu in main pause settings slots; do
+    log="$LOGS/screenshot-menu-$menu.log"
+    if ! grep -qx "overview" <<<"$PRESETS"; then
+      report N/A "screenshot menu $menu" "pack has no overview preset"
+      continue
+    fi
+    screenshot_preset "$GODOT_BIN" "$MAP_ID" overview "$SHOTS/menu-$menu.png" "$log" --menu "$menu"
+    case $? in
+      0) report PASS "screenshot menu $menu" "build/screenshots/menu-$menu.png" ;;
+      2) report N/A "screenshot menu $menu" "outside built area (log: $log)" ;;
+      124) report FAIL "screenshot menu $menu" "timed out after ${GODOT_SCREENSHOT_TIMEOUT:-120}s (log: $log)" ;;
+      *) report FAIL "screenshot menu $menu" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
     esac
   done
 fi

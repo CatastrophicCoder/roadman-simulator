@@ -20,8 +20,7 @@ namespace Roadman.Tests;
 /// <c>Main</c> at startup and on its own screens, Part A of <c>docs/specs/menu-settings-save.md</c> (<c>Ac</c>
 /// numbers are its acceptance criteria): the main menu (8), a new game and a failed start (10), focus loss on the menu
 /// (13), Quit and the close request on the menu (18), keyboard-only and gamepad-only use of the main menu, its slot
-/// list, the dialog and the failed-start screen (22), and the user folder and version (23). The Settings buttons are
-/// disabled until Part B. Saves and settings live in a temporary folder (<see cref="MainTestSupport"/>).
+/// list, the dialog and the failed-start screen (22), and the user folder and version (23). Saves and settings live in a temporary folder (<see cref="MainTestSupport"/>).
 /// </summary>
 [TestSuite]
 [RequireGodotRuntime]
@@ -38,7 +37,7 @@ public class MainMenuTest
     private Variant? _savedMapIdSetting;
 
     [BeforeTest]
-    public void SetUp() => _folder = NewTempFolder("main-menu");
+    public void SetUp() => _folder = BeginTest("main-menu");
 
     [AfterTest]
     public void CleanUp()
@@ -83,8 +82,9 @@ public class MainMenuTest
             AssertThat(Input.MouseMode).IsEqual(Input.MouseModeEnum.Visible);
             AssertBool(_main.GetTree().Paused).IsFalse();
 
-            // An empty saves folder: Continue and Load disabled, and not focusable; Settings disabled until Part B.
-            foreach (var button in new[] { menu.ContinueButton, menu.LoadButton, menu.SettingsButton })
+            // An empty saves folder: Continue and Load disabled, and not focusable; Settings enabled.
+            AssertBool(menu.SettingsButton.Disabled).IsFalse();
+            foreach (var button in new[] { menu.ContinueButton, menu.LoadButton })
             {
                 AssertBool(button.Disabled).OverrideFailureMessage($"{button.Text} is enabled").IsTrue();
                 AssertThat(button.FocusMode).OverrideFailureMessage($"{button.Text} is focusable").IsEqual(Control.FocusModeEnum.None);
@@ -124,8 +124,8 @@ public class MainMenuTest
         AssertBool(menu.LoadButton.Disabled).IsFalse();
         AssertThat(menu.ContinueButton.FocusMode).IsEqual(Control.FocusModeEnum.All);
         AssertThat(menu.LoadButton.FocusMode).IsEqual(Control.FocusModeEnum.All);
-        AssertBool(menu.SettingsButton.Disabled).IsTrue();
-        AssertThat(menu.SettingsButton.FocusMode).IsEqual(Control.FocusModeEnum.None);
+        AssertBool(menu.SettingsButton.Disabled).IsFalse();
+        AssertThat(menu.SettingsButton.FocusMode).IsEqual(Control.FocusModeEnum.All);
         AssertThat(FocusOwner(_main)).IsSame(menu.NewGameButton);
     }
 
@@ -547,7 +547,7 @@ public class MainMenuTest
         AssertThat(_main.State).IsEqual(MainState.MainMenu);
         menu.FocusFirst();
         AssertFocusAndReach(_main, nav, "main menu (saves)", menu.NewGameButton, menu.Buttons);
-        AssertBool(menu.SettingsButton.Disabled).IsTrue();
+        AssertBool(menu.SettingsButton.Disabled).IsFalse();
 
         // Load with accept.
         menu.NewGameButton.GrabFocus();

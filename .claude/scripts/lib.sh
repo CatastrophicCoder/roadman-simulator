@@ -55,6 +55,37 @@ godot_import() {
   return 0
 }
 
+# Headless startup (definition of done): Main starts a new game at once with
+# --new-game, so the run loads the project's map and spawns the player. Fails on
+# a non-zero exit, an ERROR line, a timeout (GODOT_STARTUP_TIMEOUT, default 300 s)
+# or no spawn line in the log. Sets STARTUP_DETAIL to a one-line reason, or to the
+# spawn line on success. The caller builds the game assembly first.
+# headless_startup <godot> <logfile>
+headless_startup() {
+  local godot="$1" log="$2" rc
+  run_with_timeout "${GODOT_STARTUP_TIMEOUT:-300}" "$log" \
+    "$godot" --headless --path "$ROOT/game" --quit-after 120 -- --new-game
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    STARTUP_DETAIL="timed out after ${GODOT_STARTUP_TIMEOUT:-300}s"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    STARTUP_DETAIL="exit $rc: $(grep -m1 -E 'ERROR|crash' "$log")"
+    return 1
+  fi
+  if grep -qE '^(SCRIPT )?ERROR' "$log"; then
+    STARTUP_DETAIL="$(grep -m1 -E '^(SCRIPT )?ERROR' "$log")"
+    return 1
+  fi
+  if ! grep -q '^Player: spawned at' "$log"; then
+    STARTUP_DETAIL="no 'Player: spawned at' line within 120 frames"
+    return 1
+  fi
+  STARTUP_DETAIL="$(grep -m1 '^Player: spawned at' "$log")"
+  return 0
+}
+
 # Screenshot of one camera preset with a windowed (not headless) Godot run:
 # --headless disables rendering. Returns 0 (saved), 2 (preset outside the
 # built area, no PNG), 124 (timeout) or 1 (any other failure).

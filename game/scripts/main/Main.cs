@@ -7,6 +7,7 @@ using Roadman.Autoload;
 using Roadman.Core.Edge;
 using Roadman.Core.Maps;
 using Roadman.Core.Saves;
+using Roadman.Core.Settings;
 using Roadman.Core.Tools;
 using Roadman.Saves;
 using Roadman.Settings;
@@ -44,8 +45,10 @@ public enum MainState
 /// and the saves, and instances <c>World.tscn</c> as a child while a game runs. The node tree is built in code.
 /// <para>
 /// Startup: with <c>--screenshot</c> or <c>--perf</c> in the user args it only adds <c>World</c>, which behaves as
-/// before (no menus, no settings, no pause, the window closes as before). Otherwise it reads the settings
-/// (<see cref="GameState.LoadSettings"/>), applies the audio volumes, and shows the main menu, or with
+/// before (no menus, no settings, no pause, the window closes as before); with <c>--menu</c> as well it builds its UI
+/// hidden, for the screenshot tool to show (<see cref="ShowMenuForScreenshot"/>), and still handles no input. Otherwise
+/// it reads the settings (<see cref="GameState.LoadSettings"/>), applies them all (<see cref="SettingsApplier.ApplyAll"/>
+/// through <see cref="DisplayBackend"/>) before the menu shows, and shows the main menu, or with
 /// <c>--new-game</c> starts a new game at once. <c>--seed &lt;n&gt;</c> in the same user args (<see cref="UserArgs"/> or
 /// the command line's) is parsed here and set as <see cref="World.Seed"/> on every <c>World</c> it creates, so a new game
 /// and a loaded save that needs the spawn draw (an empty position, or a blocked one) draw as a direct <c>World</c> run
@@ -59,7 +62,8 @@ public enum MainState
 /// game opens the pause menu, and a window close request asks first (<see cref="RequestQuitGame"/>).
 /// </para>
 /// <para>
-/// Tests set <see cref="UserArgs"/> and <see cref="SavesFolder"/> before the node enters the tree, point
+/// Tests set <see cref="UserArgs"/>, <see cref="SavesFolder"/> and <see cref="DisplayBackend"/> before the node enters the
+/// tree, point
 /// <see cref="GameState.SettingsPath"/> at a temporary file, and set <see cref="QuitOnConfirm"/> false so quitting only
 /// sets <see cref="ExitCode"/> and emits <see cref="SignalName.QuitRequested"/>.
 /// </para>
@@ -104,6 +108,7 @@ public partial class Main : Node
     private bool _focusLostWhileLoading;
     private bool _quitAskedWhileLoading;
     private bool _changeAutoAcceptQuit;
+    private World? _directWorld;
 
     /// <summary>
     /// Whether a confirmed quit calls <see cref="SceneTree.Quit"/>. Tests set it false: the quit then only sets
@@ -124,6 +129,12 @@ public partial class Main : Node
     /// (tests).
     /// </summary>
     public string? SavesFolder { get; set; }
+
+    /// <summary>
+    /// The window operations the display settings use; set before the node enters the tree (tests set a recording
+    /// one, since the headless display server ignores window modes and sizes).
+    /// </summary>
+    public IDisplayBackend DisplayBackend { get; set; } = new GodotDisplayBackend();
 
     public MainState State { get; private set; } = MainState.Starting;
 
@@ -161,9 +172,18 @@ public partial class Main : Node
 
     public ConfirmDialog Dialog { get; private set; } = null!;
 
-    /// <summary>The game version: <see cref="VersionSetting"/>, or <c>dev</c> when it is empty.</summary>
+    /// <summary>
+    /// The usable screen size the <c>--menu settings</c> screenshot gives the settings view: 2560×1440, so every size of
+    /// <see cref="WindowSizes.All"/> is listed.
+    /// </summary>
+    public static readonly WindowSize ScreenshotUsableScreen = new(2560, 1440);
+
+    /// <summary>The settings view, opened from the main menu or the pause menu (<see cref="OpenSettings"/>).</summary>
+    public SettingsView SettingsView { get; private set; } = null!;
+
+    /// <summary>The game version: <see cref="VersionSetting"/>, or <c>dev</c> when it is empty (<see cref="SaveFactory.GameVersionOrDev"/>).</summary>
     public static string GameVersion =>
-        ProjectSettings.GetSetting(VersionSetting, "").AsString() is { Length: > 0 } version ? version : "dev";
+        SaveFactory.GameVersionOrDev(ProjectSettings.GetSetting(VersionSetting, "").AsString());
 
     public override void _Ready()
     {
@@ -171,7 +191,15 @@ public partial class Main : Node
         if (args.Contains(ScreenshotArgs.ScreenshotFlag) || args.Contains(PerfArgs.PerfFlag))
         {
             State = MainState.DirectStart;
-            AddChild(GD.Load<PackedScene>(WorldScenePath).Instantiate<World>());
+            if (args.Contains(ScreenshotArgs.MenuFlag))
+            {
+                // Built before World, so the screenshot tool finds it; hidden, with no saves until the tool points
+                // them at its sample folder (UseSavesFolder), and no settings read or applied.
+                BuildUi();
+            }
+
+            _directWorld = GD.Load<PackedScene>(WorldScenePath).Instantiate<World>();
+            AddChild(_directWorld);
             return;
         }
 
@@ -181,7 +209,7 @@ public partial class Main : Node
         if (GameState.Instance is { } gameState)
         {
             gameState.LoadSettings();
-            SettingsApplier.ApplyAudio(gameState.Settings.Audio);
+            SettingsApplier.ApplyAll(gameState.Settings, DisplayBackend, GetViewport());
         }
 
         Slots = new SaveSlots(NewSaveStore(SavesFolder));
@@ -300,14 +328,21 @@ public partial class Main : Node
     }
 
     /// <summary>
-    /// Back one level: a dialog cancels; the slot list returns to its menu; the pause menu resumes; on the main menu's
-    /// top level nothing happens; after a failed start it returns to the main menu.
+    /// Back one level: a dialog cancels; the settings view closes (writing the settings) and the slot list returns to
+    /// its menu; the pause menu resumes; on the main menu's top level nothing happens; after a failed start it returns
+    /// to the main menu.
     /// </summary>
     public void Back()
     {
         if (Dialog.IsOpen)
         {
             Dialog.Cancel();
+            return;
+        }
+
+        if (SettingsView.Visible)
+        {
+            SettingsView.Close();
             return;
         }
 
@@ -409,6 +444,7 @@ public partial class Main : Node
             return false;
         }
 
+        SettingsView.Close(notify: false);
         Dialog.Close();
         SlotList.Visible = false;
         PauseMenu.Visible = false;
@@ -439,6 +475,80 @@ public partial class Main : Node
         MainMenu.Visible = false;
         PauseMenu.Visible = false;
         SlotList.Open(mode);
+        return true;
+    }
+
+    /// <summary>
+    /// Opens the settings view over the main menu or the pause menu (changes apply while paused); back returns to that
+    /// menu. False in any other state or when it is open already.
+    /// </summary>
+    public bool OpenSettings()
+    {
+        if (State is not (MainState.MainMenu or MainState.Paused) || SettingsView.Visible || Dialog.IsOpen)
+        {
+            return false;
+        }
+
+        MainMenu.Visible = false;
+        PauseMenu.Visible = false;
+        SlotList.Visible = false;
+        SettingsView.Open();
+        return true;
+    }
+
+    /// <summary>
+    /// Points <see cref="Slots"/> (and the slot list) at <paramref name="folder"/>, an absolute folder. Used by the
+    /// <c>--menu</c> screenshots, which show sample saves from a temporary folder.
+    /// </summary>
+    public void UseSavesFolder(string folder)
+    {
+        Slots = new SaveSlots(NewSaveStore(folder));
+        SlotList.Slots = Slots;
+    }
+
+    /// <summary>
+    /// <c>--menu</c> screenshots (direct start only): shows <paramref name="shot"/> as a normal game would, without
+    /// changing <see cref="State"/> (so no input or notification is handled). <see cref="MenuShot.Main"/>: the main menu
+    /// on its background. The others pause the tree first: the pause menu, the settings view's Display tab opened from
+    /// it (with <see cref="GameSettings.Defaults"/> on a <see cref="ScreenshotUsableScreen"/> screen, so the image
+    /// doesn't depend on the machine's screen or settings file), or the slot list in load mode opened from it (saved times shown in UTC, so the image doesn't depend on the
+    /// machine's time zone). Call <see cref="UseSavesFolder"/> first.
+    /// </summary>
+    /// <returns>False outside a <c>--menu</c> direct start (no UI built).</returns>
+    public bool ShowMenuForScreenshot(MenuShot shot)
+    {
+        if (!DirectStart || Ui is null || Slots is null)
+        {
+            return false;
+        }
+
+        HideViews();
+        if (shot == MenuShot.Main)
+        {
+            Background.Visible = true;
+            MainMenu.Visible = true;
+            RefreshMainMenu();
+            return true;
+        }
+
+        GetTree().Paused = true;
+        PauseMenu.Visible = true;
+        PauseMenu.Refresh(canSave: _directWorld is { } world && IsInstanceValid(world) && world.CanSave, canLoad: AnyValidSlot());
+        switch (shot)
+        {
+            case MenuShot.Settings:
+                PauseMenu.Visible = false;
+                SettingsView.UsableScreen = () => ScreenshotUsableScreen;
+                SettingsView.Source = () => GameSettings.Defaults(ScreenshotUsableScreen);
+                SettingsView.Open();
+                break;
+            case MenuShot.Slots:
+                PauseMenu.Visible = false;
+                SlotList.TimeZone = TimeZoneInfo.Utc;
+                SlotList.Open(SlotListMode.Load);
+                break;
+        }
+
         return true;
     }
 
@@ -513,8 +623,8 @@ public partial class Main : Node
     }
 
     /// <summary>
-    /// The save of the running game ("Saving"): the player snapshot (with its position and the player's facing only
-    /// when a manual save is possible, <see cref="World.CanSave"/>; else empty), the map id and the manifest's
+    /// The save of the running game ("Saving"), built by <see cref="SaveFactory.Make"/> from the player state,
+    /// <see cref="World.CanSave"/>, <see cref="World.PlayerFacingYaw"/>, the map id and the manifest's
     /// <c>generated_at</c>, the game version, now (UTC) and the play time. Null without a game, or for a manual save
     /// (<paramref name="autosave"/> false) when the player can't save now.
     /// </summary>
@@ -525,30 +635,17 @@ public partial class Main : Node
             return null;
         }
 
-        var alive = World.CanSave;
-        if (!autosave && !alive)
-        {
-            return null;
-        }
-
-        var player = gameState.Player.Snapshot(includePosition: alive);
-        if (alive && World.PlayerFacingYaw is { } yaw)
-        {
-            player = player with { FacingYaw = yaw };
-        }
-
         var manifest = World.MapLoader.Manifest;
-        var mapId = manifest?.MapId ?? World.MapLoader.ResolvedMapId;
-        var generatedAt = manifest?.GeneratedAt is { Length: > 0 } stamp ? stamp : "unknown";
-        return new SaveGame(
-            SaveFormat.CurrentVersion,
+        return SaveFactory.Make(
+            autosave,
+            World.CanSave,
+            gameState.Player,
+            World.PlayerFacingYaw,
+            manifest?.MapId ?? World.MapLoader.ResolvedMapId,
+            manifest?.GeneratedAt,
             GameVersion,
             DateTimeOffset.UtcNow,
-            PlayTime.Seconds,
-            mapId,
-            generatedAt,
-            player,
-            SaveQuests.Empty);
+            PlayTime.Seconds);
     }
 
     /// <summary>Writes the autosave of the running game; false (with <see cref="LastAutosaveError"/>) when it fails.</summary>
@@ -588,9 +685,19 @@ public partial class Main : Node
             onCancel: () => _quitAskedWhileLoading = false);
     }
 
-    /// <summary>A confirmed quit: sets <see cref="ExitCode"/>, emits the signal and, with <see cref="QuitOnConfirm"/>, quits.</summary>
+    /// <summary>
+    /// A confirmed quit: closes an open settings view first without its <c>Closed</c> signal (which reverts a pending
+    /// display change and writes <c>settings.json</c>, as Back does), then sets <see cref="ExitCode"/>, emits the signal
+    /// and, with <see cref="QuitOnConfirm"/>, quits. Every quit route (the main menu's Quit, a close request on the
+    /// menus or in a game, Quit without saving) ends here.
+    /// </summary>
     public void Quit(int exitCode)
     {
+        if (SettingsView is { } view && IsInstanceValid(view) && view.Visible)
+        {
+            view.Close(notify: false);
+        }
+
         ExitCode = exitCode;
         EmitSignal(SignalName.QuitRequested, exitCode);
         if (QuitOnConfirm)
@@ -650,6 +757,7 @@ public partial class Main : Node
         world.Seed = _seedArg ?? World.TimeSeed();
         world.PendingLoad = load;
         world.CameraSettings = GameState.Instance?.Settings.Gameplay;
+        world.QualitySettings = QualityPreset.For((GameState.Instance?.Settings ?? GameSettings.Default).Display.Quality);
         world.PlayerSpawned += _ => OnPlayerPlaced(world, moved: false);
         world.PlayerLoaded += (_, moved) => OnPlayerPlaced(world, moved);
         world.StartFailed += message => OnStartFailed(world, message);
@@ -733,6 +841,7 @@ public partial class Main : Node
 
     private void HideViews()
     {
+        SettingsView.Close(notify: false);
         Dialog.Close();
         Background.Visible = false;
         MainMenu.Visible = false;
@@ -746,6 +855,67 @@ public partial class Main : Node
     private void RefreshMainMenu() => MainMenu.Refresh(canContinue: Slots.MostRecent() is not null, canLoad: AnyValidSlot());
 
     private void RefreshPauseMenu() => PauseMenu.Refresh(canSave: World?.CanSave == true, canLoad: AnyValidSlot());
+
+    /// <summary>
+    /// Applies a change made in the settings view at once: the display group (<see cref="SettingsApplier.ApplyDisplay"/>
+    /// with the previous values, through <see cref="DisplayBackend"/>), the audio volumes, and on a running world the
+    /// camera values (<see cref="World.CameraSettings"/>) and the quality preset (<see cref="World.QualitySettings"/>).
+    /// </summary>
+    private void OnSettingsChanged(GameSettings before, GameSettings after)
+    {
+        if (DirectStart)
+        {
+            return;
+        }
+
+        if (before.Display != after.Display)
+        {
+            SettingsApplier.ApplyDisplay(after.Display, DisplayBackend, GetViewport(), before.Display);
+        }
+
+        if (before.Audio != after.Audio)
+        {
+            SettingsApplier.ApplyAudio(after.Audio);
+        }
+
+        if (World is not { } world || !IsInstanceValid(world))
+        {
+            return;
+        }
+
+        if (before.Gameplay != after.Gameplay)
+        {
+            world.CameraSettings = after.Gameplay;
+            world.ApplyCameraSettings();
+        }
+
+        if (before.Display.Quality != after.Display.Quality)
+        {
+            world.QualitySettings = QualityPreset.For(after.Display.Quality);
+        }
+    }
+
+    /// <summary>The settings view closed: back to the menu it was opened from; a failed write shows a notice.</summary>
+    private void OnSettingsClosed()
+    {
+        if (SettingsView.LastSaveError is { } error)
+        {
+            Notice.ShowNotice($"Could not save the settings: {error}");
+        }
+
+        if (State == MainState.Paused)
+        {
+            PauseMenu.Visible = true;
+            RefreshPauseMenu();
+            PauseMenu.SettingsButton.GrabFocus();
+        }
+        else if (State == MainState.MainMenu)
+        {
+            MainMenu.Visible = true;
+            RefreshMainMenu();
+            MainMenu.SettingsButton.GrabFocus();
+        }
+    }
 
     private void OnSlotListBack()
     {
@@ -826,18 +996,27 @@ public partial class Main : Node
         root.AddChild(LoadingScreen);
         Notice = new NoticeLabel { Name = "Notice" };
         root.AddChild(Notice);
+        SettingsView = new SettingsView { Name = "SettingsView" };
+        root.AddChild(SettingsView);
         Dialog = new ConfirmDialog { Name = "ConfirmDialog" };
         root.AddChild(Dialog);
 
         MainMenu.NewGameButton.Pressed += StartNewGame;
         MainMenu.ContinueButton.Pressed += () => Continue();
         MainMenu.LoadButton.Pressed += () => OpenSlotList(SlotListMode.Load);
+        MainMenu.SettingsButton.Pressed += () => OpenSettings();
         MainMenu.QuitButton.Pressed += RequestQuitGame;
 
         PauseMenu.ResumeButton.Pressed += () => Resume();
         PauseMenu.SaveButton.Pressed += () => OpenSlotList(SlotListMode.Save);
         PauseMenu.LoadButton.Pressed += () => OpenSlotList(SlotListMode.Load);
+        PauseMenu.SettingsButton.Pressed += () => OpenSettings();
         PauseMenu.QuitToMenuButton.Pressed += RequestQuitToMenu;
+
+        SettingsView.Dialog = Dialog;
+        SettingsView.UsableScreen = () => DisplayBackend.GetUsableScreenSize();
+        SettingsView.Changed += OnSettingsChanged;
+        SettingsView.Closed += OnSettingsClosed;
 
         SlotList.Slots = Slots;
         SlotList.Dialog = Dialog;

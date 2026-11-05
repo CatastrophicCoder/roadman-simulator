@@ -10,8 +10,8 @@ namespace Roadman.Autoload;
 
 /// <summary>
 /// Owns the player's <see cref="PlayerState"/> and forwards its events to <see cref="Events"/>, and holds the
-/// player's <see cref="GameSettings"/> (<c>user://settings.json</c>). The rules live in <see cref="PlayerState"/>,
-/// <see cref="SettingsReader"/> and <see cref="SettingsWriter"/>; this node has none of its own. <c>Main</c> calls
+/// player's <see cref="GameSettings"/> (<c>user://settings.json</c>). The rules live in <see cref="PlayerState"/>
+/// and <see cref="SettingsFile"/>; this node has none of its own. <c>Main</c> calls
 /// <see cref="LoadSettings"/> at startup (not in direct-start tool runs, which keep the defaults).
 /// </summary>
 public partial class GameState : Node
@@ -82,54 +82,27 @@ public partial class GameState : Node
     /// <summary>
     /// Reads <see cref="ResolvedSettingsPath"/> into <see cref="Settings"/>: no file gives the defaults (nothing is
     /// written); an unreadable file gives the defaults and one warning; bad values fall back per key
-    /// (<see cref="SettingsReader"/>). Each warning is pushed once.
+    /// (<see cref="SettingsFile.Load"/>, <see cref="SettingsReader"/>). Each warning is pushed once.
     /// </summary>
     public void LoadSettings()
     {
-        var usable = UsableScreen();
         var path = ResolvedSettingsPath;
-        var warnings = new List<string>();
-        if (!File.Exists(path))
-        {
-            Settings = GameSettings.Defaults(usable);
-        }
-        else
-        {
-            try
-            {
-                var result = SettingsReader.Read(File.ReadAllText(path), usable);
-                Settings = result.Settings;
-                warnings.AddRange(result.Warnings);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                Settings = GameSettings.Defaults(usable);
-                warnings.Add($"could not read the file ({ex.Message}); using the defaults");
-            }
-        }
-
-        SettingsWarnings = warnings;
-        foreach (var warning in warnings)
+        var result = SettingsFile.Load(path, UsableScreen());
+        Settings = result.Settings;
+        SettingsWarnings = result.Warnings;
+        foreach (var warning in result.Warnings)
         {
             GD.PushWarning($"Settings: {path}: {warning}");
         }
     }
 
-    /// <summary>Writes <see cref="Settings"/> to <see cref="ResolvedSettingsPath"/> (through a temporary file).</summary>
+    /// <summary>
+    /// Writes <see cref="Settings"/> to <see cref="ResolvedSettingsPath"/> through a temporary file flushed to disk
+    /// (<see cref="SettingsFile.Save"/>).
+    /// </summary>
     /// <exception cref="IOException">The file couldn't be written.</exception>
     /// <exception cref="UnauthorizedAccessException">The folder isn't writable.</exception>
-    public void SaveSettings()
-    {
-        var path = ResolvedSettingsPath;
-        if (Path.GetDirectoryName(path) is { Length: > 0 } folder)
-        {
-            Directory.CreateDirectory(folder);
-        }
-
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, SettingsWriter.Write(Settings));
-        File.Move(temp, path, overwrite: true);
-    }
+    public void SaveSettings() => SettingsFile.Save(ResolvedSettingsPath, Settings);
 
     /// <summary>The usable area of the window's screen (null when the display server reports none, e.g. headless).</summary>
     private static WindowSize? UsableScreen()

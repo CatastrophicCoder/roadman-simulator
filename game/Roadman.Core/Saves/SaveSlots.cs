@@ -80,7 +80,7 @@ public sealed record SlotInfo(SlotId Slot, SlotStatus Status, SaveGame? Save, st
 }
 
 /// <summary>
-/// The save slots on an <see cref="ISaveStore"/> (the saves folder in the game, <see cref="MemorySaveStore"/> in
+/// The save slots on an <see cref="ISaveStore"/> (the saves folder in the game, an in-memory store in
 /// tests): listing, the most recent save, atomic writes and deletes. No file I/O of its own.
 /// </summary>
 public sealed class SaveSlots

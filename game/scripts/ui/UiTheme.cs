@@ -18,6 +18,9 @@ public static class UiTheme
     /// <summary>Panels and dialogs.</summary>
     public static readonly Color Panel = new(0.1f, 0.115f, 0.135f, 0.94f);
 
+    /// <summary>The near-opaque full-screen fade behind the death screen's panel.</summary>
+    public static readonly Color Shade = new(0.02f, 0.023f, 0.03f, 0.92f);
+
     /// <summary>The dimming behind a dialog and over the paused game.</summary>
     public static readonly Color Dim = new(0f, 0f, 0f, 0.55f);
 
@@ -46,6 +49,9 @@ public static class UiTheme
 
     public const int SmallFontSize = 18;
 
+    /// <summary>Text size of read-only tables (the controls tab).</summary>
+    public const int TableFontSize = 16;
+
     /// <summary>Theme type variation of the big title label.</summary>
     public const string TitleLabel = "TitleLabel";
 
@@ -54,6 +60,18 @@ public static class UiTheme
 
     /// <summary>Theme type variation of hint and status texts.</summary>
     public const string HintLabel = "HintLabel";
+
+    /// <summary>Theme type variation of the settings view's tab buttons: the selected (pressed) one has an accent bar.</summary>
+    public const string TabButton = "TabButton";
+
+    /// <summary>Theme type variation of the cells of a read-only table (the controls tab).</summary>
+    public const string TableLabel = "TableLabel";
+
+    /// <summary>Theme type variation of a table's column headings and group headings.</summary>
+    public const string TableHeading = "TableHeading";
+
+    /// <summary>The panel colour without transparency, for pop-up lists over other panels.</summary>
+    public static readonly Color PopupPanel = new(0.1f, 0.115f, 0.135f);
 
     private static Theme? _theme;
 
@@ -94,6 +112,39 @@ public static class UiTheme
         theme.SetFontSize("font_size", HintLabel, SmallFontSize);
         theme.SetColor("font_color", HintLabel, TextMuted);
 
+        theme.SetTypeVariation(TabButton, "Button");
+        theme.SetStylebox("pressed", TabButton, AccentBar(ButtonPressed));
+        theme.SetStylebox("hover_pressed", TabButton, AccentBar(ButtonPressed));
+        theme.SetColor("font_pressed_color", TabButton, Accent);
+        theme.SetColor("font_hover_pressed_color", TabButton, Accent);
+
+        theme.SetTypeVariation(TableLabel, "Label");
+        theme.SetFontSize("font_size", TableLabel, TableFontSize);
+        theme.SetColor("font_color", TableLabel, Text);
+
+        theme.SetTypeVariation(TableHeading, "Label");
+        theme.SetFontSize("font_size", TableHeading, TableFontSize);
+        theme.SetColor("font_color", TableHeading, Accent);
+
+        // Toggles: the switch icon shows the state, so the background stays the normal button's.
+        theme.SetStylebox("pressed", "CheckButton", Flat(ButtonNormal, margin: 10));
+        theme.SetStylebox("hover_pressed", "CheckButton", Flat(ButtonHover, margin: 10));
+        theme.SetColor("font_pressed_color", "CheckButton", Text);
+        theme.SetColor("font_hover_pressed_color", "CheckButton", Text);
+
+        // Sliders: a flat track, the filled part and the grabber area in the accent colour, the same focus outline.
+        theme.SetStylebox("slider", "HSlider", Track(ButtonNormal));
+        theme.SetStylebox("grabber_area", "HSlider", Track(Accent));
+        theme.SetStylebox("grabber_area_highlight", "HSlider", Track(Accent));
+        theme.SetStylebox("focus", "HSlider", FocusOutline());
+
+        // The option buttons' pop-up lists: an opaque flat panel, the hovered item in the hover colour.
+        theme.SetStylebox("panel", "PopupMenu", Flat(PopupPanel, margin: 6));
+        theme.SetStylebox("hover", "PopupMenu", Flat(ButtonHover, margin: 6));
+        theme.SetColor("font_color", "PopupMenu", Text);
+        theme.SetColor("font_hover_color", "PopupMenu", Accent);
+        theme.SetFontSize("font_size", "PopupMenu", FontSize);
+
         theme.SetConstant("separation", "VBoxContainer", 12);
         theme.SetConstant("separation", "HBoxContainer", 12);
         return theme;
@@ -107,6 +158,25 @@ public static class UiTheme
             ContentMarginRight = margin * 1.6f,
             ContentMarginTop = margin,
             ContentMarginBottom = margin,
+            AntiAliasing = false,
+        };
+
+    /// <summary>A flat button background with a 4 px accent bar along its bottom edge (the selected tab).</summary>
+    private static StyleBoxFlat AccentBar(Color color)
+    {
+        var box = Flat(color, margin: 10);
+        box.BorderColor = Accent;
+        box.BorderWidthBottom = 4;
+        return box;
+    }
+
+    /// <summary>A slider track 6 px high.</summary>
+    private static StyleBoxFlat Track(Color color) =>
+        new()
+        {
+            BgColor = color,
+            ContentMarginTop = 3,
+            ContentMarginBottom = 3,
             AntiAliasing = false,
         };
 

@@ -1,12 +1,13 @@
 using Godot;
 using Roadman.Core.Edge;
+using Roadman.Ui;
 
 namespace Roadman.Hud;
 
 /// <summary>
 /// The death screen (<c>docs/specs/world-edge-game.md</c>, "Death screen"), added by <c>World</c> in every build and
-/// hidden until a death: a dark full-screen fade with three centred lines in the default font, white (title, subtitle,
-/// losses from <see cref="DeathScreenText.Format"/>). <see cref="ShowLosses"/> fades it in over <see cref="FadeTime"/>,
+/// hidden until a death: a dark full-screen fade with a centred flat panel in the <see cref="UiTheme"/> style holding
+/// three lines in the default font (title, subtitle, losses from <see cref="DeathScreenText.Format"/>). <see cref="ShowLosses"/> fades it in over <see cref="FadeTime"/>,
 /// <see cref="FadeOutAndHide"/> fades it out and hides it, <see cref="HideNow"/> hides it at once. It takes no input.
 /// </summary>
 public partial class DeathScreen : CanvasLayer
@@ -20,13 +21,13 @@ public partial class DeathScreen : CanvasLayer
 
     /// <summary>Colour of the full-screen fade at full opacity.</summary>
     [Export]
-    public Color BackgroundColor { get; set; } = new(0.02f, 0.02f, 0.03f, 0.92f);
+    public Color BackgroundColor { get; set; } = UiTheme.Shade;
 
     [Export]
-    public int TitleFontSize { get; set; } = 56;
+    public int TitleFontSize { get; set; } = UiTheme.TitleFontSize + 8;
 
     [Export]
-    public int TextFontSize { get; set; } = 28;
+    public int TextFontSize { get; set; } = UiTheme.FontSize + 4;
 
     /// <summary>Canvas layer, above the HUD and the debug overlays.</summary>
     [Export]
@@ -62,24 +63,31 @@ public partial class DeathScreen : CanvasLayer
     {
         Layer = ScreenLayer;
         Visible = false;
-        Root = new Control { Name = "Root", MouseFilter = Control.MouseFilterEnum.Ignore };
-        Root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        Root = new Control { Name = "Root", MouseFilter = Control.MouseFilterEnum.Ignore, Theme = UiTheme.Theme };
+        Root.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         AddChild(Root);
 
         Background = new ColorRect { Name = "Background", Color = BackgroundColor, MouseFilter = Control.MouseFilterEnum.Ignore };
-        Background.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        Background.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         Root.AddChild(Background);
 
         var centre = new CenterContainer { Name = "Centre", MouseFilter = Control.MouseFilterEnum.Ignore };
-        centre.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        centre.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         Root.AddChild(centre);
 
+        var panel = new PanelContainer
+        {
+            Name = "Panel",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            CustomMinimumSize = new Vector2(640f, 0f),
+        };
+        centre.AddChild(panel);
         var lines = new VBoxContainer { Name = "Lines", MouseFilter = Control.MouseFilterEnum.Ignore };
         lines.AddThemeConstantOverride("separation", 16);
-        centre.AddChild(lines);
-        Title = NewLabel("Title", TitleFontSize);
-        Subtitle = NewLabel("Subtitle", TextFontSize);
-        Losses = NewLabel("Losses", TextFontSize);
+        panel.AddChild(lines);
+        Title = NewLabel("Title", TitleFontSize, UiTheme.Accent);
+        Subtitle = NewLabel("Subtitle", TextFontSize, UiTheme.Text);
+        Losses = NewLabel("Losses", TextFontSize, UiTheme.TextMuted);
         lines.AddChild(Title);
         lines.AddChild(Subtitle);
         lines.AddChild(Losses);
@@ -152,12 +160,12 @@ public partial class DeathScreen : CanvasLayer
         }
     }
 
-    private static Label NewLabel(string name, int fontSize) =>
+    private static Label NewLabel(string name, int fontSize, Color colour) =>
         new()
         {
             Name = name,
             HorizontalAlignment = HorizontalAlignment.Center,
             MouseFilter = Control.MouseFilterEnum.Ignore,
-            LabelSettings = new LabelSettings { FontSize = fontSize, FontColor = Colors.White },
+            LabelSettings = new LabelSettings { FontSize = fontSize, FontColor = colour },
         };
 }

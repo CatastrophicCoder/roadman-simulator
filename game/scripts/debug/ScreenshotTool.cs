@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Godot;
 using Roadman.Core.Edge;
 using Roadman.Core.Maps;
+using Roadman.Core.Saves;
 using Roadman.Core.Tools;
 using Roadman.Hud;
 using Roadman.Scenes;
@@ -15,7 +16,7 @@ namespace Roadman.Debug;
 
 /// <summary>
 /// Renders the world from a named camera preset to a PNG and quits:
-/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--seed &lt;n&gt;]</c>.
+/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots&gt;] [--seed &lt;n&gt;]</c>.
 /// <para>
 /// The image comes from its own <see cref="SubViewport"/> of <see cref="ImageSize"/>, so it doesn't depend on the
 /// window size, display scaling or where the window is. Rendering needs a real display server: the tool refuses to
@@ -39,6 +40,15 @@ namespace Roadman.Debug;
 /// <see cref="Hud.DeathScreen"/> into the capture viewport and captures it once it has faded in. The capture camera copies
 /// the death camera's transform and field of view every settle frame; the death camera is current only in the window's
 /// viewport, whose 3D view isn't rendered.
+/// </para>
+/// <para>
+/// With <c>--menu &lt;main|pause|settings|slots&gt;</c> (debug builds only; <c>docs/specs/menu-settings-save.md</c>,
+/// "Screenshots"), after the usual checks the tool writes sample saves to a new temporary folder
+/// (<see cref="WriteSampleSaves"/>), points <c>Main</c>'s slots at it, moves <c>Main.Ui</c> into the capture viewport
+/// (with the window's 2D scale, <see cref="MenuCanvasSize"/>, so the menu is laid out as in the game) and asks
+/// <c>Main</c> to show the view (<see cref="Main.ShowMenuForScreenshot"/>; all but <c>main</c> pause the tree, so the
+/// tool and its viewport then run with <see cref="Node.ProcessModeEnum.Always"/>). The folder is deleted when the run
+/// finishes. <c>Main</c> must be the world's parent (the main scene), else exit 1.
 /// </para>
 /// </summary>
 public partial class ScreenshotTool : Node
@@ -170,6 +180,17 @@ public partial class ScreenshotTool : Node
     /// </summary>
     public World? World { get; set; }
 
+    /// <summary>
+    /// <c>--menu</c>: when the samples were saved (<see cref="WriteSampleSaves"/>): the autosave, then slot 1. Shown in
+    /// UTC.
+    /// </summary>
+    public static readonly DateTimeOffset[] SampleSavedAt =
+    [
+        new(2026, 11, 5, 14, 30, 0, TimeSpan.Zero),
+        new(2026, 11, 4, 20, 15, 0, TimeSpan.Zero),
+    ];
+
+    private string? _menuSavesFolder;
     private CameraPreset? _preset;
     private string _outputPath = "";
     private SubViewport? _viewport;
@@ -222,6 +243,12 @@ public partial class ScreenshotTool : Node
             return;
         }
 
+        if (Request.Menu is not null && !DebugBuild.IsDebug)
+        {
+            Finish(ScreenshotExitCode.Error, $"{ScreenshotArgs.MenuFlag} needs a debug build");
+            return;
+        }
+
         if (DisplayServer.GetName() == "headless")
         {
             Finish(
@@ -271,6 +298,8 @@ public partial class ScreenshotTool : Node
             Loader.MapLoaded -= OnMapLoaded;
             Loader.MapLoadFailed -= OnMapLoadFailed;
         }
+
+        DeleteMenuSaves();
     }
 
     private CameraPreset? LoadPreset(ScreenshotArgs request, MapLoader loader, string launchDirectory)
@@ -459,6 +488,12 @@ public partial class ScreenshotTool : Node
         if (Request!.Death is { } death)
         {
             await CaptureDeathAsync(death, placement);
+            return;
+        }
+
+        if (Request.Menu is { } menu)
+        {
+            await CaptureMenuAsync(menu, placement);
             return;
         }
 
@@ -745,6 +780,107 @@ public partial class ScreenshotTool : Node
         Save();
     }
 
+    /// <summary>
+    /// <c>--menu</c>: sample saves in a temporary folder, <c>Main</c>'s UI in the capture viewport, the view shown, then
+    /// <see cref="SettleFrames"/> frames and the save.
+    /// </summary>
+    private async Task CaptureMenuAsync(MenuShot menu, PresetResolution placement)
+    {
+        var flag = $"{ScreenshotArgs.MenuFlag} {ScreenshotArgs.MenuValue(menu)}";
+        if (World?.GetParent() is not Main main || main.Ui is null || main.SettingsView is null)
+        {
+            Finish(ScreenshotExitCode.Error, $"{flag}: needs Main (the main scene) as the world's parent, with its UI built");
+            return;
+        }
+
+        var loader = Loader!;
+        _menuSavesFolder = Path.Combine(Path.GetTempPath(), $"roadman-menu-shot-{Guid.NewGuid():N}");
+        try
+        {
+            WriteSampleSaves(
+                _menuSavesFolder,
+                loader.Manifest?.MapId ?? loader.ResolvedMapId,
+                loader.Manifest?.GeneratedAt,
+                ToVector(placement.LookAt));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Finish(ScreenshotExitCode.Error, $"{flag}: can't write the sample saves to {_menuSavesFolder}: {ex.Message}");
+            return;
+        }
+
+        main.UseSavesFolder(_menuSavesFolder);
+
+        // The menus are laid out in the window's 2D space (the project's base size, stretched); give the capture the
+        // same space, so the image shows them as the game does.
+        _viewport!.Size2DOverride = MenuCanvasSize(ImageSize);
+        _viewport.Size2DOverrideStretch = true;
+        var ui = main.Ui;
+        ui.GetParent()?.RemoveChild(ui);
+        _viewport.AddChild(ui);
+
+        // Pausing stops the world; the tool's waits and its viewport must go on.
+        ProcessMode = ProcessModeEnum.Always;
+        _viewport.ProcessMode = ProcessModeEnum.Always;
+        if (!main.ShowMenuForScreenshot(menu))
+        {
+            Finish(ScreenshotExitCode.Error, $"{flag}: Main didn't show the menu (not a --menu direct start)");
+            return;
+        }
+
+        GD.Print($"Screenshot: {flag}");
+        for (var i = 0; i < SettleFrames; i++)
+        {
+            await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+            if (_finished || !IsInsideTree())
+            {
+                return;
+            }
+        }
+
+        Save();
+    }
+
+    /// <summary>
+    /// The 2D size the menus are laid out in for an image of <paramref name="imageSize"/>: the project's base size
+    /// (<c>display/window/size/viewport_width</c> and <c>_height</c>) widened or heightened to the image's aspect ratio,
+    /// as the <c>canvas_items</c> stretch mode with the <c>expand</c> aspect does for the window
+    /// (<see cref="CanvasStretch.ExpandedSize"/>).
+    /// </summary>
+    public static Vector2I MenuCanvasSize(Vector2I imageSize)
+    {
+        var baseWidth = ProjectSettings.GetSetting("display/window/size/viewport_width", 1152).AsInt32();
+        var baseHeight = ProjectSettings.GetSetting("display/window/size/viewport_height", 648).AsInt32();
+        var (width, height) = CanvasStretch.ExpandedSize(baseWidth, baseHeight, imageSize.X, imageSize.Y);
+        return new Vector2I(width, height);
+    }
+
+    /// <summary>
+    /// <c>--menu</c>: writes the sample saves into <paramref name="folder"/> (created): the autosave and slot 1 valid
+    /// (<paramref name="mapId"/>, <see cref="SampleSavedAt"/>, money 120 and 2450, play time 1:23 and 12:05, some
+    /// gear, at <paramref name="position"/>), slot 2 damaged (not JSON), the rest empty.
+    /// </summary>
+    public static void WriteSampleSaves(string folder, string mapId, string? generatedAt, Vector3 position)
+    {
+        var slots = new SaveSlots(new Saves.FileSaveStore(folder));
+        var stamp = string.IsNullOrWhiteSpace(generatedAt) ? SaveFactory.UnknownGeneratedAt : generatedAt;
+        var point = new LocalPoint(position.X, position.Y, position.Z);
+        SaveGame Sample(DateTimeOffset savedAt, double playSeconds, int money, string[] gear) =>
+            new(
+                SaveFormat.CurrentVersion,
+                Main.GameVersion,
+                savedAt,
+                playSeconds,
+                mapId,
+                stamp,
+                new SavePlayer(point, 0d, money, gear, 0),
+                SaveQuests.Empty);
+
+        slots.Write(SlotId.Autosave, Sample(SampleSavedAt[0], 4_980, 120, ["phone"]));
+        slots.Write(SlotId.Manual(1), Sample(SampleSavedAt[1], 43_500, 2_450, ["lockpick", "phone"]));
+        new Saves.FileSaveStore(folder).WriteText(SlotId.Manual(2).FileName, "{ not json");
+    }
+
     private static bool HasPlayer(World world) =>
         world.Player is { } player && IsInstanceValid(player)
         && world.PlayerCamera is { } camera && IsInstanceValid(camera);
@@ -811,6 +947,7 @@ public partial class ScreenshotTool : Node
 
         _finished = true;
         ExitCode = exitCode;
+        DeleteMenuSaves();
         if (error is not null)
         {
             GD.PushError($"Screenshot: {error}");
@@ -819,6 +956,27 @@ public partial class ScreenshotTool : Node
         if (QuitOnFinish)
         {
             GetTree().Quit(exitCode);
+        }
+    }
+
+    private void DeleteMenuSaves()
+    {
+        if (_menuSavesFolder is not { } folder)
+        {
+            return;
+        }
+
+        _menuSavesFolder = null;
+        try
+        {
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            GD.PushWarning($"Screenshot: can't delete the sample saves folder {folder}: {ex.Message}");
         }
     }
 

@@ -8,16 +8,19 @@ using Godot;
 using Roadman.Autoload;
 using Roadman.Core.Maps;
 using Roadman.Core.Saves;
+using Roadman.Core.Settings;
+using Roadman.Debug;
 using Roadman.OnFoot;
 using Roadman.Saves;
 using Roadman.Scenes;
+using Roadman.Settings;
 using static GdUnit4.Assertions;
 
 namespace Roadman.Tests;
 
 /// <summary>
 /// Shared helpers for the <c>Main</c> suites of <c>docs/specs/menu-settings-save.md</c> (<see cref="MainMenuTest"/>,
-/// <see cref="PauseTest"/>, <see cref="SaveLoadTest"/>): a <see cref="Main"/> on a temporary saves folder and settings
+/// <see cref="PauseTest"/>, <see cref="SaveLoadTest"/>, <see cref="SettingsViewTest"/>): a <see cref="Main"/> on a temporary saves folder and settings
 /// file (never the real user folder), simulated keyboard and gamepad input, focus navigation, and sample saves.
 /// <para>
 /// <c>Main</c> starts games on the map in the project setting <c>roadman/map/id</c> (<c>somero</c>), the same pack
@@ -25,9 +28,12 @@ namespace Roadman.Tests;
 /// derived from the loaded pack as in <see cref="WorldEdgeTest"/>.
 /// </para>
 /// <para>
-/// Every suite calls <see cref="TearDown"/> after each test: it unpauses the tree, frees a <c>Main</c> that is still
-/// alive, resets <see cref="GameState.SettingsPath"/>, returns every injected input to rest and deletes the temporary
-/// folder (making it writable first), so a failing test can't stall the suites after it.
+/// Every suite calls <see cref="BeginTest"/> before each test and <see cref="TearDown"/> after it. <c>BeginTest</c>
+/// makes the temporary folder and records the engine state <c>Main</c> changes when it applies the settings
+/// (<see cref="EngineState"/>); <c>TearDown</c> unpauses the tree, frees a <c>Main</c> that is still alive, puts that
+/// state back, resets <see cref="GameState.SettingsPath"/> and <see cref="DebugBuild.Override"/>, returns every
+/// injected input to rest and deletes the temporary folder (making it writable first), so a failing test can't stall
+/// or change the suites after it.
 /// </para>
 /// </summary>
 internal static class MainTestSupport
@@ -59,6 +65,12 @@ internal static class MainTestSupport
     ];
 
     private static readonly JoyAxis[] InjectedAxes = [JoyAxis.LeftX, JoyAxis.LeftY];
+
+    /// <summary>The audio buses <see cref="SettingsApplier.ApplyAudio"/> sets.</summary>
+    private static readonly string[] Buses = [SettingsApplier.MasterBus, SettingsApplier.MusicBus, SettingsApplier.EffectsBus];
+
+    /// <summary>The state recorded by <see cref="BeginTest"/>, put back by <see cref="TearDown"/>.</summary>
+    private static EngineState? _savedState;
 
 
     private static readonly string[] PressedActions = [Player.MoveForwardAction, Player.JumpAction, World.PauseAction, "ui_cancel", "ui_accept"];
@@ -100,6 +112,78 @@ internal static class MainTestSupport
     public static readonly Nav[] AllNavs = [Keyboard, PadDpad];
 
     // ===== Main and folders =====
+
+    /// <summary>
+    /// The global engine state <c>Main._Ready</c> changes through <see cref="SettingsApplier.ApplyAll"/> and the
+    /// settings view through its changes: the root viewport's MSAA, screen-space anti-aliasing and 3D scale,
+    /// <see cref="Engine.MaxFps"/>, the three audio buses' volume and mute, and <see cref="GameState.Settings"/>. The
+    /// directional shadow atlas and soft shadow filter have no getters; <see cref="Restore"/> sets the project's own.
+    /// </summary>
+    internal sealed record EngineState(
+        int MaxFps,
+        Viewport.Msaa Msaa3D,
+        Viewport.ScreenSpaceAAEnum ScreenSpaceAA,
+        float Scaling3DScale,
+        (float Db, bool Mute)[] Buses,
+        GameSettings Settings)
+    {
+        public static EngineState Take()
+        {
+            var root = ((SceneTree)Engine.GetMainLoop()).Root;
+            return new EngineState(
+                Engine.MaxFps,
+                root.Msaa3D,
+                root.ScreenSpaceAA,
+                root.Scaling3DScale,
+                [.. MainTestSupport.Buses.Select(name =>
+                {
+                    var index = AudioServer.GetBusIndex(name);
+                    return index < 0 ? (0f, false) : (AudioServer.GetBusVolumeDb(index), AudioServer.IsBusMute(index));
+                })],
+                GameState.Instance?.Settings ?? GameSettings.Default);
+        }
+
+        public void Restore()
+        {
+            Engine.MaxFps = MaxFps;
+            if (Engine.GetMainLoop() is SceneTree tree)
+            {
+                tree.Root.Msaa3D = Msaa3D;
+                tree.Root.ScreenSpaceAA = ScreenSpaceAA;
+                tree.Root.Scaling3DScale = Scaling3DScale;
+            }
+
+            for (var i = 0; i < MainTestSupport.Buses.Length && i < Buses.Length; i++)
+            {
+                var index = AudioServer.GetBusIndex(MainTestSupport.Buses[i]);
+                if (index >= 0)
+                {
+                    AudioServer.SetBusVolumeDb(index, Buses[i].Db);
+                    AudioServer.SetBusMute(index, Buses[i].Mute);
+                }
+            }
+
+            // The project's own shadow atlas and soft shadow filter (a High or Low preset changed them).
+            RenderingServer.DirectionalShadowAtlasSetSize(
+                ProjectSettings.GetSetting("rendering/lights_and_shadows/directional_shadow/size", 4096).AsInt32(),
+                ProjectSettings.GetSetting(SettingsApplier.DirectionalShadow16BitsSetting, true).AsBool());
+            RenderingServer.DirectionalSoftShadowFilterSetQuality(SettingsApplier.SoftShadowQuality(QualityPreset.Medium));
+            if (GameState.Instance is { } state)
+            {
+                state.Settings = Settings;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Before each test: records the <see cref="EngineState"/> for <see cref="TearDown"/> and returns a new empty
+    /// temporary folder named after <paramref name="what"/>.
+    /// </summary>
+    public static string BeginTest(string what)
+    {
+        _savedState = EngineState.Take();
+        return NewTempFolder(what);
+    }
 
     /// <summary>A new empty temporary folder; the caller deletes it with <see cref="DeleteFolder"/>.</summary>
     public static string NewTempFolder(string what)
@@ -154,6 +238,9 @@ internal static class MainTestSupport
             after.Paused = false;
         }
 
+        _savedState?.Restore();
+        _savedState = null;
+        DebugBuild.Override = null;
         if (GameState.Instance is { } state)
         {
             state.SettingsPath = null;

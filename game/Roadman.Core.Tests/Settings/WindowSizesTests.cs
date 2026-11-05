@@ -49,4 +49,43 @@ public class WindowSizesTests
             [new WindowSize(1280, 720), new WindowSize(1600, 900)],
             WindowSizes.Fitting(new WindowSize(1600, 2000)));
     }
+
+    [Fact]
+    public void ListFor_UnknownScreen_ListsAllFour()
+    {
+        Assert.Equal(WindowSizes.All, WindowSizes.ListFor(null, WindowSizes.Default));
+    }
+
+    [Fact]
+    public void ListFor_CurrentFits_IsTheFittingSizes()
+    {
+        Assert.Equal(
+            WindowSizes.Fitting(new WindowSize(1920, 1080)),
+            WindowSizes.ListFor(new WindowSize(1920, 1080), new WindowSize(1600, 900)));
+    }
+
+    [Fact]
+    public void ListFor_CurrentDoesNotFit_AddsItSortedByWidthThenHeight()
+    {
+        // 2560x1440 chosen on a larger screen, now on a 1600x900 one: listed after the two that fit.
+        Assert.Equal(
+            [new WindowSize(1280, 720), new WindowSize(1600, 900), new WindowSize(2560, 1440)],
+            WindowSizes.ListFor(new WindowSize(1600, 900), new WindowSize(2560, 1440)));
+    }
+
+    [Fact]
+    public void ListFor_CurrentNotAKnownSize_IsSortedIn()
+    {
+        Assert.Equal(
+            [new WindowSize(1280, 720), new WindowSize(1280, 800), new WindowSize(1600, 900)],
+            WindowSizes.ListFor(new WindowSize(1600, 900), new WindowSize(1280, 800)));
+    }
+
+    [Fact]
+    public void ListFor_NoneFits_GivesThe1280x720AndTheCurrent()
+    {
+        Assert.Equal(
+            [new WindowSize(1280, 720), new WindowSize(1600, 900)],
+            WindowSizes.ListFor(new WindowSize(1024, 768), new WindowSize(1600, 900)));
+    }
 }

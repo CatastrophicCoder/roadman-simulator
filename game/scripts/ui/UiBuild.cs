@@ -11,7 +11,7 @@ public static class UiBuild
     public static VBoxContainer CentredPanel(Control parent, string name, float minWidth)
     {
         var centre = new CenterContainer { Name = name, MouseFilter = Control.MouseFilterEnum.Ignore };
-        centre.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        centre.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         parent.AddChild(centre);
         var panel = new PanelContainer { Name = "Panel", CustomMinimumSize = new Vector2(minWidth, 0f) };
         centre.AddChild(panel);
@@ -24,7 +24,7 @@ public static class UiBuild
     public static ColorRect FullRect(Control parent, string name, Color color)
     {
         var rect = new ColorRect { Name = name, Color = color, MouseFilter = Control.MouseFilterEnum.Stop };
-        rect.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        rect.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         parent.AddChild(rect);
         return rect;
     }
@@ -51,7 +51,7 @@ public static class UiBuild
     /// <summary>Makes <paramref name="control"/> fill its parent (a full-screen menu view).</summary>
     public static void Fill(Control control)
     {
-        control.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        control.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         control.MouseFilter = Control.MouseFilterEnum.Ignore;
     }
 }

@@ -7,7 +7,7 @@ namespace Roadman.Ui;
 /// The pause menu (<c>docs/specs/menu-settings-save.md</c>, "Pause menu"), over the dimmed paused game:
 /// <see cref="ResumeButton"/>, <see cref="SaveButton"/> (with <see cref="SaveHint"/> while saving isn't possible),
 /// <see cref="LoadButton"/>, <see cref="SettingsButton"/> and <see cref="QuitToMenuButton"/>. <c>Main</c> connects the
-/// buttons and calls <see cref="Refresh"/>. Settings stays disabled until the settings view exists.
+/// buttons and calls <see cref="Refresh"/>.
 /// </summary>
 public partial class PauseMenu : Control
 {
@@ -30,9 +30,6 @@ public partial class PauseMenu : Control
 
     /// <summary>The five buttons in order.</summary>
     public IReadOnlyList<Button> Buttons => [ResumeButton, SaveButton, LoadButton, SettingsButton, QuitToMenuButton];
-
-    /// <summary>Whether Settings can be chosen (false until the settings view exists).</summary>
-    public bool SettingsEnabled { get; set; }
 
     public override void _Ready()
     {
@@ -61,7 +58,7 @@ public partial class PauseMenu : Control
         UiFocus.SetEnabled(SaveButton, canSave);
         SaveHint.Visible = !canSave;
         UiFocus.SetEnabled(LoadButton, canLoad);
-        UiFocus.SetEnabled(SettingsButton, SettingsEnabled);
+        UiFocus.SetEnabled(SettingsButton, true);
         UiFocus.SetEnabled(QuitToMenuButton, true);
         FocusFirst();
     }

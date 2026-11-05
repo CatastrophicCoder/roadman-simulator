@@ -59,6 +59,24 @@ public static class WindowSizes
     public static bool IsKnown(WindowSize size) => All.Contains(size);
 
     /// <summary>
+    /// The sizes the settings view lists: <see cref="Fitting"/> <paramref name="usable"/> (all of <see cref="All"/>
+    /// when it is null), plus <paramref name="current"/> when it isn't among them (a size chosen on a larger screen),
+    /// sorted by width, then height.
+    /// </summary>
+    /// <param name="usable">The screen's usable area, or null when unknown.</param>
+    /// <param name="current">The window size in the settings.</param>
+    public static IReadOnlyList<WindowSize> ListFor(WindowSize? usable, WindowSize current)
+    {
+        var sizes = (usable is { } area ? Fitting(area) : All).ToList();
+        if (!sizes.Contains(current))
+        {
+            sizes.Add(current);
+        }
+
+        return [.. sizes.OrderBy(size => size.Width).ThenBy(size => size.Height)];
+    }
+
+    /// <summary>
     /// The default size: <see cref="Default"/> when <paramref name="usable"/> is null or it fits, else the largest
     /// of <see cref="Fitting"/>.
     /// </summary>

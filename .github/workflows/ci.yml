@@ -97,3 +97,17 @@ jobs:
           fi
       - name: gdUnit4 tests
         run: GODOT_BIN="$GODOT" dotnet test game/RoadmanSimulator.csproj --settings game/.runsettings
+      - name: Godot headless startup
+        # Main starts a new game at once on the test-area somero pack built above, using the
+        # Debug assembly the gdUnit4 step built; the same check as /verify's "headless startup".
+        run: |
+          ROOT="$PWD"
+          . .claude/scripts/lib.sh
+          log="$RUNNER_TEMP/godot-startup.log"
+          if headless_startup "$(find_godot)" "$log"; then
+            echo "startup: $STARTUP_DETAIL"
+          else
+            cat "$log"
+            echo "::error::Godot headless startup failed: $STARTUP_DETAIL"
+            exit 1
+          fi

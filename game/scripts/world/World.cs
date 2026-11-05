@@ -114,9 +114,16 @@ public partial class World : Node3D
     /// <summary>Opens the pause menu (Esc, the gamepad start button); never dismisses the death screen.</summary>
     public const string PauseAction = "pause";
 
+    /// <summary>
+    /// How far above a saved position's height the load placement ray starts (<see cref="CheckLoadPlacement"/>), so a
+    /// save under a bridge deck finds the ground under the deck, not the deck.
+    /// </summary>
+    public const float LoadRayHeadroom = 2f;
+
     private Random _spawnRandom = new(0);
     private int _spawnGeneration;
     private bool _screenshotRun;
+    private QualityPreset? _qualitySettings;
     private bool _mapSignalsHooked;
     private bool _playerCameraHadMouse;
     private ulong? _resumeProcessFrame;
@@ -243,6 +250,25 @@ public partial class World : Node3D
     public GameplaySettings? CameraSettings { get; set; }
 
     /// <summary>
+    /// The quality preset applied to <see cref="Sun"/> (<see cref="ApplyQualitySettings"/>): its shadows on or off,
+    /// its directional shadow splits (1: orthogonal, 2 or 4: parallel splits) and shadow distance. Applied when the sun
+    /// is made and whenever this is set. Null (direct <c>World</c> runs, screenshots, perf runs, tests) keeps the sun's
+    /// own values (<see cref="SunShadowMaxDistance"/>, four splits). <c>Main</c> sets it from the settings.
+    /// </summary>
+    public QualityPreset? QualitySettings
+    {
+        get => _qualitySettings;
+        set
+        {
+            _qualitySettings = value;
+            ApplyQualitySettings();
+        }
+    }
+
+    /// <summary>The directional light; null before <see cref="_Ready"/>.</summary>
+    public DirectionalLight3D? Sun { get; private set; }
+
+    /// <summary>
     /// Whether a manual save can be written now: a player exists and the death sequence is
     /// <see cref="DeathState.Alive"/>.
     /// </summary>
@@ -336,7 +362,9 @@ public partial class World : Node3D
         }
 
         AddChild(CreateEnvironment());
-        AddChild(CreateSun());
+        Sun = CreateSun();
+        AddChild(Sun);
+        ApplyQualitySettings();
 
         Death = new DeathSequence(GameState.Instance?.Player ?? new PlayerState());
         Death.StateChanged += OnDeathStateChanged;
@@ -727,8 +755,8 @@ public partial class World : Node3D
     /// <summary>
     /// "Loading a save", step 4: frees the current player, then places a new one from <paramref name="save"/>. An empty
     /// position uses the spawn draw (not moved). Otherwise the placement check (<see cref="CheckLoadPlacement"/>) at
-    /// the saved x/z: passing puts the player on that ground facing the saved yaw, with zero velocity; failing uses
-    /// the spawn draw (moved). Then the player camera is current behind it, the street label targets it and
+    /// the saved x/z, its ray starting <see cref="LoadRayHeadroom"/> above the saved height: passing puts the player on
+    /// that ground facing the saved yaw, with zero velocity; failing uses the spawn draw (moved). Then the player camera is current behind it, the street label targets it and
     /// <see cref="SignalName.PlayerLoaded"/> fires. Call it after the terrain collision is queryable; the map load
     /// calls it for <see cref="PendingLoad"/>.
     /// </summary>
@@ -742,7 +770,7 @@ public partial class World : Node3D
         var moved = false;
         Vector3 position;
         float facing;
-        if (save.Position is { } saved && CheckLoadPlacement((float)saved.X, (float)saved.Z, out position))
+        if (save.Position is { } saved && CheckLoadPlacement((float)saved.X, (float)saved.Z, out position, (float)saved.Y))
         {
             facing = (float)(save.FacingYaw ?? 0d);
         }
@@ -764,16 +792,20 @@ public partial class World : Node3D
     }
 
     /// <summary>
-    /// The load placement check ("Loading a save", step 4): a downward ray from above (<paramref name="x"/>,
-    /// <paramref name="z"/>) must hit <see cref="MapLoader.TerrainGroup"/> or <see cref="MapLoader.RoadGroup"/> first,
-    /// and the player's capsule, <see cref="SpawnDropHeight"/> above that hit, must overlap nothing but terrain and
+    /// The load placement check ("Loading a save", step 4): a downward ray at (<paramref name="x"/>,
+    /// <paramref name="z"/>), from 10 000 m or from <paramref name="fromY"/> + <see cref="LoadRayHeadroom"/>, must hit
+    /// <see cref="MapLoader.TerrainGroup"/> or <see cref="MapLoader.RoadGroup"/> first, and the player's capsule, <see cref="SpawnDropHeight"/> above that hit, must overlap nothing but terrain and
     /// roads. The player's own body is ignored. Call it from a physics frame or after one.
     /// </summary>
     /// <param name="feet">The passing point (the player's feet, <see cref="SpawnDropHeight"/> above the ground).</param>
-    public bool CheckLoadPlacement(float x, float z, out Vector3 feet)
+    /// <param name="fromY">
+    /// The saved height (the player's feet), or null to start the ray from 10 000 m. With it, a save under a bridge
+    /// deck is placed under the deck, and a save on the deck on it. A non-finite value fails the check.
+    /// </param>
+    public bool CheckLoadPlacement(float x, float z, out Vector3 feet, float? fromY = null)
     {
         feet = Vector3.Zero;
-        if (!MapLoader.IsInsideTree() || !float.IsFinite(x) || !float.IsFinite(z))
+        if (!MapLoader.IsInsideTree() || !float.IsFinite(x) || !float.IsFinite(z) || (fromY is { } y && !float.IsFinite(y)))
         {
             return false;
         }
@@ -788,7 +820,8 @@ public partial class World : Node3D
             excluded.Add(Player.GetRid());
         }
 
-        var ray = PhysicsRayQueryParameters3D.Create(new Vector3(x, 10_000f, z), new Vector3(x, -10_000f, z));
+        var top = fromY is { } start ? start + LoadRayHeadroom : 10_000f;
+        var ray = PhysicsRayQueryParameters3D.Create(new Vector3(x, top, z), new Vector3(x, -10_000f, z));
         ray.Exclude = excluded;
         var hit = space.IntersectRay(ray);
         if (hit.Count == 0 || hit["collider"].AsGodotObject() is not Node first || !IsGroundOrRoad(first))
@@ -830,6 +863,26 @@ public partial class World : Node3D
         {
             PlayerCamera.ApplySettings(settings);
         }
+    }
+
+    /// <summary>
+    /// Applies <see cref="QualitySettings"/> to <see cref="Sun"/>, when both exist; see <see cref="QualitySettings"/>.
+    /// </summary>
+    public void ApplyQualitySettings()
+    {
+        if (QualitySettings is not { } preset || Sun is null || !IsInstanceValid(Sun))
+        {
+            return;
+        }
+
+        Sun.ShadowEnabled = preset.DirectionalShadows;
+        Sun.DirectionalShadowMode = preset.ShadowSplits switch
+        {
+            1 => DirectionalLight3D.ShadowMode.Orthogonal,
+            2 => DirectionalLight3D.ShadowMode.Parallel2Splits,
+            _ => DirectionalLight3D.ShadowMode.Parallel4Splits,
+        };
+        Sun.DirectionalShadowMaxDistance = (float)preset.ShadowMaxDistance;
     }
 
     /// <summary>

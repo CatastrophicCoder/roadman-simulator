@@ -7,8 +7,7 @@ namespace Roadman.Ui;
 /// The main menu (<c>docs/specs/menu-settings-save.md</c>, "Main menu"): the title, the buttons
 /// <see cref="NewGameButton"/>, <see cref="ContinueButton"/>, <see cref="LoadButton"/>, <see cref="SettingsButton"/>
 /// and <see cref="QuitButton"/> in that order, and the version in the bottom-right corner. <c>Main</c> connects the
-/// buttons and calls <see cref="Refresh"/>. Settings stays disabled until the settings view exists
-/// (<see cref="SettingsEnabled"/>).
+/// buttons and calls <see cref="Refresh"/>.
 /// </summary>
 public partial class MainMenu : Control
 {
@@ -31,9 +30,6 @@ public partial class MainMenu : Control
 
     /// <summary>The five buttons in order.</summary>
     public IReadOnlyList<Button> Buttons => [NewGameButton, ContinueButton, LoadButton, SettingsButton, QuitButton];
-
-    /// <summary>Whether Settings can be chosen (false until the settings view exists).</summary>
-    public bool SettingsEnabled { get; set; }
 
     /// <summary>The version shown; set before ready.</summary>
     public string Version { get; set; } = "dev";
@@ -77,7 +73,7 @@ public partial class MainMenu : Control
         UiFocus.SetEnabled(NewGameButton, true);
         UiFocus.SetEnabled(ContinueButton, canContinue);
         UiFocus.SetEnabled(LoadButton, canLoad);
-        UiFocus.SetEnabled(SettingsButton, SettingsEnabled);
+        UiFocus.SetEnabled(SettingsButton, true);
         UiFocus.SetEnabled(QuitButton, true);
         FocusFirst();
     }

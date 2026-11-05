@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Godot;
+using Roadman.Core.IO;
 using Roadman.Core.Saves;
 
 namespace Roadman.Saves;
@@ -11,7 +12,8 @@ namespace Roadman.Saves;
 /// An <see cref="ISaveStore"/> over one folder of the file system: by default <see cref="DefaultFolder"/>
 /// (<c>user://saves/</c>), or any absolute folder (tests point it at a temporary one); never a <c>res://</c> folder
 /// (<see cref="PlayerDataPath"/>). The folder is created on the first write; listing a folder that doesn't exist gives
-/// no files. Plain file names only.
+/// no files. Writes are flushed to disk before they return (<see cref="DurableFile"/>), so the rename after them
+/// never publishes a file whose data isn't on disk. Plain file names only.
 /// </summary>
 public sealed class FileSaveStore : ISaveStore
 {
@@ -50,7 +52,7 @@ public sealed class FileSaveStore : ISaveStore
     public void WriteText(string name, string text)
     {
         Directory.CreateDirectory(Folder);
-        File.WriteAllText(PathOf(name), text);
+        DurableFile.WriteAllText(PathOf(name), text);
     }
 
     public void Rename(string from, string to)

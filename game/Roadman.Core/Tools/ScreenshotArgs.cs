@@ -4,7 +4,7 @@ namespace Roadman.Core.Tools;
 
 /// <summary>
 /// The screenshot tool's user arguments (after <c>--</c> on the Godot command line):
-/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;]</c>.
+/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots&gt;]</c>.
 /// <c>--seed &lt;n&gt;</c> may stand among them; it belongs to <see cref="SeedArg"/>, which reads it, and is skipped here
 /// (its value is still checked and a repeat is rejected, so a bad seed is an argument error of the screenshot run too).
 /// </summary>
@@ -35,6 +35,12 @@ namespace Roadman.Core.Tools;
 /// pull-back (<see cref="DeathShot.Fall"/>) or the faded-in death screen (<see cref="DeathShot.Screen"/>). Debug builds
 /// only; can't be combined with <paramref name="Player"/> or <paramref name="Inspect"/>. Null: no death.
 /// </param>
+/// <param name="Menu">
+/// Render a menu over the preset's view (<c>docs/specs/menu-settings-save.md</c>, "Screenshots"): the main menu, the
+/// pause menu, the settings view's Display tab or the slot list in load mode with sample saves. Debug builds only;
+/// can't be combined with <paramref name="Player"/>, <paramref name="Inspect"/>, <paramref name="Death"/>,
+/// <paramref name="Orthophoto"/> or <paramref name="RoadGraph"/>. Null: no menu.
+/// </param>
 public sealed record ScreenshotArgs(
     string Preset,
     string OutputPath,
@@ -44,7 +50,8 @@ public sealed record ScreenshotArgs(
     bool RoadGraph = false,
     bool Inspect = false,
     bool Player = false,
-    DeathShot? Death = null)
+    DeathShot? Death = null,
+    MenuShot? Menu = null)
 {
     public const string ScreenshotFlag = "--screenshot";
     public const string PresetsFlag = "--presets";
@@ -56,9 +63,16 @@ public sealed record ScreenshotArgs(
     public const string DeathFlag = "--death";
     public const string DeathFallValue = "fall";
     public const string DeathScreenValue = "screen";
+    public const string MenuFlag = "--menu";
+    public const string MenuMainValue = "main";
+    public const string MenuPauseValue = "pause";
+    public const string MenuSettingsValue = "settings";
+    public const string MenuSlotsValue = "slots";
 
     private const string Usage =
-        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{PlayerFlag}] [{DeathFlag} <{DeathFallValue}|{DeathScreenValue}>] [{SeedArg.Flag} <n>]";
+        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{PlayerFlag}] [{DeathFlag} <{DeathFallValue}|{DeathScreenValue}>] [{MenuFlag} <{MenuValues}>] [{SeedArg.Flag} <n>]";
+
+    private const string MenuValues = $"{MenuMainValue}|{MenuPauseValue}|{MenuSettingsValue}|{MenuSlotsValue}";
 
     /// <summary>
     /// Parses the user arguments.
@@ -71,7 +85,9 @@ public sealed record ScreenshotArgs(
     /// With <c>--screenshot</c>: a value is missing, an argument is repeated or unknown, the output isn't a <c>.png</c>,
     /// the map id isn't a slug, the <c>--seed</c> value isn't an integer, the <c>--death</c> value isn't <c>fall</c> or
     /// <c>screen</c>, <c>--player</c> is given with <c>--inspect</c>, or <c>--death</c> with <c>--player</c> or
-    /// <c>--inspect</c>.
+    /// <c>--inspect</c>, <c>--menu</c> isn't given one of <c>main</c>, <c>pause</c>, <c>settings</c> or <c>slots</c>, or
+    /// <c>--menu</c> is given with <c>--player</c>, <c>--inspect</c>, <c>--death</c>, <c>--orthophoto</c> or
+    /// <c>--road-graph</c>.
     /// </exception>
     public static ScreenshotArgs? Parse(IReadOnlyList<string> userArgs)
     {
@@ -93,6 +109,7 @@ public sealed record ScreenshotArgs(
         var inspect = false;
         var player = false;
         DeathShot? death = null;
+        MenuShot? menu = null;
         var seenSeed = false;
 
         for (var i = 0; i < userArgs.Count; i++)
@@ -180,6 +197,16 @@ public sealed record ScreenshotArgs(
                             $"{DeathFlag} needs {DeathFallValue} or {DeathScreenValue}, got '{value}'"),
                     };
                     break;
+                case MenuFlag:
+                    if (menu is not null)
+                    {
+                        throw new ArgumentException($"{MenuFlag} is given more than once");
+                    }
+
+                    var menuValue = Value(userArgs, ++i, $"{MenuFlag} needs {MenuValues}");
+                    menu = ParseMenu(menuValue)
+                        ?? throw new ArgumentException($"{MenuFlag} needs {MenuValues}, got '{menuValue}'");
+                    break;
                 case SeedArg.Flag:
                     // Read by SeedArg.Parse; here a repeat is rejected and the value is only checked and skipped.
                     if (seenSeed)
@@ -212,8 +239,45 @@ public sealed record ScreenshotArgs(
             throw new ArgumentException($"{DeathFlag} can't be combined with {(player ? PlayerFlag : InspectFlag)}");
         }
 
-        return new ScreenshotArgs(preset!, output, presetsPath, mapId, orthophoto, roadGraph, inspect, player, death);
+        if (menu is not null)
+        {
+            // A menu covers the view; the other debug flags photograph something the menu would hide.
+            var other = player ? PlayerFlag
+                : inspect ? InspectFlag
+                : death is not null ? DeathFlag
+                : orthophoto ? OrthophotoFlag
+                : roadGraph ? RoadGraphFlag
+                : null;
+            if (other is not null)
+            {
+                throw new ArgumentException($"{MenuFlag} can't be combined with {other}");
+            }
+        }
+
+        return new ScreenshotArgs(preset!, output, presetsPath, mapId, orthophoto, roadGraph, inspect, player, death, menu);
     }
+
+    /// <summary>The <see cref="MenuShot"/> of a <c>--menu</c> value; null when it isn't one.</summary>
+    public static MenuShot? ParseMenu(string value) =>
+        value switch
+        {
+            MenuMainValue => MenuShot.Main,
+            MenuPauseValue => MenuShot.Pause,
+            MenuSettingsValue => MenuShot.Settings,
+            MenuSlotsValue => MenuShot.Slots,
+            _ => null,
+        };
+
+    /// <summary>The <c>--menu</c> value of <paramref name="menu"/>.</summary>
+    public static string MenuValue(MenuShot menu) =>
+        menu switch
+        {
+            MenuShot.Main => MenuMainValue,
+            MenuShot.Pause => MenuPauseValue,
+            MenuShot.Settings => MenuSettingsValue,
+            MenuShot.Slots => MenuSlotsValue,
+            _ => throw new ArgumentOutOfRangeException(nameof(menu), menu, "not a menu shot"),
+        };
 
     private static string Value(IReadOnlyList<string> args, int index, string error)
     {
@@ -236,6 +300,22 @@ public enum DeathShot
     Screen,
 }
 
+/// <summary>The menu a <c>--menu</c> screenshot shows.</summary>
+public enum MenuShot
+{
+    /// <summary><c>main</c>: the main menu on its plain background.</summary>
+    Main,
+
+    /// <summary><c>pause</c>: the pause menu over the paused game.</summary>
+    Pause,
+
+    /// <summary><c>settings</c>: the settings view's Display tab, opened from the pause menu.</summary>
+    Settings,
+
+    /// <summary><c>slots</c>: the slot list in load mode with sample saves, opened from the pause menu.</summary>
+    Slots,
+}
+
 /// <summary>Process exit codes of the screenshot tool, as read by <c>/verify</c>.</summary>
 public static class ScreenshotExitCode
 {
@@ -249,7 +329,8 @@ public static class ScreenshotExitCode
     /// <c>--inspect</c> without place data or without the inspector (not a debug build), or <c>--player</c> outside a
     /// debug build, with <c>--inspect</c>, or when the player didn't spawn or reach the ground, or <c>--death</c> outside a
     /// debug build, with <c>--player</c> or <c>--inspect</c>, without a spawned player, without world-edge geometry, or
-    /// when the death sequence doesn't reach the stage to capture.
+    /// when the death sequence doesn't reach the stage to capture, or <c>--menu</c> outside a debug build, with another
+    /// debug flag, or without <c>Main</c>.
     /// </summary>
     public const int Error = 1;
 

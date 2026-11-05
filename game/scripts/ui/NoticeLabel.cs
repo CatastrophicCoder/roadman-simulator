@@ -25,7 +25,7 @@ public partial class NoticeLabel : PanelContainer
     {
         ProcessMode = ProcessModeEnum.Always;
         MouseFilter = MouseFilterEnum.Ignore;
-        SetAnchorsPreset(LayoutPreset.CenterTop);
+        SetAnchorsAndOffsetsPreset(LayoutPreset.CenterTop);
         GrowHorizontal = GrowDirection.Both;
         OffsetTop = 40f;
         Label = new Label { Name = "Text", HorizontalAlignment = HorizontalAlignment.Center };

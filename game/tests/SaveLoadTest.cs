@@ -49,12 +49,24 @@ public class SaveLoadTest
     /// <summary>Criterion 16: half the edge of the blocking box at the saved spot, m.</summary>
     private const float BlockerHalf = 1.5f;
 
+    /// <summary>The bridge-deck test: the deck's top above the ground at the spawn point, m.</summary>
+    private const float DeckHeight = 6f;
+
+    /// <summary>The bridge-deck test: the deck's width and length, m.</summary>
+    private const float DeckSize = 8f;
+
+    /// <summary>The bridge-deck test: the deck's thickness, m.</summary>
+    private const float DeckThickness = 0.5f;
+
+    /// <summary>The bridge-deck test: the largest height gap between the player loaded under the deck and the ground, m.</summary>
+    private const float UnderDeckTolerance = 0.5f;
+
     private string _folder = "";
     private Main? _main;
     private Node? _blocker;
 
     [BeforeTest]
-    public void SetUp() => _folder = NewTempFolder("save-load");
+    public void SetUp() => _folder = BeginTest("save-load");
 
     [AfterTest]
     public void CleanUp()
@@ -366,6 +378,76 @@ public class SaveLoadTest
         AssertThat(_main.State).IsEqual(MainState.MainMenu);
         AssertThat(_main.World).IsNull();
         AssertBool(_main.Dialog.IsOpen).IsFalse();
+    }
+
+    /// <summary>
+    /// Criterion 16 and "Loading a save", step 4, with a bridge deck: a road-group box (layer <c>Map</c>, group
+    /// <c>map_roads</c>) <see cref="DeckHeight"/> m above the settled spawn point. (a) With the saved height
+    /// (<c>fromY</c>), a save on the ground under the deck passes the placement check on the ground, and
+    /// <c>LoadPlayer</c> puts the player there, not on the deck, with <c>moved</c> false; (b) a save at the deck's
+    /// top is placed on the deck; (c) without <c>fromY</c> the ray starts from 10 000 m and finds the deck first
+    /// (the behaviour before <see cref="World.LoadRayHeadroom"/>).
+    /// </summary>
+    [TestCase]
+    public async Task Ac16_SaveUnderABridgeDeck_LoadsUnderTheDeck_SaveOnTheDeck_LoadsOnTheDeck()
+    {
+        WorldEdgeTest.AssertPackPresent();
+        using var runner = ISceneRunner.Load(_main = NewMain(_folder, "--new-game"), true);
+        var world = await WaitForGame(_main);
+        await Settle(world);
+        var feet = world.Player!.GlobalPosition;
+        var (x, z) = (feet.X, feet.Z);
+        var groundHit = world.MapLoader.GroundOrRoadHitAt(x, z);
+        AssertThat(groundHit).OverrideFailureMessage($"no ground under the spawn point {feet}").IsNotNull();
+        var groundY = groundHit!.Value.Position.Y;
+
+        // The deck: outside World, as the Ac16 blocker.
+        var deckTop = groundY + DeckHeight;
+        var deck = new StaticBody3D { Name = "BridgeDeck", CollisionLayer = CollisionLayers.Map };
+        deck.AddChild(new CollisionShape3D { Shape = new BoxShape3D { Size = new Vector3(DeckSize, DeckThickness, DeckSize) } });
+        _main.AddChild(deck);
+        _blocker = deck;
+        deck.AddToGroup(MapLoader.RoadGroup);
+        deck.GlobalPosition = new Vector3(x, deckTop - (DeckThickness / 2f), z);
+        await WorldEdgeTest.PhysicsFrames(world, 2);
+        var deckHit = world.MapLoader.GroundOrRoadHitAt(x, z);
+        AssertThat(deckHit?.Body).OverrideFailureMessage("the deck isn't the highest road hit").IsSame(deck);
+        AssertFloat(deckHit!.Value.Position.Y).IsEqualApprox(deckTop, 1e-3f);
+
+        var loaded = new List<(Vector3 Position, bool Moved)>();
+        world.PlayerLoaded += (p, moved) => loaded.Add((p, moved));
+        GD.Print(Invariant($"SaveLoadTest: bridge deck over ({x}, {z}): ground {groundY}, deck top {deckTop}, LoadRayHeadroom {World.LoadRayHeadroom}"));
+
+        // (c) Without fromY: the ray finds the deck first.
+        AssertBool(world.CheckLoadPlacement(x, z, out var fromTop)).OverrideFailureMessage("no fromY: the deck spot fails").IsTrue();
+        AssertFloat(fromTop.Y).OverrideFailureMessage($"no fromY: placed at {fromTop}").IsEqualApprox(deckTop + world.SpawnDropHeight, 1e-3f);
+
+        // (a) A save on the ground under the deck.
+        AssertBool(world.CheckLoadPlacement(x, z, out var under, fromY: groundY))
+            .OverrideFailureMessage("fromY ground: the spot under the deck fails").IsTrue();
+        AssertFloat(under.Y).OverrideFailureMessage($"fromY ground: placed at {under}").IsEqualApprox(groundY + world.SpawnDropHeight, 1e-3f);
+        AssertFloat(under.X).IsEqualApprox(x, 1e-4f);
+        AssertFloat(under.Z).IsEqualApprox(z, 1e-4f);
+
+        AssertBool(world.LoadPlayer(new SavePlayer(new LocalPoint(x, groundY, z), 0.5, 0, [], 0))).IsTrue();
+        await Settle(world);
+        var atGround = world.Player!.GlobalPosition;
+        GD.Print(Invariant($"SaveLoadTest: bridge (a) loaded under the deck at {atGround}"));
+        AssertThat(string.Join(",", loaded.Select(l => l.Moved))).IsEqual("False");
+        AssertFloat(Mathf.Abs(atGround.Y - groundY)).OverrideFailureMessage($"(a) the player is at {atGround}, ground {groundY}, deck top {deckTop}").IsLessEqual(UnderDeckTolerance);
+        AssertFloat(new Vector2(atGround.X - x, atGround.Z - z).Length()).IsLessEqual(PositionTolerance);
+
+        // (b) A save on the deck.
+        loaded.Clear();
+        AssertBool(world.CheckLoadPlacement(x, z, out var onDeck, fromY: deckTop)).OverrideFailureMessage("fromY deck: the deck spot fails").IsTrue();
+        AssertFloat(onDeck.Y).IsEqualApprox(deckTop + world.SpawnDropHeight, 1e-3f);
+        AssertBool(world.LoadPlayer(new SavePlayer(new LocalPoint(x, deckTop, z), 0.5, 0, [], 0))).IsTrue();
+        await Settle(world);
+        var atDeck = world.Player!.GlobalPosition;
+        GD.Print(Invariant($"SaveLoadTest: bridge (b) loaded on the deck at {atDeck}"));
+        AssertThat(string.Join(",", loaded.Select(l => l.Moved))).IsEqual("False");
+        AssertFloat(Mathf.Abs(atDeck.Y - deckTop)).OverrideFailureMessage($"(b) the player is at {atDeck}, deck top {deckTop}").IsLessEqual(GroundTolerance);
+        AssertFloat(new Vector2(atDeck.X - x, atDeck.Z - z).Length()).IsLessEqual(PositionTolerance);
     }
 
     // ----- Criterion 17: saving and deleting -----

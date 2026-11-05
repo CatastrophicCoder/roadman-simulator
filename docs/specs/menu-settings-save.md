@@ -248,6 +248,14 @@ Four tabs, each a column of labelled controls, operated with the mouse, the keyb
   2. `World` is added with `ProcessMode.Pausable`, because `Main` runs with `Always` and `Inherit` would keep `World` running while paused.
   3. The load confirmation over a running game names the autosave as "Load Autosave? Progress since your last save will be lost.". The pause menu's Load is disabled when no slot is valid, like the main menu's. The slot list has a Back button. Quitting while the loading screen shows asks "Quit the game?" and writes no autosave. A save whose map isn't installed, reached through Continue, shows the load-failed screen. A manifest without `generated_at` saves `"unknown"`.
   4. The death screen keeps its own look until Part B moves it onto `UiTheme`, so the death screenshots don't change in Part A.
+- 2026-11-05, implementation of part B:
+  1. The settings view's tabs are a row of plain buttons over the content, not a `TabContainer`, so the explicit focus neighbours reach every control with the keyboard or a gamepad. Reset to defaults resets the open tab only, after "Reset <tab> settings to defaults?".
+  2. Display changes go through an `IDisplayBackend` (the test seam for criteria 19 and 20). A pending confirm-or-revert also reverts when the view closes or another dialog replaces it. Quality sets the viewport and the sun; `QualityPreset` has no environment values, so nothing is applied to the environment. Low and Medium keep the project's soft shadow filter; High uses the high one.
+  3. The controls table lists the gameplay actions and, in debug builds, a separate "Debug" table; the `ui_*` menu actions aren't listed. Keys show the layout's character where there is one, special keys Godot's name ("Escape", "Shift"), so criterion 21's Esc shows as "Escape".
+  4. `--menu` screenshots: `Main` builds its menus in that direct start only, without settings, input or quit handling; the capture lays the menus out at the project's base 2D size. `pause`, `settings` and `slots` pause the tree.
+  5. The death screen uses `UiTheme`, so the `world-edge-death-screen` image changed look.
+  6. From the part A review: the load placement ray starts `World.LoadRayHeadroom` (2 m) above the saved height instead of high above the map, so a save under a bridge loads under the deck. The save-building rules are in `Roadman.Core` (`SaveFactory`), settings file I/O in `SettingsFile`, save and settings files are flushed to disk before the rename, and CI runs the headless startup against the test-area pack.
+  7. Part A's full-rect menu controls were anchored in `_Ready` with `SetAnchorsPreset`, which left them 0×0 in the window; fixed with `SetAnchorsAndOffsetsPreset`.
 
 ## Open questions
 
