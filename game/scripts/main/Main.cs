@@ -425,6 +425,7 @@ public partial class Main : Node
         Input.MouseMode = Input.MouseModeEnum.Visible;
         GetTree().Paused = true;
         State = MainState.Paused;
+        SetHudVisible(World, false);
         PauseMenu.Visible = true;
         RefreshPauseMenu();
         return true;
@@ -450,6 +451,7 @@ public partial class Main : Node
         PauseMenu.Visible = false;
         GetTree().Paused = false;
         State = MainState.Playing;
+        SetHudVisible(World, true);
         ReleaseJustPressedActions();
         if (World is { } world && IsInstanceValid(world))
         {
@@ -462,6 +464,18 @@ public partial class Main : Node
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Shows or hides <paramref name="world"/>'s HUD (the street label): hidden while the pause menu, or anything over it,
+    /// is open, so it never shows through the menus.
+    /// </summary>
+    private static void SetHudVisible(World? world, bool visible)
+    {
+        if (world is not null && IsInstanceValid(world) && world.Hud is { } hud && IsInstanceValid(hud))
+        {
+            hud.Visible = visible;
+        }
     }
 
     /// <summary>Opens the slot list in <paramref name="mode"/> over the current menu (save mode only while paused).</summary>
@@ -532,6 +546,7 @@ public partial class Main : Node
         }
 
         GetTree().Paused = true;
+        SetHudVisible(_directWorld, false);
         PauseMenu.Visible = true;
         PauseMenu.Refresh(canSave: _directWorld is { } world && IsInstanceValid(world) && world.CanSave, canLoad: AnyValidSlot());
         switch (shot)

@@ -59,9 +59,9 @@ public class PauseTest
 
     /// <summary>
     /// Esc (the <c>pause</c> action) in a game pauses the tree, shows the pause menu with its five buttons (Resume
-    /// focused, Save and Settings enabled while alive) and releases the mouse while the player
-    /// camera keeps wanting the capture. Over 60 paused frames, with W held and the debug keys tapped, the player's
-    /// position, a falling rigid body and the play time don't change (the death sequence's time in state, which
+    /// focused, Save and Settings enabled while alive) and releases the mouse while the player camera keeps wanting the
+    /// capture; the street label HUD is hidden until the resume. Over 60 paused frames, with W held and the debug keys
+    /// tapped, the player's position, a falling rigid body and the play time don't change (the death sequence's time in state, which
     /// <c>World</c> doesn't advance while alive, is checked while paused in <c>Falling</c> and on the death screen by
     /// criterion 12's test), and no
     /// debug view or the debug camera switches on. Esc again resumes, the camera wants the capture, and the body and
@@ -102,6 +102,7 @@ public class PauseTest
         AssertThat(Input.MouseMode).IsEqual(Input.MouseModeEnum.Visible);
         AssertBool(camera.MouseCaptured).IsFalse();
         AssertBool(camera.WantsCapture).OverrideFailureMessage("pausing forgot that the camera wanted the capture").IsTrue();
+        AssertBool(world.Hud.Visible).OverrideFailureMessage("the street label shows through the pause menu").IsFalse();
 
         var playerAt = player.GlobalPosition;
         var bodyAt = body.GlobalPosition;
@@ -157,6 +158,7 @@ public class PauseTest
         AssertBool(_main.GetTree().Paused).IsFalse();
         AssertBool(menu.Visible).IsFalse();
         AssertBool(camera.WantsCapture).IsTrue();
+        AssertBool(world.Hud.Visible).OverrideFailureMessage("the street label stayed hidden after the resume").IsTrue();
         await WorldEdgeTest.PhysicsFrames(world, 10);
         AssertFloat((body.GlobalPosition - bodyAt).Length()).OverrideFailureMessage("the body didn't move on after the resume").IsGreater(0f);
         AssertFloat(_main.PlayTime.Seconds).IsGreater(playTime);
