@@ -458,23 +458,29 @@ public class WorldEdgeBreakingTest
     // ----- Criterion 16: dismissing the death screen -----
 
     /// <summary>
-    /// <see cref="World.IsDismissPress"/>: a key press (not an echo) and a gamepad button press count; a key echo, a key
-    /// or button release, mouse buttons, mouse motion and joypad motion (sticks and analog triggers) don't.
+    /// <see cref="World.IsDismissPress"/>: a key press (not an echo), a gamepad button press and a mouse button press
+    /// count; a key echo, a key, button or mouse button release, the mouse wheel, mouse motion and joypad motion (sticks
+    /// and analog triggers) don't.
     /// </summary>
     [TestCase]
-    public void Ac16_IsDismissPress_KeyAndGamepadButtonPressesOnly()
+    public void Ac16_IsDismissPress_KeyGamepadButtonAndMouseButtonPressesOnly()
     {
         AssertBool(World.IsDismissPress(new InputEventKey { PhysicalKeycode = Key.Enter, Pressed = true })).IsTrue();
         AssertBool(World.IsDismissPress(new InputEventKey { PhysicalKeycode = Key.A, Pressed = true })).IsTrue();
         AssertBool(World.IsDismissPress(new InputEventJoypadButton { ButtonIndex = JoyButton.Start, Pressed = true })).IsTrue();
         AssertBool(World.IsDismissPress(new InputEventJoypadButton { ButtonIndex = GamepadButtons.South, Pressed = true, Device = -1 })).IsTrue();
+        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true })).IsTrue();
+        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Right, Pressed = true })).IsTrue();
+        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Middle, Pressed = true })).IsTrue();
 
         AssertBool(World.IsDismissPress(new InputEventKey { PhysicalKeycode = Key.Enter, Pressed = true, Echo = true })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventKey { PhysicalKeycode = Key.Enter, Pressed = false })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventJoypadButton { ButtonIndex = JoyButton.Start, Pressed = false })).IsFalse();
-        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true })).IsFalse();
-        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Right, Pressed = true })).IsFalse();
+        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.WheelUp, Pressed = true })).IsFalse();
+        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.WheelDown, Pressed = true })).IsFalse();
+        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.WheelLeft, Pressed = true })).IsFalse();
+        AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.WheelRight, Pressed = true })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventMouseMotion { Relative = new Vector2(10f, 0f) })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventJoypadMotion { Axis = JoyAxis.TriggerRight, AxisValue = 1f })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventJoypadMotion { Axis = JoyAxis.TriggerLeft, AxisValue = 1f })).IsFalse();
@@ -522,18 +528,27 @@ public class WorldEdgeBreakingTest
         AssertDismissed(trace);
     }
 
-    /// <summary>
-    /// A mouse button press after <see cref="World.MinScreenTime"/> never dismisses the death screen: it stays until
-    /// <see cref="World.ScreenTime"/> and the respawn follows then.
-    /// </summary>
+    /// <summary>A mouse click after <see cref="World.MinScreenTime"/> dismisses the death screen as a key does.</summary>
     [TestCase]
-    public async Task Ac16_MouseButtonPressAfterMinScreenTime_NeverDismisses()
+    public async Task Ac16_MouseButtonPressAfterMinScreenTime_RespawnsInTheNextPhysicsFrame()
     {
         var trace = await DeathScreenWithPress(PressKind.MouseButton, PressAt.AfterMinScreenTime);
+        AssertDismissed(trace);
+    }
+
+    /// <summary>
+    /// A mouse click in the last physics frame before <see cref="World.MinScreenTime"/> changes nothing and isn't kept,
+    /// as with a key: the screen stays until <see cref="World.ScreenTime"/> and the respawn follows then.
+    /// </summary>
+    [TestCase]
+    public async Task Ac16_MouseButtonPressJustBeforeMinScreenTime_ChangesNothingAndIsNotKept()
+    {
+        var trace = await DeathScreenWithPress(PressKind.MouseButton, PressAt.JustBeforeMinScreenTime);
 
         AssertInt(trace.PressedAtFrame).OverrideFailureMessage("no press was made").IsGreaterEqual(0);
-        AssertFloat((float)trace.TimeAtPress).IsGreaterEqual((float)trace.MinScreenTime);
+        AssertFloat((float)trace.TimeAtPress).IsLess((float)trace.MinScreenTime);
         AssertThat(trace.StateAfterPress).IsEqual(DeathState.DeathScreen);
+        AssertBool(trace.ScreenShownAfterMin).OverrideFailureMessage("the death screen didn't stay past MinScreenTime").IsTrue();
         AssertInt(trace.RespawnFrame - trace.ScreenFrame).OverrideFailureMessage("the respawn didn't come at ScreenTime").IsEqual(trace.ScreenFrames);
         AssertInt(trace.Respawns).IsEqual(1);
         AssertThat(trace.FinalState).IsEqual(DeathState.Alive);

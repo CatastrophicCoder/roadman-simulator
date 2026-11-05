@@ -434,15 +434,20 @@ public partial class World : Node3D
     }
 
     /// <summary>
-    /// Whether <paramref name="event"/> may dismiss the death screen: a keyboard key pressed (not an echo), or a gamepad
-    /// button pressed. Mouse buttons, mouse motion and joypad motion (including analog triggers) never do.
+    /// Whether <paramref name="event"/> may dismiss the death screen: a keyboard key pressed (not an echo), a gamepad
+    /// button pressed, or a mouse button pressed (a click; the wheel isn't). Mouse motion, the wheel and joypad motion
+    /// (including analog triggers) never do.
     /// </summary>
     public static bool IsDismissPress(InputEvent @event) => @event switch
     {
         InputEventKey { Pressed: true, Echo: false } => true,
         InputEventJoypadButton { Pressed: true } => true,
+        InputEventMouseButton { Pressed: true } mouse => !IsWheel(mouse.ButtonIndex),
         _ => false,
     };
+
+    private static bool IsWheel(MouseButton button) =>
+        button is MouseButton.WheelUp or MouseButton.WheelDown or MouseButton.WheelLeft or MouseButton.WheelRight;
 
     public override void _UnhandledInput(InputEvent @event)
     {
