@@ -27,13 +27,13 @@ Version 1 scope: one map area with no interiors, a few vehicle types, one player
 
 Build and test commands are listed in `tools/mapgen/CLAUDE.md` and `game/CLAUDE.md`. Run all checks at once with `/verify` (or `.claude/scripts/verify.sh`).
 
-CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, without screenshots, against a test-area pack built from the committed fixture. Pushing a tag `v*` runs `release.yml`, which fetches each map's pinned raw data snapshot (`snapshot` in `map.yaml`), builds the packs from it with the current pipeline, and publishes Windows and macOS builds with the download manifests. It needs no secrets. A tag with `-` (for example `v0.1.0-test1`) makes a pre-release. Snapshots live on `data-<map-id>-<date>` releases (`data-<map-id>-<date>.<n>`, n ≥ 2, when that date already has one; an existing data release is never changed), which never become the latest release and don't run CI. See ADRs 0010 and 0011.
+CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, without screenshots and the headless startup step, against a test-area pack built from the committed fixture. Pushing a tag `v*` runs `release.yml`, which fetches each map's pinned raw data snapshot (`snapshot` in `map.yaml`), builds the packs from it with the current pipeline, writes the tag without its `v` into `application/config/version` (committed as `dev`; ADR 0018), and publishes Windows and macOS builds with the download manifests. It needs no secrets. A tag with `-` (for example `v0.1.0-test1`) makes a pre-release. Snapshots live on `data-<map-id>-<date>` releases (`data-<map-id>-<date>.<n>`, n ≥ 2, when that date already has one; an existing data release is never changed), which never become the latest release and don't run CI. See ADRs 0010 and 0011.
 
 ## Definition of done
 
 - Tests pass (pytest, `dotnet test`, gdUnit4, whichever apply).
 - Linters are clean (`ruff`, `dotnet format --verify-no-changes`).
-- A headless Godot run finishes without errors.
+- A headless Godot run (`godot --headless --path game --quit-after 120 -- --new-game`, the `/verify` step "headless startup") finishes without errors.
 - For visual changes, a screenshot has been taken and checked.
 
 ## Rules

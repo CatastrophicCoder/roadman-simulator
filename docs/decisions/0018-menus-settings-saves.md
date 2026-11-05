@@ -1,0 +1,27 @@
+# 0018: Menus, settings and saves
+
+Status: Accepted
+
+## Context
+
+Until now the game started straight into `World`: no menu, no pause, nothing kept between runs. Milestone 2 asks for a menu with settings and save/load. The screenshot and performance tools, the gdUnit4 tests and the definition-of-done headless run all start `World` directly, and they must keep doing so. Esc released the mouse, and on the death screen any key dismissed it. Spec: `docs/specs/menu-settings-save.md` (decided 2026-11-05).
+
+## Decision
+
+- **`Main` is the main scene.** `scenes/main/Main.tscn` (`scripts/main/Main.cs`) owns the main menu, the pause menu, the loading screen and the dialogs. It instances `World.tscn` as a child when a game starts and frees it when the game ends. `World` itself keeps working when it is instanced directly, which the tests do.
+- **Direct start.** With `--screenshot` or `--perf` in the user args, `Main` instances `World` at once. It adds no menus, no pause and no settings, and leaves `AutoAcceptQuit` as it is, so these runs behave exactly as before. `--new-game` starts a new game at once with everything a normal game has. The definition-of-done headless run becomes `godot --headless --path game --quit-after 120 -- --new-game`, and `/verify` runs it as its own step ("headless startup").
+- **`pause` action.** Esc and the gamepad Start button (`GamepadButtons.Start`). In the game it replaces `ui_cancel`: `PlayerCamera` no longer handles `ui_cancel`, so the east face button is free for gameplay. A `pause` press opens the pause menu in every death state. It never dismisses the death screen; other keys, buttons and clicks still do. `World` is a child of `Main` and gets `_Input` first, so `World` itself skips `pause` in its dismiss check. Window focus loss during a game opens the pause menu. Godot 4.7's built-in `ui_accept` and `ui_cancel` hold no gamepad buttons, so `project.godot` overrides both, keeping the built-in keys and adding the south face button to `ui_accept` and the east face button to `ui_cancel`; the menus are operable with a gamepad alone, and in the game `Main` ignores `ui_cancel`.
+- **Pausing.** The pause menu sets `GetTree().Paused`. `Main`'s UI runs with `ProcessMode.Always`, and everything in `World` stops, the death sequence and its camera and screen fade included. Play time stops too.
+- **Save format.** Saves are JSON with `snake_case` keys and a `format_version` (1). The reader is strict, like the pack readers: missing or unknown keys, wrong types, non-finite numbers and out-of-range values are errors. A newer version is an error. An older one goes through `SaveMigrations` one step at a time. Writes go to `<file>.tmp`, which is then renamed over the file, so a failed write keeps the old save. The game has five manual slots and an autosave. The autosave is written only on quitting to the menu or quitting the game. Manual saves need the death state `Alive`. An autosave written during a death holds the post-death state (money 0, no gear, wanted level 0) with an empty position (`position` and `facing_yaw` both `null`). Loading such a save uses the normal spawn draw, so quitting mid-fall can't dodge the loss. Saves store quest progress as an empty object until the quest spec raises the version.
+- **Placement check on load.** A saved position is used only when the spawn's tests pass there: a downward ray hits terrain or road, and the capsule above the hit overlaps nothing else. Otherwise the player spawns through the normal draw, keeping money, gear and wanted level, and a notice says the map has changed. This applies whether or not the pack's `generated_at` matches the save's.
+- **Settings.** Settings live in `user://settings.json`. The reader is forgiving per key: a bad or unknown value falls back to its default with a warning, and the other values are kept. A file that isn't JSON, or has a newer version, gives all defaults. Gameplay sensitivities are stored as multipliers of the camera's defaults.
+- **User data folder.** `application/config/use_custom_user_dir` is on and the folder name is `RoadmanSimulator`, so player data is in `~/Library/Application Support/RoadmanSimulator/` (macOS) or `%APPDATA%\RoadmanSimulator\` (Windows). Settings and saves never go into map packs. Tests point the stores at temporary folders.
+- **Game version.** `project.godot` commits `application/config/version="dev"`. `release.yml` replaces it with the tag without its `v` before exporting. The main menu shows it, and every save stores it. Loading never depends on it.
+- **Gamepad names.** "Start button" joins ADR 0016's list of generic gamepad names. Until gamepad glyph images exist, the menus and the controls view show gamepad inputs as generic text names.
+
+## Consequences
+
+- New gameplay state that must survive a restart goes into `SaveGame` with a format version step and a migration.
+- The quest spec defines the `quests` content and raises the save format version.
+- The settings view (display, audio, controls and gameplay tabs, the display confirm-or-revert and the `--menu` screenshots) comes in part B of the spec. Until then the Settings buttons are shown disabled.
+- A later UI style replaces the placeholder theme colours in `scripts/ui/UiTheme.cs`.

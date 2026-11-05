@@ -250,11 +250,18 @@ Projects (all `net10.0`, ADR 0007):
 - `Edge/DeathSequence` is the death and respawn state machine (`Alive`, `Falling`, `DeathScreen`, `Respawning`, `Failed`): `EnterVoid` records the losses and calls `PlayerState.Die()`, `Advance(dt)` runs the timed states, `Dismiss()` ends the death screen early once `MinScreenTime` has passed, `CompleteRespawn` and `Reset`. `DeathScreenText.Format` gives the death screen's three lines.
 - `RunToggle` is the gamepad run toggle: a press flips it, and while it is on, the move input going from outside its deadzone to inside turns it off.
 
+**Saves and settings** (ADR 0018, `docs/specs/menu-settings-save.md`):
+
+- `Saves/`: `SaveGame` (format version 1: game version, UTC save time, play seconds, map id and the pack's `generated_at`, the player's position and facing (both `null` in a save written during a death), money, gear, wanted level, and an empty `quests` object), the strict `SaveReader` and `SaveWriter` (JSON, `snake_case`, step-by-step `SaveMigrations`, a newer version is an error), `SaveSlots` over an `ISaveStore` (an autosave and manual slots 1..5, `List()`, `MostRecent()`, writes through `<file>.tmp` and a rename, `Delete`), and `PlayTime` / `PlayTimeText`.
+- `PlayerState.Snapshot(includePosition)`, `Restore(snapshot)` (validated first; change events only for changed values, never `Died`) and `Reset()` (a new game).
+- `Settings/`: `GameSettings` (display, audio, gameplay; defaults), the forgiving `SettingsReader` (a bad or unknown value gives its default and a warning) and `SettingsWriter`, `WindowSizes`, `VolumeMath`, `QualityPreset`.
+
 TODO: routing (with the traffic AI spec) and mission state.
 
 ### Gameplay (Godot C#)
 
 - Autoloads: `Events` (global signal bus) and `GameState` (player, wanted level, settings). Both stay small.
+- `Main` (ADR 0018, `scenes/main/Main.tscn`) is the main scene: the main menu, the pause menu (the `pause` action: Esc and the gamepad Start button; `GetTree().Paused`), the slot list, the loading screen and the confirmations, built in code under one placeholder theme (`scripts/ui/`). It instances `World` when a game starts or a save loads and frees it when the game ends. `--screenshot` and `--perf` start `World` directly with no menus or settings; `--new-game` starts a game at once. Player data (`settings.json`, `saves/`) lives in the user data folder (`user://`, a custom folder named `RoadmanSimulator`), never in map packs. Loading a save puts the player at the saved position when the spawn's placement tests pass there, else through the spawn draw with a notice (`World.PlayerLoaded`).
 - `World` scene: MapLoader, WorldEnvironment, sun, HUD street label, and the player once it has spawned. In debug builds also the debug camera, the orthophoto view (F2), the road graph view (G) and the place inspector (I); release builds have only the player camera.
 - Debug builds (ADR 0016): every debug-only decision asks `DebugBuild.IsDebug` (`scripts/debug/DebugBuild.cs`), the only code that calls `OS.IsDebugBuild()`. Tests set `DebugBuild.Override` to check the release layout.
 - Player (ADR 0016, `docs/specs/player-on-foot.md`): a `CharacterBody3D` built in code (`scripts/player/Player.cs`) that walks, runs and jumps with `OnFootMotion`, on collision layer 2, and writes its position to `PlayerState` every physics frame. `World` spawns it at a random open-ground point of `boundary.json`'s spawn area (`SpawnPicker`, seeded from the time or `--seed`), checking each draw with a ray and a capsule query, and spawns it again after a map reload. No valid `boundary.json`, or no free draw: an error, and no player.

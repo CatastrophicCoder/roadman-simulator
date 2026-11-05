@@ -132,6 +132,15 @@ jobs:
             exit 1
           fi
 
+      # The tag without its "v" (v0.2.0 -> 0.2.0, v0.2.0-test1 -> 0.2.0-test1) replaces the committed "dev";
+      # the main menu shows it and every save stores it (ADR 0018).
+      - name: Set the game version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sed -i "s|^config/version=\"dev\"$|config/version=\"$version\"|" game/project.godot
+          grep -x "config/version=\"$version\"" game/project.godot
+          echo "Game version: $version"
+
       - name: Export Windows and macOS
         run: |
           out="$PWD/build/export"

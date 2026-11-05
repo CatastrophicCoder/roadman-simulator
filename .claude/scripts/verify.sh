@@ -110,6 +110,35 @@ else
   report N/A "gdunit4 tests" "godot not on PATH and \$GODOT not set"
 fi
 
+# Headless startup (definition of done): Main starts a new game at once with
+# --new-game, so the run loads the project's map and spawns the player. Fails on
+# a non-zero exit, an ERROR line, a timeout or no spawn line in the log.
+START_MAP="$(sed -n 's|^map/id="\(.*\)"$|\1|p' "$ROOT/game/project.godot")"
+START_MAP="${START_MAP:-somero}"
+if ! GODOT_BIN="$(find_godot)"; then
+  report N/A "headless startup" "godot not on PATH and \$GODOT not set"
+elif [ "$BUILD_OK" -eq 0 ]; then
+  report N/A "headless startup" "dotnet build failed or didn't run; the game would run stale code"
+elif [ ! -f "$ROOT/game/maps/$START_MAP/manifest.json" ]; then
+  report N/A "headless startup" "no map pack at game/maps/$START_MAP (run /regen-map $START_MAP)"
+else
+  log="$LOGS/headless-startup.log"
+  run_with_timeout "${GODOT_STARTUP_TIMEOUT:-300}" "$log" \
+    "$GODOT_BIN" --headless --path "$ROOT/game" --quit-after 120 -- --new-game
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    report FAIL "headless startup" "timed out after ${GODOT_STARTUP_TIMEOUT:-300}s (log: $log)"
+  elif [ "$rc" -ne 0 ]; then
+    report FAIL "headless startup" "exit $rc: $(grep -m1 -E 'ERROR|crash' "$log") (log: $log)"
+  elif grep -qE '^(SCRIPT )?ERROR' "$log"; then
+    report FAIL "headless startup" "$(grep -m1 -E '^(SCRIPT )?ERROR' "$log") (log: $log)"
+  elif ! grep -q '^Player: spawned at' "$log"; then
+    report FAIL "headless startup" "no 'Player: spawned at' line within 120 frames (log: $log)"
+  else
+    report PASS "headless startup" "--new-game on $START_MAP: $(grep -m1 '^Player: spawned at' "$log") (log: $log)"
+  fi
+fi
+
 # Exported build: a Windows export (the faster one) checked by check-export.sh, the
 # same check release.yml runs on both platforms.
 GODOT_VERSION="$(sed -n 's|.*Sdk="Godot\.NET\.Sdk/\([0-9.]*\)".*|\1|p' "$ROOT/$GAME_CSPROJ")"

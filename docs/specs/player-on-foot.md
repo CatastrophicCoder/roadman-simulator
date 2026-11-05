@@ -302,6 +302,7 @@ New actions in `project.godot`, each with keyboard and gamepad events (`device` 
   3. `debug_camera` is bound to both physical `Key.Quoteleft` (the key left of 1 on Windows and US Macs) and `Key.Section` (left of 1 on ISO Macs, such as the Finnish layout). On ISO Macs `Quoteleft` is the `<>` key beside left Shift, so it toggles too; acceptable for a debug-only key.
 - 2026-11-03, the user's playtest of part A: `WalkSpeed` doubled to 2.8 m/s and `RunSpeed` raised 50 % to 7.5 m/s; the rest felt right. Gamepad buttons are named generically (south, east, west and north face buttons, left and right sticks, left-stick click), and in-game button prompts will use generic glyphs.
 - 2026-11-04, `docs/specs/world-edge-game.md` (ADR 0017): the temporary fall respawn ("Temporary fall respawn"), the `FallReset` part of criterion 5 and criterion 20 are replaced by that spec. `FallReset`, `World.FallRespawnDepth` and `World.RespawnPlayer()` are gone; a fall off the slab is caught by the void trigger or the safety net and runs the death sequence, which calls `PlayerState.Die()`. `World.PlayerRespawned` now fires after a death respawn.
+- 2026-11-05, `docs/specs/menu-settings-save.md` (ADR 0018): Esc and the gamepad Start button are the `pause` action and open the pause menu, which releases the mouse; `PlayerCamera` no longer handles `ui_cancel`, so the east face button no longer releases the mouse. A left click still captures it again. The camera's invert and sensitivity values come from the settings in a game started by `Main`.
 
 ## Open questions
 

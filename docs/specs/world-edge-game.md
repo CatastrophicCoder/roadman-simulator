@@ -273,6 +273,7 @@ Process and physics time come from a headless run (the mean real frame time at a
   6. The performance measurement is as amended under "Performance": headless runs measure the mean real frame time at one physics step per frame (`--fixed-fps`, no frame cap) rather than the peak-holding `Performance` monitors; windowed runs measure render time (CPU and GPU) rather than real frame time, 3 alternating runs per configuration, medians, and the budget is the headless cost plus the windowed render cost.
 - 2026-11-05, after part B (the user's correction):
   7. A mouse button press (a click; not the wheel) dismisses the death screen too, after `MinScreenTime`, as a key or gamepad button does. Replaces the mouse-button exclusion in amendment 1 of Part B.
+- 2026-11-05, `docs/specs/menu-settings-save.md` (ADR 0018): a `pause` press (Esc, the gamepad Start button) opens the pause menu on the death screen instead of dismissing it; other keys, gamepad buttons and clicks still dismiss it after `MinScreenTime`. The death sequence, its camera and the screen fade pause with the game (`GetTree().Paused`) and continue where they stopped on Resume.
 
 ## Open questions
 

@@ -32,6 +32,8 @@ public partial class Player : CharacterBody3D
     public const string JumpAction = "jump";
 
     private float _facingYaw;
+    private bool _suppressJump;
+    private bool _suppressRunToggle;
     private float _capsuleHeight = 1.8f;
     private float _capsuleRadius = 0.3f;
 
@@ -113,6 +115,12 @@ public partial class Player : CharacterBody3D
     /// </summary>
     public Vector3? GravityOverride { get; set; }
 
+    /// <summary>
+    /// Whether <see cref="JumpAction"/> or <see cref="RunToggleAction"/> presses are being ignored after
+    /// <see cref="SuppressPressesUntilReleased"/>.
+    /// </summary>
+    public bool PressesSuppressed => _suppressJump || _suppressRunToggle;
+
     /// <summary>The camera whose yaw makes movement camera-relative; null means yaw 0 (forward is −Z, north).</summary>
     public PlayerCamera? Camera { get; set; }
 
@@ -173,6 +181,10 @@ public partial class Player : CharacterBody3D
 
     public override void _PhysicsProcess(double delta)
     {
+        // Read every frame, also while falling or with input off, so a suppression ends once the action is released.
+        var jumpPressed = JustPressed(JumpAction, ref _suppressJump);
+        var runTogglePressed = JustPressed(RunToggleAction, ref _suppressRunToggle);
+
         if (GravityOverride is { } acceleration)
         {
             Velocity += acceleration * (float)delta;
@@ -190,7 +202,7 @@ public partial class Player : CharacterBody3D
         // toggle keeps its state through it.
         if (InputEnabled)
         {
-            RunToggle.Update(Input.IsActionJustPressed(RunToggleAction), move != Vector2.Zero);
+            RunToggle.Update(runTogglePressed, move != Vector2.Zero);
         }
         else
         {
@@ -211,7 +223,7 @@ public partial class Player : CharacterBody3D
         {
             velocity.Y -= Gravity * (float)delta;
         }
-        else if (InputEnabled && Input.IsActionJustPressed(JumpAction))
+        else if (InputEnabled && jumpPressed)
         {
             // On the floor only: no double jump and no buffered press from the air.
             velocity.Y = JumpSpeed;
@@ -229,6 +241,41 @@ public partial class Player : CharacterBody3D
         {
             RunToggle.ResetMovement();
         }
+    }
+
+    /// <summary>
+    /// Ignores the presses of <see cref="JumpAction"/> and <see cref="RunToggleAction"/> that are down now or were
+    /// pressed since the last physics frame, each until a physics frame sees that action released. <c>Main</c> calls it
+    /// on resuming from the pause menu: the press that closed the menu (Space or the south face button on Resume) is
+    /// also <c>jump</c>, and a tap shorter than one physics tick is still "just pressed" in the next physics frame, which
+    /// <see cref="Input.ActionRelease"/> outside the physics frame doesn't clear. A press after the release works as
+    /// usual. Normal play never calls it.
+    /// </summary>
+    public void SuppressPressesUntilReleased()
+    {
+        _suppressJump = true;
+        _suppressRunToggle = true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="action"/> was just pressed in this physics frame; false while
+    /// <paramref name="suppressed"/>, which ends in the first physics frame that sees the action not held (that frame's
+    /// press, the tap being suppressed, is ignored too).
+    /// </summary>
+    private static bool JustPressed(string action, ref bool suppressed)
+    {
+        var justPressed = Input.IsActionJustPressed(action);
+        if (!suppressed)
+        {
+            return justPressed;
+        }
+
+        if (!Input.IsActionPressed(action))
+        {
+            suppressed = false;
+        }
+
+        return false;
     }
 
     /// <summary>

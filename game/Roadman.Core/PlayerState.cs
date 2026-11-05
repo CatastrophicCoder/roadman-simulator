@@ -1,4 +1,5 @@
 using Roadman.Core.Maps;
+using Roadman.Core.Saves;
 
 namespace Roadman.Core;
 
@@ -118,6 +119,65 @@ public sealed class PlayerState
 
         WantedLevel = clamped;
         WantedLevelChanged?.Invoke(WantedLevel);
+    }
+
+    /// <summary>
+    /// The save's player part: money, gear (sorted ordinal), wanted level and, with <paramref name="includePosition"/>,
+    /// <see cref="Position"/>. <see cref="SavePlayer.FacingYaw"/> is always null: <see cref="PlayerState"/> has no
+    /// facing, so the caller sets it from the player node (<c>with { FacingYaw = yaw }</c>) before saving, and leaves
+    /// it null when the position is empty.
+    /// </summary>
+    /// <param name="includePosition">False for a save written during a death: the position is empty.</param>
+    public SavePlayer Snapshot(bool includePosition) =>
+        new(includePosition ? Position : null, null, Money, _gear, WantedLevel);
+
+    /// <summary>
+    /// Applies a save's player part. Validates first (<see cref="SavePlayer.Problem"/> without the facing pair:
+    /// money ≥ 0, wanted level 0..<see cref="MaxWantedLevel"/>, no blank or repeated gear id, a finite position, a
+    /// finite facing in (−π, π], no facing without a position); an invalid snapshot throws and changes nothing. Then
+    /// sets money, gear, wanted level and, when the snapshot has one, the position, in that order. Each change event
+    /// fires once and only when its value changes; <see cref="Died"/> never fires. An empty position leaves
+    /// <see cref="Position"/> as it is. The facing is ignored (the player node applies it).
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="snapshot"/> is null.</exception>
+    /// <exception cref="ArgumentException">The snapshot is invalid; the message names the key.</exception>
+    public void Restore(SavePlayer snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Problem(requireFacingPair: false) is { } problem)
+        {
+            throw new ArgumentException($"invalid snapshot: '{problem.KeyPath}' {problem.Problem}", nameof(snapshot));
+        }
+
+        SetAll(snapshot.Money, snapshot.Gear, snapshot.WantedLevel, snapshot.Position);
+    }
+
+    /// <summary>
+    /// A new game's values: money 0, no gear, wanted level 0, position at the origin. Change events fire for the
+    /// values that change; <see cref="Died"/> doesn't.
+    /// </summary>
+    public void Reset() => SetAll(0, [], 0, default(LocalPoint));
+
+    private void SetAll(int money, IReadOnlyList<string> gear, int wantedLevel, LocalPoint? position)
+    {
+        if (money != Money)
+        {
+            Money = money;
+            MoneyChanged?.Invoke(Money);
+        }
+
+        if (!_gear.SetEquals(gear))
+        {
+            _gear.Clear();
+            _gear.UnionWith(gear);
+            GearChanged?.Invoke();
+        }
+
+        SetWantedLevel(wantedLevel);
+        if (position is { } p)
+        {
+            SetPosition(p);
+        }
     }
 
     /// <summary>

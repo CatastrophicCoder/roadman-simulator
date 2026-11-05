@@ -7,6 +7,8 @@ using Roadman.Core;
 using Roadman.Core.Edge;
 using Roadman.Core.Maps;
 using Roadman.Core.Player;
+using Roadman.Core.Saves;
+using Roadman.Core.Settings;
 using Roadman.Core.Tools;
 using Roadman.Debug;
 using Roadman.Hud;
@@ -50,6 +52,13 @@ namespace Roadman.Scenes;
 /// which measures frame times; <c>--no-world-edge</c> and <c>--no-space-sky</c> switch off
 /// <see cref="MapLoader.WorldEdgeEnabled"/> and <see cref="SpaceSkyEnabled"/> before the environment and the map are made.
 /// </para>
+/// <para>
+/// A game started by <c>Main</c> (<c>docs/specs/menu-settings-save.md</c>) sets <see cref="MapId"/>,
+/// <see cref="CameraSettings"/> and, to load a save, <see cref="PendingLoad"/> before the node enters the tree. With a
+/// pending load the first map load places the player from it (<see cref="LoadPlayer"/>, signal
+/// <see cref="SignalName.PlayerLoaded"/>) instead of the spawn draw. <see cref="SignalName.StartFailed"/> reports a map
+/// load or first spawn that failed, with the error text pushed.
+/// </para>
 /// </summary>
 public partial class World : Node3D
 {
@@ -63,6 +72,21 @@ public partial class World : Node3D
     /// <summary>The player respawned at <paramref name="position"/> (its feet) after a death in the void.</summary>
     [Signal]
     public delegate void PlayerRespawnedEventHandler(Vector3 position);
+
+    /// <summary>
+    /// The player was placed from <see cref="PendingLoad"/> at <paramref name="position"/> (its feet) after a map load.
+    /// <paramref name="moved"/> is true only when the saved position failed the placement check and the spawn draw
+    /// placed it instead.
+    /// </summary>
+    [Signal]
+    public delegate void PlayerLoadedEventHandler(Vector3 position, bool moved);
+
+    /// <summary>
+    /// The map failed to load, or the player couldn't be spawned or placed after a map load; <paramref name="message"/>
+    /// is the error text pushed. Not emitted for a failed respawn after a death.
+    /// </summary>
+    [Signal]
+    public delegate void StartFailedEventHandler(string message);
 
     private const int MaxSpawnShapeHits = 32;
 
@@ -87,11 +111,15 @@ public partial class World : Node3D
     /// <summary>Toggles between the player camera and the debug camera (debug builds only).</summary>
     public const string DebugCameraAction = "debug_camera";
 
+    /// <summary>Opens the pause menu (Esc, the gamepad start button); never dismisses the death screen.</summary>
+    public const string PauseAction = "pause";
+
     private Random _spawnRandom = new(0);
     private int _spawnGeneration;
     private bool _screenshotRun;
     private bool _mapSignalsHooked;
     private bool _playerCameraHadMouse;
+    private ulong? _resumeProcessFrame;
     private readonly Dictionary<Node3D, Action> _trackedBodies = [];
     private readonly HashSet<ulong> _voidFallers = [];
     private float? _voidDownAcceleration;
@@ -194,6 +222,36 @@ public partial class World : Node3D
     /// </summary>
     public int? Seed { get; set; }
 
+    /// <summary>
+    /// The map to load, copied into <see cref="MapLoader.MapId"/> before the first load; null or empty keeps the
+    /// loader's default (the project setting). A <c>--perf --map</c> argument still wins. Set it before the node enters
+    /// the tree.
+    /// </summary>
+    public string? MapId { get; set; }
+
+    /// <summary>
+    /// A save's player part to place at the next map load instead of the spawn draw (<see cref="LoadPlayer"/>); used
+    /// once, then cleared. Set it before the node enters the tree.
+    /// </summary>
+    public SavePlayer? PendingLoad { get; set; }
+
+    /// <summary>
+    /// The player's gameplay settings, applied to every new or respawned player camera
+    /// (<see cref="ApplyCameraSettings"/>); null leaves the camera's exports as they are (direct <c>World</c> runs and
+    /// tests).
+    /// </summary>
+    public GameplaySettings? CameraSettings { get; set; }
+
+    /// <summary>
+    /// Whether a manual save can be written now: a player exists and the death sequence is
+    /// <see cref="DeathState.Alive"/>.
+    /// </summary>
+    public bool CanSave =>
+        Death is not null && Death.State == DeathState.Alive && Player is not null && IsInstanceValid(Player) && Player.IsInsideTree();
+
+    /// <summary>The player's facing yaw in radians; null without a player.</summary>
+    public float? PlayerFacingYaw => Player is not null && IsInstanceValid(Player) ? Player.FacingYaw : null;
+
     public MapLoader MapLoader { get; private set; } = null!;
 
     /// <summary>The player; null before the spawn, after a failed one and between map loads.</summary>
@@ -288,6 +346,11 @@ public partial class World : Node3D
         AddChild(VoidFall);
 
         MapLoader = new MapLoader { Name = "MapLoader" };
+        if (!string.IsNullOrEmpty(MapId))
+        {
+            MapLoader.MapId = MapId;
+        }
+
         if (perf is not null)
         {
             MapLoader.WorldEdgeEnabled = perf.WorldEdge;
@@ -420,16 +483,35 @@ public partial class World : Node3D
     }
 
     /// <summary>
-    /// On the death screen, a new key press (not an echo) or gamepad button press calls
+    /// On the death screen, a new key press (not an echo), gamepad button press or mouse click calls
     /// <see cref="DeathSequence.Dismiss"/>; when that ends the screen (at or after <see cref="MinScreenTime"/>), the event
-    /// is marked handled and the respawn runs in the next physics frame. Mouse buttons and joypad motion (sticks and
-    /// analog triggers) never count; a press before <see cref="MinScreenTime"/> is ignored.
+    /// is marked handled and the respawn runs in the next physics frame. The mouse wheel and joypad motion (sticks and
+    /// analog triggers) never count, nor does a <see cref="PauseAction"/> press (it opens the pause menu in a game
+    /// started by <c>Main</c>); a press before <see cref="MinScreenTime"/> is ignored, and so is one delivered in the
+    /// process frame of a resume from the pause menu (<see cref="OnResumedFromPause"/>).
     /// </summary>
     public override void _Input(InputEvent @event)
     {
-        if (Death?.State == DeathState.DeathScreen && IsDismissPress(@event) && Death.Dismiss())
+        if (Death?.State == DeathState.DeathScreen && IsDismissPress(@event) && !@event.IsAction(PauseAction)
+            && _resumeProcessFrame != Engine.GetProcessFrames()
+            && Death.Dismiss())
         {
             GetViewport().SetInputAsHandled();
+        }
+    }
+
+    /// <summary>
+    /// Called by <c>Main</c> when the pause menu closes, so the press that closed it never reaches the game: the player
+    /// ignores <c>jump</c> and <c>run_toggle</c> until each is seen released (<see cref="Player.SuppressPressesUntilReleased"/>;
+    /// a tap shorter than one physics tick would otherwise jump), and the death screen ignores dismiss presses for the
+    /// rest of this process frame.
+    /// </summary>
+    public void OnResumedFromPause()
+    {
+        _resumeProcessFrame = Engine.GetProcessFrames();
+        if (Player is not null && IsInstanceValid(Player))
+        {
+            Player.SuppressPressesUntilReleased();
         }
     }
 
@@ -631,10 +713,132 @@ public partial class World : Node3D
         RemovePlayer();
         if (!DrawSpawn(out var position, out var facing))
         {
-            FailSpawn("no player spawn", LastSpawnFailure);
+            EmitSignal(SignalName.StartFailed, FailSpawn("no player spawn", LastSpawnFailure));
             return false;
         }
 
+        CreatePlayer(position, facing);
+        GD.Print(FormattableString.Invariant(
+            $"Player: spawned at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}), seed {Seed}, draw {LastSpawnAttempts}{(_screenshotRun ? ", hidden for the screenshot" : "")}"));
+        EmitSignal(SignalName.PlayerSpawned, position);
+        return true;
+    }
+
+    /// <summary>
+    /// "Loading a save", step 4: frees the current player, then places a new one from <paramref name="save"/>. An empty
+    /// position uses the spawn draw (not moved). Otherwise the placement check (<see cref="CheckLoadPlacement"/>) at
+    /// the saved x/z: passing puts the player on that ground facing the saved yaw, with zero velocity; failing uses
+    /// the spawn draw (moved). Then the player camera is current behind it, the street label targets it and
+    /// <see cref="SignalName.PlayerLoaded"/> fires. Call it after the terrain collision is queryable; the map load
+    /// calls it for <see cref="PendingLoad"/>.
+    /// </summary>
+    /// <returns>True when the player was placed; false pushes the spawn error and emits <see cref="SignalName.StartFailed"/>.</returns>
+    public bool LoadPlayer(SavePlayer save)
+    {
+        ArgumentNullException.ThrowIfNull(save);
+        RemovePlayer();
+        LastSpawnAttempts = 0;
+        LastSpawnFailure = null;
+        var moved = false;
+        Vector3 position;
+        float facing;
+        if (save.Position is { } saved && CheckLoadPlacement((float)saved.X, (float)saved.Z, out position))
+        {
+            facing = (float)(save.FacingYaw ?? 0d);
+        }
+        else
+        {
+            moved = save.Position is not null;
+            if (!DrawSpawn(out position, out facing))
+            {
+                EmitSignal(SignalName.StartFailed, FailSpawn("no player placement for the save", LastSpawnFailure));
+                return false;
+            }
+        }
+
+        CreatePlayer(position, facing);
+        GD.Print(FormattableString.Invariant(
+            $"Player: loaded at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}){(moved ? ", moved by the spawn draw: the saved spot failed the placement check" : save.Position is null ? ", spawn draw for an empty position" : "")}"));
+        EmitSignal(SignalName.PlayerLoaded, position, moved);
+        return true;
+    }
+
+    /// <summary>
+    /// The load placement check ("Loading a save", step 4): a downward ray from above (<paramref name="x"/>,
+    /// <paramref name="z"/>) must hit <see cref="MapLoader.TerrainGroup"/> or <see cref="MapLoader.RoadGroup"/> first,
+    /// and the player's capsule, <see cref="SpawnDropHeight"/> above that hit, must overlap nothing but terrain and
+    /// roads. The player's own body is ignored. Call it from a physics frame or after one.
+    /// </summary>
+    /// <param name="feet">The passing point (the player's feet, <see cref="SpawnDropHeight"/> above the ground).</param>
+    public bool CheckLoadPlacement(float x, float z, out Vector3 feet)
+    {
+        feet = Vector3.Zero;
+        if (!MapLoader.IsInsideTree() || !float.IsFinite(x) || !float.IsFinite(z))
+        {
+            return false;
+        }
+
+        var (radius, height) = Player is not null && IsInstanceValid(Player)
+            ? (Player.CapsuleRadius, Player.CapsuleHeight)
+            : CapsuleOfNewPlayer();
+        var space = MapLoader.GetWorld3D().DirectSpaceState;
+        var excluded = new Godot.Collections.Array<Rid>();
+        if (Player is not null && IsInstanceValid(Player))
+        {
+            excluded.Add(Player.GetRid());
+        }
+
+        var ray = PhysicsRayQueryParameters3D.Create(new Vector3(x, 10_000f, z), new Vector3(x, -10_000f, z));
+        ray.Exclude = excluded;
+        var hit = space.IntersectRay(ray);
+        if (hit.Count == 0 || hit["collider"].AsGodotObject() is not Node first || !IsGroundOrRoad(first))
+        {
+            return false;
+        }
+
+        var point = hit["position"].AsVector3() + (Vector3.Up * SpawnDropHeight);
+        var shape = new PhysicsShapeQueryParameters3D
+        {
+            Shape = new CapsuleShape3D { Radius = radius, Height = height },
+            CollideWithBodies = true,
+            CollideWithAreas = false,
+            Exclude = excluded,
+            Transform = new Transform3D(Basis.Identity, point + (Vector3.Up * (height / 2f))),
+        };
+        foreach (var overlap in space.IntersectShape(shape, MaxSpawnShapeHits))
+        {
+            if (overlap["collider"].AsGodotObject() is not Node body || !IsGroundOrRoad(body))
+            {
+                return false;
+            }
+        }
+
+        feet = point;
+        return true;
+    }
+
+    private static bool IsGroundOrRoad(Node node) =>
+        node.IsInGroup(MapLoader.TerrainGroup) || node.IsInGroup(MapLoader.RoadGroup);
+
+    /// <summary>
+    /// Applies <see cref="CameraSettings"/> to the player camera, when both exist. Called at every spawn, load and
+    /// respawn; call it again after the settings change.
+    /// </summary>
+    public void ApplyCameraSettings()
+    {
+        if (CameraSettings is { } settings && PlayerCamera is not null && IsInstanceValid(PlayerCamera))
+        {
+            PlayerCamera.ApplySettings(settings);
+        }
+    }
+
+    /// <summary>
+    /// Adds a new player and its camera at <paramref name="position"/> facing <paramref name="facing"/>, the camera
+    /// behind it with <see cref="CameraSettings"/>; outside screenshot runs the camera becomes current (capturing the
+    /// mouse) and the street label follows the player.
+    /// </summary>
+    private void CreatePlayer(Vector3 position, float facing)
+    {
         var player = new OnFoot.Player { Name = "Player", Visible = !_screenshotRun };
         var camera = new PlayerCamera { Name = "PlayerCamera", Target = player };
         player.Camera = camera;
@@ -642,6 +846,7 @@ public partial class World : Node3D
         AddChild(camera);
         Player = player;
         PlayerCamera = camera;
+        ApplyCameraSettings();
         player.PlaceAt(position, facing);
         camera.PlaceBehind(facing);
 
@@ -650,11 +855,6 @@ public partial class World : Node3D
             camera.Activate();
             Hud.Target = player;
         }
-
-        GD.Print(FormattableString.Invariant(
-            $"Player: spawned at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}), seed {Seed}, draw {LastSpawnAttempts}{(_screenshotRun ? ", hidden for the screenshot" : "")}"));
-        EmitSignal(SignalName.PlayerSpawned, position);
-        return true;
     }
 
     /// <summary>
@@ -975,6 +1175,7 @@ public partial class World : Node3D
         player.InputEnabled = true;
         camera.InputEnabled = true;
         camera.PlaceBehind(facing);
+        ApplyCameraSettings();
         if (!_screenshotRun)
         {
             camera.Activate();
@@ -1099,6 +1300,7 @@ public partial class World : Node3D
         _spawnGeneration++;
         ResetWorldEdgeState();
         RemovePlayer();
+        EmitSignal(SignalName.StartFailed, $"MapLoader: {message}");
     }
 
     private async void SpawnWhenCollisionReadyAsync(int generation)
@@ -1114,7 +1316,14 @@ public partial class World : Node3D
             LastSpawnAttempts = 0;
             LastSpawnFailure = FormattableString.Invariant(
                 $"no terrain collision was queryable after {SpawnPhysicsWaitFrames} physics frames, so no draw from the spawn area in {MapLoader.BoundaryPath} was made");
-            FailSpawn("no player spawn", LastSpawnFailure);
+            EmitSignal(SignalName.StartFailed, FailSpawn("no player spawn", LastSpawnFailure));
+            return;
+        }
+
+        if (PendingLoad is { } load)
+        {
+            PendingLoad = null;
+            LoadPlayer(load);
             return;
         }
 
@@ -1125,10 +1334,13 @@ public partial class World : Node3D
     /// Pushes the spawn failure error: <paramref name="what"/>, the <paramref name="reason"/> (which names the boundary
     /// file) and the regen hint.
     /// </summary>
-    private void FailSpawn(string what, string? reason)
+    /// <returns>The error text pushed.</returns>
+    private string FailSpawn(string what, string? reason)
     {
         reason ??= $"no draw from the spawn area in {MapLoader.BoundaryPath} passed";
-        GD.PushError($"World: {what}: {reason}; {MapPack.RegenHint(MapLoader.ResolvedMapId)}");
+        var message = $"World: {what}: {reason}; {MapPack.RegenHint(MapLoader.ResolvedMapId)}";
+        GD.PushError(message);
+        return message;
     }
 
     /// <summary>Connects <see cref="MapLoader"/>'s load signals once per stay in the tree.</summary>
@@ -1196,8 +1408,11 @@ public partial class World : Node3D
             GD.PushError($"World: {ex.Message}; the spawn draws are seeded from the time");
         }
 
-        return unchecked((int)DateTime.UtcNow.Ticks);
+        return TimeSeed();
     }
+
+    /// <summary>A spawn-draw seed from the current time, used when no <c>--seed</c> is given.</summary>
+    public static int TimeSeed() => unchecked((int)DateTime.UtcNow.Ticks);
 
     /// <summary>Moves the camera to <see cref="CameraStartOffset"/> above the terrain at the origin once collision is ready.</summary>
     private async void PlaceCameraAboveTerrainAsync()

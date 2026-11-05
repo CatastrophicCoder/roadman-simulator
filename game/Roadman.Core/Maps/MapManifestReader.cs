@@ -8,7 +8,7 @@ namespace Roadman.Core.Maps;
 /// mistyped field, axes other than east/up/−north, a duplicate or malformed tile id, a tile path that is
 /// absolute or leaves the pack folder, or a credit that isn't exactly the five string fields of the pipeline's
 /// <c>PackCredit</c>. <c>credits</c> is required, as in the pipeline's schema; it may be empty.
-/// Fields the game doesn't use (CRS, build time) are not checked; the pipeline validates them.
+/// <c>generated_at</c> is optional and must be a string when present. Other fields the game doesn't use (CRS) are not checked; the pipeline validates them.
 /// </summary>
 public static partial class MapManifestReader
 {
@@ -95,7 +95,15 @@ public static partial class MapManifestReader
             index++;
         }
 
-        return new MapManifest(version, mapId, displayName, area, origin, tileSize, tiles, credits);
+        string? generatedAt = null;
+        if (PackJson.TryGet(root, "generated_at", out var generatedElement))
+        {
+            generatedAt = generatedElement.ValueKind == System.Text.Json.JsonValueKind.String
+                ? generatedElement.GetString()
+                : throw PackJson.Error(source, "generated_at", "must be a string");
+        }
+
+        return new MapManifest(version, mapId, displayName, area, origin, tileSize, tiles, credits) { GeneratedAt = generatedAt };
     }
 
     /// <summary>A credit follows the pipeline's <c>PackCredit</c>: five required strings, no other keys.</summary>

@@ -22,6 +22,12 @@ public sealed record MapManifest(
     IReadOnlyList<MapTile> Tiles,
     IReadOnlyList<MapCredit> Credits)
 {
+    /// <summary>
+    /// The manifest's <c>generated_at</c> (when the pipeline built the pack, as written), stored in saves; null when the
+    /// key is absent. Not part of the constructor, so packs and tests without it still read.
+    /// </summary>
+    public string? GeneratedAt { get; init; }
+
     /// <summary>True when the Godot point (<paramref name="x"/>, <paramref name="z"/>) lies on any tile.</summary>
     public bool ContainsGodotPoint(double x, double z) => Tiles.Any(tile => tile.Bounds.ContainsGodotPoint(x, z));
 }

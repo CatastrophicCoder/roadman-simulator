@@ -45,8 +45,12 @@ public class WorldEdgeBreakingTest
     /// <summary>Criterion 16: physical key used for the dismiss presses (bound to no action).</summary>
     private const Key DismissKey = Key.Enter;
 
-    /// <summary>Criterion 16: gamepad button used for the dismiss presses (bound to no action).</summary>
-    private const JoyButton DismissButton = JoyButton.Start;
+    /// <summary>
+    /// Criterion 16: gamepad button used for the dismiss presses: the south face button. Not the start button, which
+    /// is the <c>pause</c> action and never dismisses the death screen (<c>docs/specs/menu-settings-save.md</c>,
+    /// criterion 12). The player's input is off until the respawn, so its <c>jump</c> binding doesn't matter.
+    /// </summary>
+    private const JoyButton DismissButton = GamepadButtons.South;
 
     private const int PadDevice = 0;
 
@@ -467,7 +471,7 @@ public class WorldEdgeBreakingTest
     {
         AssertBool(World.IsDismissPress(new InputEventKey { PhysicalKeycode = Key.Enter, Pressed = true })).IsTrue();
         AssertBool(World.IsDismissPress(new InputEventKey { PhysicalKeycode = Key.A, Pressed = true })).IsTrue();
-        AssertBool(World.IsDismissPress(new InputEventJoypadButton { ButtonIndex = JoyButton.Start, Pressed = true })).IsTrue();
+        AssertBool(World.IsDismissPress(new InputEventJoypadButton { ButtonIndex = GamepadButtons.East, Pressed = true })).IsTrue();
         AssertBool(World.IsDismissPress(new InputEventJoypadButton { ButtonIndex = GamepadButtons.South, Pressed = true, Device = -1 })).IsTrue();
         AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true })).IsTrue();
         AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Right, Pressed = true })).IsTrue();
@@ -475,7 +479,7 @@ public class WorldEdgeBreakingTest
 
         AssertBool(World.IsDismissPress(new InputEventKey { PhysicalKeycode = Key.Enter, Pressed = true, Echo = true })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventKey { PhysicalKeycode = Key.Enter, Pressed = false })).IsFalse();
-        AssertBool(World.IsDismissPress(new InputEventJoypadButton { ButtonIndex = JoyButton.Start, Pressed = false })).IsFalse();
+        AssertBool(World.IsDismissPress(new InputEventJoypadButton { ButtonIndex = GamepadButtons.East, Pressed = false })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.WheelUp, Pressed = true })).IsFalse();
         AssertBool(World.IsDismissPress(new InputEventMouseButton { ButtonIndex = MouseButton.WheelDown, Pressed = true })).IsFalse();

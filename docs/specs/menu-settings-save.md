@@ -237,6 +237,18 @@ Four tabs, each a column of labelled controls, operated with the mouse, the keyb
 | 26 | `/verify` |
 | 27 | playtest |
 
+## Amendments
+
+- 2026-11-05, plan (the user's decisions):
+  1. Implemented in two parts. Part A: Roadman.Core, `Main`, the main and pause menus, the slot list, the loading screen, saving and loading, the autosave, ADR 0018 and the docs (criteria 1–18, 22 for those views, 23 and 25). Part B: the settings view (tabs, display, quality and audio application, the confirm-or-revert dialog, the controls table) and the `--menu` screenshots (19–21, 22 for the settings view, 24, 26).
+  2. Until Part B, the Settings buttons in the main and pause menus are shown disabled (not focusable).
+  3. `/verify` runs the headless startup (`godot --headless --path game --quit-after 120 -- --new-game`) as its own step, "headless startup": it fails on a non-zero exit, an `ERROR` line, a timeout or no `Player: spawned at` line.
+- 2026-11-05, implementation of part A:
+  1. Godot 4.7's built-in `ui_accept` holds only Enter, Kp Enter and Space, and `ui_cancel` only Escape (the "Context" line about the east face button is wrong for this version). `project.godot` overrides both, adding the south face button to `ui_accept` and the east face button to `ui_cancel`, so the menus work with a gamepad alone. In the game `Main` ignores `ui_cancel`, so the east face button still neither pauses nor releases the mouse.
+  2. `World` is added with `ProcessMode.Pausable`, because `Main` runs with `Always` and `Inherit` would keep `World` running while paused.
+  3. The load confirmation over a running game names the autosave as "Load Autosave? Progress since your last save will be lost.". The pause menu's Load is disabled when no slot is valid, like the main menu's. The slot list has a Back button. Quitting while the loading screen shows asks "Quit the game?" and writes no autosave. A save whose map isn't installed, reached through Continue, shows the load-failed screen. A manifest without `generated_at` saves `"unknown"`.
+  4. The death screen keeps its own look until Part B moves it onto `UiTheme`, so the death screenshots don't change in Part A.
+
 ## Open questions
 
 None. Resolved 2026-11-05 by the user:

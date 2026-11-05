@@ -63,6 +63,22 @@ public class MapManifestReaderTests
     }
 
     [Fact]
+    public void Parse_GeneratedAt_IsReadWhenPresentAndNullWhenAbsent()
+    {
+        Assert.Equal("2026-10-27T20:38:24Z", MapManifestReader.Parse(ValidManifest).GeneratedAt);
+        Assert.Null(MapManifestReader.Parse(Modify(root => root.AsObject().Remove("generated_at"))).GeneratedAt);
+    }
+
+    [Fact]
+    public void Parse_GeneratedAtNotAString_IsAnError()
+    {
+        var json = Modify(root => root["generated_at"] = 5);
+
+        var ex = Assert.Throws<MapPackException>(() => MapManifestReader.Parse(json));
+        Assert.Contains("generated_at", ex.Message);
+    }
+
+    [Fact]
     public void Parse_EmptyCredits_IsAllowed()
     {
         var json = Modify(root => root["credits"] = new JsonArray());

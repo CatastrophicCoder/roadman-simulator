@@ -1,4 +1,5 @@
 using Godot;
+using Roadman.Core.Settings;
 using Roadman.Scenes;
 
 namespace Roadman.OnFoot;
@@ -18,8 +19,10 @@ namespace Roadman.OnFoot;
 /// Mouse orbit only while the mouse is captured, this camera is current and <see cref="InputEnabled"/>; right-stick
 /// orbit (<c>camera_left</c>, <c>camera_right</c>, <c>camera_up</c>, <c>camera_down</c>, through
 /// <see cref="OrbitStick"/>) each physics frame while this camera is current and <see cref="InputEnabled"/>. The mouse is
-/// captured while this camera is current and the window has focus; <c>ui_cancel</c> releases it, a left click
-/// captures it again, losing focus releases it (and regaining it captures again unless <c>ui_cancel</c> released it).
+/// captured while this camera is current and the window has focus; a left click captures it again, losing focus
+/// releases it (and regaining it captures again while the tree isn't paused). It doesn't handle <c>ui_cancel</c>: Esc
+/// is the <c>pause</c> action, and the pause menu releases the mouse through <see cref="ReleaseForPause"/> and asks for
+/// it back with <see cref="ResumeCapture"/> (<c>docs/specs/menu-settings-save.md</c>).
 /// Whether this camera holds the capture (<see cref="MouseCaptured"/>) follows <see cref="Input.MouseMode"/>, so a
 /// release by anything else can't leave it believing it still holds the mouse.
 /// There is no automatic swing-back: the yaw changes only with input or <see cref="PlaceBehind"/>.
@@ -37,6 +40,12 @@ public partial class PlayerCamera : Node3D
     public const string CameraRightAction = "camera_right";
     public const string CameraUpAction = "camera_up";
     public const string CameraDownAction = "camera_down";
+
+    /// <summary>The default of <see cref="MouseSensitivity"/>, rad per pixel; the settings' 1.0× multiplier.</summary>
+    public const float DefaultMouseSensitivity = 0.003f;
+
+    /// <summary>The default of <see cref="StickSensitivity"/>, rad/s at full tilt; the settings' 1.0× multiplier.</summary>
+    public const float DefaultStickSensitivity = 3f;
 
     private float _yaw;
     private float _pitch;
@@ -85,11 +94,11 @@ public partial class PlayerCamera : Node3D
 
     /// <summary>Radians per pixel of mouse motion.</summary>
     [Export]
-    public float MouseSensitivity { get; set; } = 0.003f;
+    public float MouseSensitivity { get; set; } = DefaultMouseSensitivity;
 
     /// <summary>Radians per second at full right-stick tilt.</summary>
     [Export]
-    public float StickSensitivity { get; set; } = 3f;
+    public float StickSensitivity { get; set; } = DefaultStickSensitivity;
 
     /// <summary>Mouse up pitches down when true. Default false (not inverted); the settings view will expose it.</summary>
     [Export]
@@ -139,6 +148,13 @@ public partial class PlayerCamera : Node3D
     /// captured. Derived from the engine's mouse mode, so anything else releasing the mouse ends it at once.
     /// </summary>
     public bool MouseCaptured => _ownsCapture && Input.MouseMode == Input.MouseModeEnum.Captured;
+
+    /// <summary>
+    /// Whether this camera wants the mouse capture: set by <see cref="Activate"/> with capture and by a left click,
+    /// kept through focus loss and <see cref="ReleaseForPause"/>, cleared when it stops being current. The headless
+    /// display server can't capture the mouse, so tests check this instead of <see cref="MouseCaptured"/>.
+    /// </summary>
+    public bool WantsCapture => _captureWanted;
 
     /// <summary>Yaw in radians (Godot's convention: yaw 0 looks along −Z), wrapped to [−π, π).</summary>
     public float Yaw
@@ -240,17 +256,6 @@ public partial class PlayerCamera : Node3D
             return;
         }
 
-        if (@event.IsActionPressed("ui_cancel"))
-        {
-            if (MouseCaptured)
-            {
-                ReleaseMouse(keepWanted: false);
-                GetViewport().SetInputAsHandled();
-            }
-
-            return;
-        }
-
         switch (@event)
         {
             case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } when !MouseCaptured:
@@ -271,7 +276,8 @@ public partial class PlayerCamera : Node3D
         {
             ReleaseMouse(keepWanted: true);
         }
-        else if (what == NotificationApplicationFocusIn && _captureWanted && IsCurrent && InputEnabled)
+        else if (what == NotificationApplicationFocusIn && _captureWanted && IsCurrent && InputEnabled
+                 && !(IsInsideTree() && GetTree().Paused))
         {
             CaptureMouse();
         }
@@ -344,6 +350,40 @@ public partial class PlayerCamera : Node3D
         {
             CaptureMouse();
         }
+    }
+
+    /// <summary>
+    /// The pause menu opens: releases the mouse when this camera holds it, and keeps <see cref="WantsCapture"/> as it
+    /// is, so <see cref="ResumeCapture"/> can take it back.
+    /// </summary>
+    public void ReleaseForPause() => ReleaseMouse(keepWanted: true);
+
+    /// <summary>
+    /// The pause menu closes: captures the mouse again when this camera wants it (<see cref="WantsCapture"/>), is
+    /// current and takes input, and the window has focus (otherwise regaining focus captures it).
+    /// </summary>
+    /// <returns>True when it asked for the capture.</returns>
+    public bool ResumeCapture()
+    {
+        if (!_captureWanted || !IsCurrent || !InputEnabled || !IsInsideTree() || !GetWindow().HasFocus())
+        {
+            return false;
+        }
+
+        CaptureMouse();
+        return true;
+    }
+
+    /// <summary>
+    /// Applies the player's gameplay settings: the two invert flags, and the sensitivities as
+    /// <see cref="DefaultMouseSensitivity"/> and <see cref="DefaultStickSensitivity"/> × their multipliers.
+    /// </summary>
+    public void ApplySettings(GameplaySettings settings)
+    {
+        InvertMouseY = settings.InvertMouseY;
+        InvertStickY = settings.InvertStickY;
+        MouseSensitivity = (float)(DefaultMouseSensitivity * settings.MouseSensitivity);
+        StickSensitivity = (float)(DefaultStickSensitivity * settings.StickSensitivity);
     }
 
     private void CaptureMouse()
