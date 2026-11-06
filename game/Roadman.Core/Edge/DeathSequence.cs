@@ -1,3 +1,4 @@
+using Roadman.Core.Items;
 using Roadman.Core.Maps;
 
 namespace Roadman.Core.Edge;
@@ -26,8 +27,11 @@ public enum DeathState
 
 /// <summary>What the player lost at the moment of death.</summary>
 /// <param name="Money">The money the player had.</param>
-/// <param name="Gear">The gear item ids the player had, sorted ordinal (<see cref="StringComparer.Ordinal"/>).</param>
-public sealed record DeathLosses(int Money, IReadOnlyList<string> Gear);
+/// <param name="Gear">
+/// The gear item ids the player had, sorted ordinal (<see cref="StringComparer.Ordinal"/>), the equipped ones included.
+/// </param>
+/// <param name="Equipped">The item id in each slot that held one (a copy).</param>
+public sealed record DeathLosses(int Money, IReadOnlyList<string> Gear, IReadOnlyDictionary<EquipSlot, string> Equipped);
 
 /// <summary>Where, and in which outward direction, the player entered the void.</summary>
 /// <param name="Position">The player's position at entry, Godot local metres.</param>
@@ -105,8 +109,8 @@ public sealed class DeathSequence
     public VoidEntry? Entry { get; private set; }
 
     /// <summary>
-    /// In <see cref="DeathState.Alive"/>: records <see cref="Losses"/> (the money and the sorted gear ids), then calls
-    /// <see cref="PlayerState.Die"/> once, stores <paramref name="entry"/> and moves to
+    /// In <see cref="DeathState.Alive"/>: records <see cref="Losses"/> (the money, the sorted gear ids and the equipped
+    /// items), then calls <see cref="PlayerState.Die"/> once, stores <paramref name="entry"/> and moves to
     /// <see cref="DeathState.Falling"/>. In any other state it changes nothing.
     /// </summary>
     /// <returns>True when the sequence started.</returns>
@@ -121,7 +125,8 @@ public sealed class DeathSequence
 
         var gear = _player.Gear.ToList();
         gear.Sort(StringComparer.Ordinal);
-        Losses = new DeathLosses(_player.Money, gear.AsReadOnly());
+        var equipped = new Dictionary<EquipSlot, string>(_player.Equipped);
+        Losses = new DeathLosses(_player.Money, gear.AsReadOnly(), equipped.AsReadOnly());
         Entry = entry;
         _player.Die();
         ChangeState(DeathState.Falling, 0);

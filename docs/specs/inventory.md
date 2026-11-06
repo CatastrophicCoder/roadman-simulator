@@ -189,6 +189,15 @@ Pickups come with the quest system. Until then a release build has no way to get
 | 26 | `/verify` |
 | 27 | playtest |
 
+## Amendments
+
+- 2026-11-06, after the review (the user's decisions):
+  1. The `inventory` action does nothing on the death screen at any time: `World` skips it in the dismiss check, as it skips `pause`. Every other key, gamepad button and mouse button still dismisses the screen after `MinScreenTime`.
+  2. When a load both removes or unequips items and moves the player (the map has changed), one notice shows both, the item sentence first, then the map-changed sentence.
+  3. Criterion 2's word list holds only distinctive brand and game names, matched as whole words. Test files may list such names solely to check game content (root CLAUDE.md, ADR 0019); the controls tab's console word list falls under the same exception.
+  4. `--give` is used up when a player is placed, so a first start that fails doesn't consume it. `World.GivenItems` lists only the items actually added.
+  5. The gdUnit4 session timeout (`game/.runsettings`, `GDUNIT_TIMEOUT` in `verify.sh`) is 1200 s.
+
 ## Open questions
 
 None. Resolved 2026-11-06 by the user:

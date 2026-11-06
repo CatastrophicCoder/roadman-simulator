@@ -1,5 +1,6 @@
 using Roadman.Core;
 using Roadman.Core.Maps;
+using Roadman.Core.Tests.Items;
 
 namespace Roadman.Core.Tests;
 
@@ -8,7 +9,7 @@ public class PlayerStateTests
     [Fact]
     public void Die_ClearsMoneyAndGear()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         state.AddMoney(250);
         state.AddGear("pistol");
         state.AddGear("crowbar");
@@ -22,7 +23,7 @@ public class PlayerStateTests
     [Fact]
     public void Die_ResetsWantedLevel()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         state.SetWantedLevel(3);
 
         state.Die();
@@ -33,7 +34,7 @@ public class PlayerStateTests
     [Fact]
     public void Die_AlwaysRaisesDied()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         var died = 0;
         state.Died += () => died++;
 
@@ -46,7 +47,7 @@ public class PlayerStateTests
     [Fact]
     public void AddMoney_IncreasesMoney()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
 
         state.AddMoney(40);
         state.AddMoney(2);
@@ -57,7 +58,7 @@ public class PlayerStateTests
     [Fact]
     public void TrySpend_WithEnoughMoney_DeductsAndReturnsTrue()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         state.AddMoney(100);
 
         Assert.True(state.TrySpend(100));
@@ -67,7 +68,7 @@ public class PlayerStateTests
     [Fact]
     public void TrySpend_WithoutFunds_ReturnsFalseAndChangesNothing()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         state.AddMoney(10);
         var moneyEvents = 0;
         state.MoneyChanged += _ => moneyEvents++;
@@ -80,7 +81,7 @@ public class PlayerStateTests
     [Fact]
     public void NegativeAmounts_AreRejected()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         state.AddMoney(10);
 
         Assert.Throws<ArgumentOutOfRangeException>(() => state.AddMoney(-1));
@@ -91,7 +92,7 @@ public class PlayerStateTests
     [Fact]
     public void AddMoney_Overflow_ThrowsAndLeavesMoneyUnchanged()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         state.AddMoney(int.MaxValue);
         var moneyEvents = 0;
         state.MoneyChanged += _ => moneyEvents++;
@@ -107,7 +108,7 @@ public class PlayerStateTests
     [InlineData("  ")]
     public void GearIds_MustNotBeBlank(string? itemId)
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
 
         Assert.ThrowsAny<ArgumentException>(() => state.AddGear(itemId!));
         Assert.ThrowsAny<ArgumentException>(() => state.RemoveGear(itemId!));
@@ -121,7 +122,7 @@ public class PlayerStateTests
     [InlineData(99, PlayerState.MaxWantedLevel)]
     public void SetWantedLevel_ClampsToRange(int requested, int expected)
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
 
         state.SetWantedLevel(requested);
 
@@ -131,7 +132,7 @@ public class PlayerStateTests
     [Fact]
     public void AddGear_And_RemoveGear_ReportWhetherTheSetChanged()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
 
         Assert.True(state.AddGear("pistol"));
         Assert.False(state.AddGear("pistol"));
@@ -144,7 +145,7 @@ public class PlayerStateTests
     [Fact]
     public void Events_FireOncePerChange()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         var money = new List<int>();
         var gear = 0;
         var wanted = new List<int>();
@@ -166,7 +167,7 @@ public class PlayerStateTests
     [Fact]
     public void Events_DoNotFireOnNoOp()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         state.AddMoney(5);
         state.AddGear("crowbar");
         state.SetWantedLevel(PlayerState.MaxWantedLevel);
@@ -189,7 +190,7 @@ public class PlayerStateTests
     [Fact]
     public void Die_WhenAlreadyEmpty_RaisesOnlyDied()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         var changes = 0;
         var died = 0;
         state.MoneyChanged += _ => changes++;
@@ -206,7 +207,7 @@ public class PlayerStateTests
     [Fact]
     public void Die_RaisesEachChangeOnce()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         state.AddMoney(10);
         state.AddGear("pistol");
         state.AddGear("crowbar");
@@ -230,13 +231,13 @@ public class PlayerStateTests
     [Fact]
     public void Position_StartsAtTheOrigin()
     {
-        Assert.Equal(default, new PlayerState().Position);
+        Assert.Equal(default, new PlayerState(TestCatalogs.Plain).Position);
     }
 
     [Fact]
     public void SetPosition_RaisesPositionChangedOnlyWhenTheValueChanges()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         var changes = new List<LocalPoint>();
         state.PositionChanged += changes.Add;
         var point = new LocalPoint(70.5, 101.25, -98.75);
@@ -259,7 +260,7 @@ public class PlayerStateTests
     [Fact]
     public void SetPosition_OriginBeforeAnyMove_RaisesNothing()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         var changes = 0;
         state.PositionChanged += _ => changes++;
 
@@ -274,7 +275,7 @@ public class PlayerStateTests
     [InlineData(2)]
     public void SetPosition_NonFiniteComponent_ThrowsAndKeepsThePosition(int component)
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         var start = new LocalPoint(1, 2, 3);
         state.SetPosition(start);
         var changes = 0;
@@ -299,7 +300,7 @@ public class PlayerStateTests
     [Fact]
     public void Die_LeavesThePositionUnchanged()
     {
-        var state = new PlayerState();
+        var state = new PlayerState(TestCatalogs.Plain);
         var point = new LocalPoint(70.5, 101.25, -98.75);
         state.SetPosition(point);
         state.AddMoney(5);

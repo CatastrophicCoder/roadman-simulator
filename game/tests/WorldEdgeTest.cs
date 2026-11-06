@@ -706,8 +706,8 @@ public class WorldEdgeTest
             var world = await StartWorld(runner);
             var entry = FindLedgeEntry(world);
             state.AddMoney(1234);
-            state.AddGear("pipe");
-            state.AddGear("knife");
+            state.AddGear("baseball_bat");
+            state.AddGear("crowbar");
             state.SetWantedLevel(2);
 
             var result = await PlaceOnLedgeAndWaitForEntry(world, entry);
@@ -723,7 +723,7 @@ public class WorldEdgeTest
             AssertInt(state.WantedLevel).IsEqual(0);
             AssertThat(world.Death.Losses).IsNotNull();
             AssertInt(world.Death.Losses!.Money).IsEqual(1234);
-            AssertThat(string.Join(",", world.Death.Losses.Gear)).IsEqual("knife,pipe");
+            AssertThat(string.Join(",", world.Death.Losses.Gear)).IsEqual("baseball_bat,crowbar");
             AssertBool(player.InputEnabled).IsFalse();
             AssertBool(world.PlayerCamera!.InputEnabled).IsFalse();
             AssertInt((int)player.CollisionMask).IsEqual(0);
@@ -974,7 +974,7 @@ public class WorldEdgeTest
                 AssertBool(atScreen!.Value.Shown).IsTrue();
                 AssertThat(atScreen.Value.Title).IsEqual("The Earth is flat");
                 AssertThat(atScreen.Value.Subtitle).IsEqual("You fell off the edge of the world");
-                AssertThat(atScreen.Value.Losses).IsEqual("Money lost: 250 · Gear lost: crowbar");
+                AssertThat(atScreen.Value.Losses).IsEqual("Money lost: 250 · Gear lost: Crowbar");
                 AssertBool(atScreen.Value.PlayerVisible).OverrideFailureMessage("the player is visible on the death screen").IsFalse();
 
                 AssertInt(respawns.Count).IsEqual(1);

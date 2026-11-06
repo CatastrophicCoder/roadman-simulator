@@ -274,6 +274,8 @@ Process and physics time come from a headless run (the mean real frame time at a
 - 2026-11-05, after part B (the user's correction):
   7. A mouse button press (a click; not the wheel) dismisses the death screen too, after `MinScreenTime`, as a key or gamepad button does. Replaces the mouse-button exclusion in amendment 1 of Part B.
 - 2026-11-05, `docs/specs/menu-settings-save.md` (ADR 0018): a `pause` press (Esc, the gamepad Start button) opens the pause menu on the death screen instead of dismissing it; other keys, gamepad buttons and clicks still dismiss it after `MinScreenTime`. The death sequence, its camera and the screen fade pause with the game (`GetTree().Paused`) and continue where they stopped on Resume.
+- 2026-11-06, inventory (`docs/specs/inventory.md`, ADR 0019):
+  1. The losses line names items by display name, not id: the equipped ones first, in slot order (weapon, outfit), each as `<name> (equipped)`, then the rest by category and name (`DeathScreenText.Format(losses, catalogue)`). Criterion 5's ids become these names. `DeathLosses` also records the equipped items.
 
 ## Open questions
 

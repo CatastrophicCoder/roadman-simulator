@@ -469,7 +469,8 @@ public class ScreenshotArgsTests
     [InlineData("pause", MenuShot.Pause)]
     [InlineData("settings", MenuShot.Settings)]
     [InlineData("slots", MenuShot.Slots)]
-    public void Ac24_Parse_Menu_EachOfTheFourValues(string value, MenuShot expected)
+    [InlineData("inventory", MenuShot.Inventory)] // docs/specs/inventory.md, "Screenshots"
+    public void Ac24_Parse_Menu_EachOfTheFiveValues(string value, MenuShot expected)
     {
         var args = ScreenshotArgs.Parse(["--screenshot", "overview", "a.png", "--menu", value]);
 
@@ -534,7 +535,7 @@ public class ScreenshotArgsTests
     [InlineData("--road-graph", "--road-graph")]
     public void Ac24_Parse_MenuWithAnotherDebugFlag_ThrowsNamingBoth(string other, params string[] flag)
     {
-        foreach (var menu in new[] { "main", "pause", "settings", "slots" })
+        foreach (var menu in new[] { "main", "pause", "settings", "slots", "inventory" })
         {
             string[] after = ["--screenshot", "a", "a.png", "--menu", menu, .. flag];
             string[] before = [.. flag, "--screenshot", "a", "a.png", "--menu", menu];
@@ -551,6 +552,71 @@ public class ScreenshotArgsTests
     public void Ac24_Parse_UnknownArgument_ListsMenuInUsage()
     {
         var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--menus"]));
-        Assert.Contains("[--menu <main|pause|settings|slots>]", ex.Message);
+        Assert.Contains("[--menu <main|pause|settings|slots|inventory>]", ex.Message);
+    }
+
+    // ----- --give (docs/specs/inventory.md, criterion 13: with --screenshot an argument error exits 1) -----
+
+    [Fact]
+    public void InventoryAc13_Parse_GiveValidList_IsAcceptedAndSkipped()
+    {
+        var args = ScreenshotArgs.Parse(["--screenshot", "overview", "a.png", "--give", "crowbar,hoodie", "--menu", "inventory"]);
+
+        Assert.Equal(new ScreenshotArgs("overview", "a.png", null, Menu: MenuShot.Inventory), args);
+    }
+
+    [Fact]
+    public void InventoryAc13_Parse_GiveBeforeScreenshotWithSeedAndMap_IsAccepted()
+    {
+        var args = ScreenshotArgs.Parse(
+            ["--give", "baseball_bat,tracksuit,phone,bike_lock", "--seed", "1", "--screenshot", "overview", "a.png", "--map", "somero"]);
+
+        Assert.Equal(new ScreenshotArgs("overview", "a.png", null, "somero"), args);
+    }
+
+    [Fact]
+    public void InventoryAc13_Parse_GiveRepeatedId_IsAccepted()
+    {
+        Assert.NotNull(ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--give", "crowbar,crowbar"]));
+    }
+
+    [Theory]
+    [InlineData("unknown id", "--screenshot", "a", "a.png", "--give", "sword")]
+    [InlineData("unknown id among known", "--screenshot", "a", "a.png", "--give", "crowbar,laser_saw")]
+    [InlineData("id in the wrong case", "--screenshot", "a", "a.png", "--give", "Crowbar")]
+    [InlineData("blank entry", "--screenshot", "a", "a.png", "--give", "crowbar,,hoodie")]
+    [InlineData("trailing comma", "--screenshot", "a", "a.png", "--give", "crowbar,")]
+    [InlineData("space entry", "--screenshot", "a", "a.png", "--give", "crowbar, ")]
+    [InlineData("empty list", "--screenshot", "a", "a.png", "--give", "")]
+    [InlineData("flag without value at the end", "--screenshot", "a", "a.png", "--give")]
+    [InlineData("flag followed by another flag", "--screenshot", "a", "a.png", "--give", "--map", "somero")]
+    [InlineData("repeated flag", "--screenshot", "a", "a.png", "--give", "crowbar", "--give", "hoodie")]
+    [InlineData("repeated flag, same list", "--give", "crowbar", "--screenshot", "a", "a.png", "--give", "crowbar")]
+    public void InventoryAc13_Parse_GiveArgumentError_Throws(string why, params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.True(ex.Message.Contains("--give", StringComparison.Ordinal), $"{why}: {ex.Message}");
+    }
+
+    [Theory]
+    [InlineData("sword")]
+    [InlineData("laser_saw")]
+    public void InventoryAc13_Parse_GiveUnknownId_ErrorNamesTheId(string id)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--give", id]));
+        Assert.Contains($"'{id}'", ex.Message);
+    }
+
+    [Fact]
+    public void InventoryAc13_Parse_WithoutScreenshotFlag_IgnoresBadGive()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--give", "sword"]));
+    }
+
+    [Fact]
+    public void InventoryAc13_Parse_UnknownArgument_ListsGiveInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--gives"]));
+        Assert.Contains("[--give <id,...>]", ex.Message);
     }
 }

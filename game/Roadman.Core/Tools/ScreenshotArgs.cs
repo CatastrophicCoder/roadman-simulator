@@ -1,12 +1,15 @@
+using Roadman.Core.Items;
 using Roadman.Core.Maps;
 
 namespace Roadman.Core.Tools;
 
 /// <summary>
 /// The screenshot tool's user arguments (after <c>--</c> on the Godot command line):
-/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots&gt;]</c>.
+/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots|inventory&gt;] [--give &lt;id,...&gt;]</c>.
 /// <c>--seed &lt;n&gt;</c> may stand among them; it belongs to <see cref="SeedArg"/>, which reads it, and is skipped here
 /// (its value is still checked and a repeat is rejected, so a bad seed is an argument error of the screenshot run too).
+/// <c>--give &lt;id,...&gt;</c> is handled the same way: <see cref="GiveArg"/> reads it (the world applies it), and here its
+/// value is checked against <see cref="ItemCatalog.Default"/>, so a bad list is an argument error of the screenshot run.
 /// </summary>
 /// <param name="Preset">Camera preset name.</param>
 /// <param name="OutputPath">PNG to write, as given; resolve it with <see cref="OutputPath.Resolve"/>.</param>
@@ -37,7 +40,8 @@ namespace Roadman.Core.Tools;
 /// </param>
 /// <param name="Menu">
 /// Render a menu over the preset's view (<c>docs/specs/menu-settings-save.md</c>, "Screenshots"): the main menu, the
-/// pause menu, the settings view's Display tab or the slot list in load mode with sample saves. Debug builds only;
+/// pause menu, the settings view's Display tab, the slot list in load mode with sample saves, or the inventory screen
+/// (<c>docs/specs/inventory.md</c>, "Screenshots"). Debug builds only;
 /// can't be combined with <paramref name="Player"/>, <paramref name="Inspect"/>, <paramref name="Death"/>,
 /// <paramref name="Orthophoto"/> or <paramref name="RoadGraph"/>. Null: no menu.
 /// </param>
@@ -68,11 +72,12 @@ public sealed record ScreenshotArgs(
     public const string MenuPauseValue = "pause";
     public const string MenuSettingsValue = "settings";
     public const string MenuSlotsValue = "slots";
+    public const string MenuInventoryValue = "inventory";
 
     private const string Usage =
-        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{PlayerFlag}] [{DeathFlag} <{DeathFallValue}|{DeathScreenValue}>] [{MenuFlag} <{MenuValues}>] [{SeedArg.Flag} <n>]";
+        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{PlayerFlag}] [{DeathFlag} <{DeathFallValue}|{DeathScreenValue}>] [{MenuFlag} <{MenuValues}>] [{GiveArg.Flag} <id,...>] [{SeedArg.Flag} <n>]";
 
-    private const string MenuValues = $"{MenuMainValue}|{MenuPauseValue}|{MenuSettingsValue}|{MenuSlotsValue}";
+    private const string MenuValues = $"{MenuMainValue}|{MenuPauseValue}|{MenuSettingsValue}|{MenuSlotsValue}|{MenuInventoryValue}";
 
     /// <summary>
     /// Parses the user arguments.
@@ -85,7 +90,9 @@ public sealed record ScreenshotArgs(
     /// With <c>--screenshot</c>: a value is missing, an argument is repeated or unknown, the output isn't a <c>.png</c>,
     /// the map id isn't a slug, the <c>--seed</c> value isn't an integer, the <c>--death</c> value isn't <c>fall</c> or
     /// <c>screen</c>, <c>--player</c> is given with <c>--inspect</c>, or <c>--death</c> with <c>--player</c> or
-    /// <c>--inspect</c>, <c>--menu</c> isn't given one of <c>main</c>, <c>pause</c>, <c>settings</c> or <c>slots</c>, or
+    /// <c>--inspect</c>, <c>--menu</c> isn't given one of <c>main</c>, <c>pause</c>, <c>settings</c>, <c>slots</c> or
+    /// <c>inventory</c>, <c>--give</c> is repeated or its list is missing, empty, has a blank entry or an id not in
+    /// <see cref="ItemCatalog.Default"/>, or
     /// <c>--menu</c> is given with <c>--player</c>, <c>--inspect</c>, <c>--death</c>, <c>--orthophoto</c> or
     /// <c>--road-graph</c>.
     /// </exception>
@@ -111,6 +118,7 @@ public sealed record ScreenshotArgs(
         DeathShot? death = null;
         MenuShot? menu = null;
         var seenSeed = false;
+        var seenGive = false;
 
         for (var i = 0; i < userArgs.Count; i++)
         {
@@ -217,6 +225,22 @@ public sealed record ScreenshotArgs(
                     seenSeed = true;
                     SeedArg.ParseValue(userArgs, ++i);
                     break;
+                case GiveArg.Flag:
+                    // Read by GiveArg.Parse; here a repeat is rejected and the value is only checked and skipped.
+                    if (seenGive)
+                    {
+                        throw new ArgumentException($"{GiveArg.Flag} is given more than once");
+                    }
+
+                    seenGive = true;
+                    string[] giveArgs = i + 1 < userArgs.Count ? [GiveArg.Flag, userArgs[i + 1]] : [GiveArg.Flag];
+                    if (GiveArg.Parse(giveArgs, ItemCatalog.Default).Error is { } giveError)
+                    {
+                        throw new ArgumentException(giveError);
+                    }
+
+                    i++;
+                    break;
                 default:
                     throw new ArgumentException($"unexpected argument '{userArgs[i]}'; usage: {Usage}");
             }
@@ -265,6 +289,7 @@ public sealed record ScreenshotArgs(
             MenuPauseValue => MenuShot.Pause,
             MenuSettingsValue => MenuShot.Settings,
             MenuSlotsValue => MenuShot.Slots,
+            MenuInventoryValue => MenuShot.Inventory,
             _ => null,
         };
 
@@ -276,6 +301,7 @@ public sealed record ScreenshotArgs(
             MenuShot.Pause => MenuPauseValue,
             MenuShot.Settings => MenuSettingsValue,
             MenuShot.Slots => MenuSlotsValue,
+            MenuShot.Inventory => MenuInventoryValue,
             _ => throw new ArgumentOutOfRangeException(nameof(menu), menu, "not a menu shot"),
         };
 
@@ -314,6 +340,12 @@ public enum MenuShot
 
     /// <summary><c>slots</c>: the slot list in load mode with sample saves, opened from the pause menu.</summary>
     Slots,
+
+    /// <summary>
+    /// <c>inventory</c>: the inventory screen, opened from the game, over the paused game, with the <c>--give</c> items
+    /// (the first weapon and the first clothing item equipped).
+    /// </summary>
+    Inventory,
 }
 
 /// <summary>Process exit codes of the screenshot tool, as read by <c>/verify</c>.</summary>
@@ -330,7 +362,7 @@ public static class ScreenshotExitCode
     /// debug build, with <c>--inspect</c>, or when the player didn't spawn or reach the ground, or <c>--death</c> outside a
     /// debug build, with <c>--player</c> or <c>--inspect</c>, without a spawned player, without world-edge geometry, or
     /// when the death sequence doesn't reach the stage to capture, or <c>--menu</c> outside a debug build, with another
-    /// debug flag, or without <c>Main</c>.
+    /// debug flag, or without <c>Main</c>, or an invalid <c>--give</c> list.
     /// </summary>
     public const int Error = 1;
 

@@ -9,7 +9,7 @@ namespace Roadman.Core.Saves;
 /// <see cref="SaveReader.Read(string)"/> of the output gives an equal value. Shape:
 /// <code>
 /// {
-///   "format_version": 1,
+///   "format_version": 2,
 ///   "game_version": "dev",
 ///   "saved_at_utc": "2026-11-05T12:34:56.1234567Z",
 ///   "play_seconds": 4980.25,
@@ -19,7 +19,8 @@ namespace Roadman.Core.Saves;
 ///     "position": [12.5, 101.25, -40],
 ///     "facing_yaw": 1.5707963267948966,
 ///     "money": 120,
-///     "gear": ["a", "b"],
+///     "gear": ["crowbar", "phone"],
+///     "equipped": { "weapon": "crowbar", "outfit": null },
 ///     "wanted_level": 2
 ///   },
 ///   "quests": {}
@@ -82,6 +83,10 @@ public static class SaveWriter
             }
 
             writer.WriteEndArray();
+            writer.WriteStartObject("equipped");
+            WriteSlot(writer, "weapon", player.Equipped.Weapon);
+            WriteSlot(writer, "outfit", player.Equipped.Outfit);
+            writer.WriteEndObject();
             writer.WriteNumber("wanted_level", player.WantedLevel);
             writer.WriteEndObject();
 
@@ -91,5 +96,17 @@ public static class SaveWriter
         }
 
         return Encoding.UTF8.GetString(stream.ToArray()) + "\n";
+    }
+
+    private static void WriteSlot(Utf8JsonWriter writer, string name, string? id)
+    {
+        if (id is null)
+        {
+            writer.WriteNull(name);
+        }
+        else
+        {
+            writer.WriteString(name, id);
+        }
     }
 }

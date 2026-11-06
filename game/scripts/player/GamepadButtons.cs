@@ -21,6 +21,9 @@ public static class GamepadButtons
     /// <summary>The left-stick click (<c>run_toggle</c>).</summary>
     public const JoyButton LeftStickClick = JoyButton.LeftStick;
 
+    /// <summary>The back button (<c>inventory</c>); shown as "Back button".</summary>
+    public const JoyButton Back = JoyButton.Back;
+
     /// <summary>The start button (<c>pause</c>); shown as "Start button".</summary>
     public const JoyButton Start = JoyButton.Start;
 }

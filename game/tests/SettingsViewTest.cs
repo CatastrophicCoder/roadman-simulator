@@ -616,6 +616,32 @@ public class SettingsViewTest
         await WorldEdgeTest.PhysicsFrames(_main, 1);
     }
 
+    /// <summary>
+    /// <c>docs/specs/inventory.md</c> criterion 23: the controls tab lists <c>inventory</c> as "Inventory" with Tab
+    /// (the key's label from <c>InputMap</c>) and "Back button", not as a debug row, and no gamepad text names a
+    /// console maker's button.
+    /// </summary>
+    [TestCase]
+    public async Task InventoryAc23_ControlsTab_ListsInventoryWithTabAndBackButton_NoConsoleNames()
+    {
+        DebugBuild.Override = false;
+        var view = await OpenSettingsOnMainMenu();
+        view.SelectTab(SettingsView.ControlsTab);
+        var rows = view.ControlRows.Where(r => r.Action == Main.InventoryAction).ToList();
+        AssertInt(rows.Count).OverrideFailureMessage("no single inventory row on the controls tab").IsEqual(1);
+        var row = rows[0];
+        GD.Print($"SettingsViewTest: inventory Ac23 row: {row.Label}: {row.Keys} / {row.Gamepad}");
+        AssertThat(row.Label).IsEqual("Inventory");
+        AssertBool(row.IsDebug).IsFalse();
+        AssertThat(row.Keys).IsEqual("Tab");
+        AssertThat(row.Gamepad).IsEqual("Back button");
+        foreach (var r in view.ControlRows)
+        {
+            var match = ConsoleWordPattern.Match(r.Gamepad);
+            AssertBool(match.Success).OverrideFailureMessage($"{r.Action}'s gamepad text '{r.Gamepad}' contains '{match.Value}'").IsFalse();
+        }
+    }
+
     // ----- Criterion 22: keyboard alone and gamepad alone -----
 
     [TestCase]

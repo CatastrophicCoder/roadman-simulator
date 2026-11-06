@@ -70,6 +70,21 @@ public static class UiTheme
     /// <summary>Theme type variation of a table's column headings and group headings.</summary>
     public const string TableHeading = "TableHeading";
 
+    /// <summary>
+    /// Side of the square reserved for an item icon in the inventory screen's rows (drawn as nothing until icons
+    /// exist; <c>docs/specs/inventory.md</c>, "Layout").
+    /// </summary>
+    public const float ItemIconSize = 48f;
+
+    /// <summary>Text size of a section heading inside a view (the inventory screen's Equipped, Items and Debug).</summary>
+    public const int SectionFontSize = 24;
+
+    /// <summary>Theme type variation of a section heading inside a view.</summary>
+    public const string SectionLabel = "SectionLabel";
+
+    /// <summary>Theme type variation of a short accent tag after a name (the inventory screen's "Equipped").</summary>
+    public const string TagLabel = "TagLabel";
+
     /// <summary>The panel colour without transparency, for pop-up lists over other panels.</summary>
     public static readonly Color PopupPanel = new(0.1f, 0.115f, 0.135f);
 
@@ -111,6 +126,14 @@ public static class UiTheme
         theme.SetTypeVariation(HintLabel, "Label");
         theme.SetFontSize("font_size", HintLabel, SmallFontSize);
         theme.SetColor("font_color", HintLabel, TextMuted);
+
+        theme.SetTypeVariation(SectionLabel, "Label");
+        theme.SetFontSize("font_size", SectionLabel, SectionFontSize);
+        theme.SetColor("font_color", SectionLabel, Text);
+
+        theme.SetTypeVariation(TagLabel, "Label");
+        theme.SetFontSize("font_size", TagLabel, SmallFontSize);
+        theme.SetColor("font_color", TagLabel, Accent);
 
         theme.SetTypeVariation(TabButton, "Button");
         theme.SetStylebox("pressed", TabButton, AccentBar(ButtonPressed));

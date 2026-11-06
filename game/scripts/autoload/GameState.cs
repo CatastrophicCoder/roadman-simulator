@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Godot;
 using Roadman.Core;
+using Roadman.Core.Items;
 using Roadman.Core.Saves;
 using Roadman.Core.Settings;
 
@@ -23,7 +24,7 @@ public partial class GameState : Node
 
     public static GameState Instance { get; private set; } = null!;
 
-    public PlayerState Player { get; } = new();
+    public PlayerState Player { get; } = new(ItemCatalog.Default);
 
     /// <summary>The settings in use: the defaults until <see cref="LoadSettings"/> runs.</summary>
     public GameSettings Settings { get; set; } = GameSettings.Default;
@@ -67,6 +68,7 @@ public partial class GameState : Node
         Instance = this;
         Player.MoneyChanged += OnMoneyChanged;
         Player.GearChanged += OnGearChanged;
+        Player.EquipmentChanged += OnEquipmentChanged;
         Player.WantedLevelChanged += OnWantedLevelChanged;
         Player.Died += OnDied;
     }
@@ -75,6 +77,7 @@ public partial class GameState : Node
     {
         Player.MoneyChanged -= OnMoneyChanged;
         Player.GearChanged -= OnGearChanged;
+        Player.EquipmentChanged -= OnEquipmentChanged;
         Player.WantedLevelChanged -= OnWantedLevelChanged;
         Player.Died -= OnDied;
     }
@@ -116,6 +119,9 @@ public partial class GameState : Node
 
     private static void OnGearChanged() =>
         Events.Instance.EmitSignal(Events.SignalName.GearChanged);
+
+    private static void OnEquipmentChanged(EquipSlot slot) =>
+        Events.Instance.EmitSignal(Events.SignalName.EquipmentChanged, (int)slot);
 
     private static void OnWantedLevelChanged(int level) =>
         Events.Instance.EmitSignal(Events.SignalName.WantedLevelChanged, level);

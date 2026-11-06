@@ -58,7 +58,7 @@ public class PauseTest
     // ----- Criterion 11: pausing stops the world -----
 
     /// <summary>
-    /// Esc (the <c>pause</c> action) in a game pauses the tree, shows the pause menu with its five buttons (Resume
+    /// Esc (the <c>pause</c> action) in a game pauses the tree, shows the pause menu with its six buttons (Resume
     /// focused, Save and Settings enabled while alive) and releases the mouse while the player camera keeps wanting the
     /// capture; the street label HUD is hidden until the resume. Over 60 paused frames, with W held and the debug keys
     /// tapped, the player's position, a falling rigid body and the play time don't change (the death sequence's time in state, which
@@ -68,7 +68,7 @@ public class PauseTest
     /// play time move on.
     /// </summary>
     [TestCase]
-    public async Task Ac11_PauseKey_PausesShowsFiveButtonsReleasesTheMouse_AndFor60FramesNothingInTheWorldChangesAndDebugKeysDoNothing()
+    public async Task Ac11_PauseKey_PausesShowsSixButtonsReleasesTheMouse_AndFor60FramesNothingInTheWorldChangesAndDebugKeysDoNothing()
     {
         WorldEdgeTest.AssertPackPresent();
         using var runner = ISceneRunner.Load(_main = NewMain(_folder, "--new-game"), true);
@@ -93,7 +93,7 @@ public class PauseTest
         AssertBool(_main.GetTree().Paused).IsTrue();
         var menu = _main.PauseMenu;
         AssertBool(menu.IsVisibleInTree()).IsTrue();
-        AssertThat(string.Join("|", menu.Buttons.Select(b => b.Text))).IsEqual("Resume|Save|Load|Settings|Quit to menu");
+        AssertThat(string.Join("|", menu.Buttons.Select(b => b.Text))).IsEqual("Resume|Inventory|Save|Load|Settings|Quit to menu");
         AssertBool(menu.SaveButton.Disabled).OverrideFailureMessage("Save is disabled while alive").IsFalse();
         AssertBool(menu.SaveHint.Visible).IsFalse();
         AssertBool(menu.SettingsButton.Disabled).IsFalse();
@@ -436,6 +436,8 @@ public class PauseTest
 
             // Save → slot list (save mode).
             menu.ResumeButton.GrabFocus();
+            nav.Down();
+            AssertThat(FocusOwner(_main)).IsSame(menu.InventoryButton);
             nav.Down();
             AssertThat(FocusOwner(_main)).IsSame(menu.SaveButton);
             nav.Accept();

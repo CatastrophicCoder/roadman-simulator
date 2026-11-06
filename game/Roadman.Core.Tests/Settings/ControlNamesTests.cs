@@ -123,6 +123,7 @@ public class ControlNamesTests
     [InlineData("run", "Run (hold)")]
     [InlineData("run_toggle", "Run toggle")]
     [InlineData("pause", "Pause")]
+    [InlineData("inventory", "Inventory")] // docs/specs/inventory.md, criterion 23
     [InlineData("debug_camera", "Debug camera")]
     [InlineData("not_an_action", "not_an_action")]
     public void ActionLabel_KnownGivesItsLabel_UnknownGivesItsName(string action, string label)
@@ -263,6 +264,16 @@ public class ControlNamesTests
     public void ConsoleWordList_LetsGenericNamesThrough(string text)
     {
         Assert.DoesNotMatch(ConsoleWordPattern, text);
+    }
+
+    [Fact]
+    public void Inventory_Ac23_InventoryAction_IsAGameplayActionInProjectGodot_NotDebug()
+    {
+        // docs/specs/inventory.md: the `inventory` action (Tab, Back button) is listed in the controls tab.
+        Assert.Contains("inventory", ProjectActions());
+        Assert.Contains("inventory", ControlNames.GameplayActionOrder);
+        Assert.False(ControlNames.IsDebugAction("inventory"));
+        Assert.Equal("Back button", ControlNames.GamepadButtonName(4));
     }
 
     [Fact]

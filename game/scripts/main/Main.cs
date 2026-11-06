@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Godot;
 using Roadman.Autoload;
 using Roadman.Core.Edge;
+using Roadman.Core.Items;
 using Roadman.Core.Maps;
 using Roadman.Core.Saves;
 using Roadman.Core.Settings;
@@ -38,6 +40,12 @@ public enum MainState
 
     /// <summary>The pause menu (or its slot list or a dialog) over the paused game.</summary>
     Paused,
+
+    /// <summary>
+    /// The inventory screen opened from the game (<c>docs/specs/inventory.md</c>), over the paused game. Opened from
+    /// the pause menu, the state stays <see cref="Paused"/>.
+    /// </summary>
+    Inventory,
 }
 
 /// <summary>
@@ -60,6 +68,25 @@ public enum MainState
 /// the slot list, or resumes from the pause menu's top level, and is marked handled. Pausing sets
 /// <see cref="SceneTree.Paused"/>; <c>Main</c> and its UI run always, <c>World</c> is pausable. Window focus loss in a
 /// game opens the pause menu, and a window close request asks first (<see cref="RequestQuitGame"/>).
+/// <c>inventory</c> (Tab, the Back button) in a game opens the inventory screen (<see cref="OpenInventory"/>); while it
+/// shows, <c>inventory</c>, <c>pause</c> and <c>ui_cancel</c> are back (<see cref="CloseInventory"/>, or a dialog over it
+/// first), and the event is marked handled, so Tab never moves the focus there. Elsewhere Tab keeps
+/// <c>ui_focus_next</c>.
+/// </para>
+/// <para>
+/// <c>--give &lt;id,...&gt;</c>: in a game started here (not a direct start) this node is the one owner of the argument.
+/// It parses it once (<see cref="World.ResolveGiveArg"/>) and hands the ids to the first <c>World</c> it creates
+/// (<see cref="World.GiveItems"/>, which applies them after its first placement, never on a respawn). The list is
+/// cleared only once a world places its player (<see cref="OnPlayerPlaced"/>), so a start that fails
+/// (<c>StartFailed</c>) passes it on to the next world; worlds after the first placed player get an empty list. In a
+/// direct start the world reads its own command line instead.
+/// </para>
+/// <para>
+/// Loading a save cleans its player part first (<see cref="SaveItemCheck.Clean"/>): unknown items are dropped and
+/// items in a slot that doesn't fit them unequipped, each change pushed as a warning naming the slot file and the ids,
+/// and once the player is placed <see cref="Notice"/> shows <see cref="ItemsRemovedNotice"/> or
+/// <see cref="ItemsUnequippedNotice"/>. When the player was also moved (the map changed) it shows one notice instead,
+/// <see cref="CombinedNotice"/> (item text first, then <see cref="MapChangedNotice"/>; <see cref="PlacementNotice"/>).
 /// </para>
 /// <para>
 /// Tests set <see cref="UserArgs"/>, <see cref="SavesFolder"/> and <see cref="DisplayBackend"/> before the node enters the
@@ -89,13 +116,40 @@ public partial class Main : Node
 
     public const string AutosaveLine = "Your game will be saved to the autosave slot.";
 
+    /// <summary>The input action that opens and closes the inventory screen (Tab, the gamepad's Back button).</summary>
+    public const string InventoryAction = World.InventoryAction;
+
+    /// <summary>The notice after loading a save whose unknown items were dropped.</summary>
+    public const string ItemsRemovedNotice = "Some items in this save no longer exist and were removed.";
+
+    /// <summary>The notice after loading a save whose only change was emptying slots.</summary>
+    public const string ItemsUnequippedNotice = "Some items in this save were unequipped.";
+
+    /// <summary>
+    /// The one notice after a load that both cleaned items and moved the player (the map changed):
+    /// <paramref name="itemNotice"/> (<see cref="ItemsRemovedNotice"/> or <see cref="ItemsUnequippedNotice"/>), a space,
+    /// then <see cref="MapChangedNotice"/>.
+    /// </summary>
+    public static string CombinedNotice(string itemNotice) => $"{itemNotice} {MapChangedNotice}";
+
+    /// <summary>
+    /// The notice to show once a loaded or new player is placed: <see cref="CombinedNotice"/> when both apply,
+    /// else <see cref="MapChangedNotice"/> when <paramref name="moved"/>, else <paramref name="itemNotice"/>; null for none.
+    /// </summary>
+    public static string? PlacementNotice(bool moved, string? itemNotice) => (moved, itemNotice) switch
+    {
+        (true, { } items) => CombinedNotice(items),
+        (true, null) => MapChangedNotice,
+        (false, var items) => items,
+    };
+
     /// <summary>
     /// The press actions <see cref="Resume"/> releases when pressed in the resume frame: the game's presses and the
     /// debug toggles. Held actions (movement, <c>run</c>, camera) aren't in it.
     /// </summary>
     public static readonly string[] ResumeReleasedActions =
     [
-        OnFoot.Player.JumpAction, OnFoot.Player.RunToggleAction, World.PauseAction, "ui_accept", CancelAction,
+        OnFoot.Player.JumpAction, OnFoot.Player.RunToggleAction, World.PauseAction, InventoryAction, "ui_accept", CancelAction,
         World.DebugCameraAction, Debug.OrthophotoDebugView.ToggleAction, Debug.RoadGraphDebugView.ToggleAction,
         Debug.PlaceInspector.ToggleAction,
     ];
@@ -109,6 +163,9 @@ public partial class Main : Node
     private bool _quitAskedWhileLoading;
     private bool _changeAutoAcceptQuit;
     private World? _directWorld;
+    private FileSaveStore? _savesStore;
+    private IReadOnlyList<string> _giveItems = [];
+    private string? _pendingItemNotice;
 
     /// <summary>
     /// Whether a confirmed quit calls <see cref="SceneTree.Quit"/>. Tests set it false: the quit then only sets
@@ -172,6 +229,9 @@ public partial class Main : Node
 
     public ConfirmDialog Dialog { get; private set; } = null!;
 
+    /// <summary>The inventory screen, opened from the game or from the pause menu (<see cref="OpenInventory"/>).</summary>
+    public InventoryScreen InventoryScreen { get; private set; } = null!;
+
     /// <summary>
     /// The usable screen size the <c>--menu settings</c> screenshot gives the settings view: 2560×1440, so every size of
     /// <see cref="WindowSizes.All"/> is listed.
@@ -212,7 +272,8 @@ public partial class Main : Node
             SettingsApplier.ApplyAll(gameState.Settings, DisplayBackend, GetViewport());
         }
 
-        Slots = new SaveSlots(NewSaveStore(SavesFolder));
+        _savesStore = NewSaveStore(SavesFolder);
+        Slots = new SaveSlots(_savesStore);
         BuildUi();
 
         try
@@ -223,6 +284,8 @@ public partial class Main : Node
         {
             GD.PushError($"Main: {ex.Message}; the spawn draws are seeded from the time");
         }
+
+        _giveItems = World.ResolveGiveArg(args, GameState.Instance?.Player.Catalog ?? ItemCatalog.Default, "Main");
 
         var newGame = false;
         try
@@ -275,14 +338,15 @@ public partial class Main : Node
 
         var pause = @event.IsActionPressed(World.PauseAction);
         var cancel = @event.IsActionPressed(CancelAction);
-        if (!pause && !cancel)
+        var inventory = InputMap.HasAction(InventoryAction) && @event.IsActionPressed(InventoryAction);
+        if (!pause && !cancel && !inventory)
         {
             return;
         }
 
         if (State == MainState.Playing && !Dialog.IsOpen)
         {
-            if (pause && OpenPause())
+            if ((pause && OpenPause()) || (!pause && inventory && OpenInventory()))
             {
                 GetViewport().SetInputAsHandled();
             }
@@ -292,6 +356,12 @@ public partial class Main : Node
 
         if (State == MainState.Loading && !Dialog.IsOpen)
         {
+            return;
+        }
+
+        if (!pause && !cancel && !InventoryScreen.Visible)
+        {
+            // Tab outside the inventory screen keeps ui_focus_next; the Back button does nothing there.
             return;
         }
 
@@ -328,15 +398,21 @@ public partial class Main : Node
     }
 
     /// <summary>
-    /// Back one level: a dialog cancels; the settings view closes (writing the settings) and the slot list returns to
-    /// its menu; the pause menu resumes; on the main menu's top level nothing happens; after a failed start it returns
-    /// to the main menu.
+    /// Back one level: a dialog cancels; the inventory screen closes (to the game or the pause menu); the settings view
+    /// closes (writing the settings) and the slot list returns to its menu; the pause menu resumes; on the main menu's
+    /// top level nothing happens; after a failed start it returns to the main menu.
     /// </summary>
     public void Back()
     {
         if (Dialog.IsOpen)
         {
             Dialog.Cancel();
+            return;
+        }
+
+        if (InventoryScreen.Visible)
+        {
+            CloseInventory();
             return;
         }
 
@@ -379,17 +455,19 @@ public partial class Main : Node
     public void StartNewGame() => BeginGame(null);
 
     /// <summary>Continue: loads <see cref="SaveSlots.MostRecent"/>; false when there is none.</summary>
-    public bool Continue() => Slots.MostRecent() is { Save: { } save } && LoadSave(save);
+    public bool Continue() => Slots.MostRecent() is { Save: { } save } info && LoadSave(save, SaveFileOf(info.Slot));
 
     /// <summary>Loads <paramref name="slot"/> without asking; false when it isn't a valid save.</summary>
-    public bool LoadSlot(SlotId slot) => Slots.Get(slot) is { Status: SlotStatus.Valid, Save: { } save } && LoadSave(save);
+    public bool LoadSlot(SlotId slot) =>
+        Slots.Get(slot) is { Status: SlotStatus.Valid, Save: { } save } && LoadSave(save, SaveFileOf(slot));
 
     /// <summary>
     /// Loads <paramref name="save"/> without asking ("Loading a save"): frees a running game, restores the player
     /// state and play time, and loads the save's map with the save's player part pending. A map with no pack shows the
-    /// failure screen and returns false.
+    /// failure screen and returns false. The player part is cleaned of unknown and misplaced items first
+    /// (<see cref="SaveItemCheck.Clean"/>); <paramref name="source"/> (the slot file) names the save in the warnings.
     /// </summary>
-    public bool LoadSave(SaveGame save)
+    public bool LoadSave(SaveGame save, string? source = null)
     {
         ArgumentNullException.ThrowIfNull(save);
         if (!SlotList.MapInstalled(save.MapId))
@@ -402,7 +480,7 @@ public partial class Main : Node
             return false;
         }
 
-        BeginGame(save);
+        BeginGame(save, source);
         return true;
     }
 
@@ -432,7 +510,73 @@ public partial class Main : Node
     }
 
     /// <summary>
-    /// Closes the pause menu and everything over it, unpauses, releases the actions pressed in this frame and tells
+    /// Opens the inventory screen (<c>docs/specs/inventory.md</c>, "Opening") when <see cref="World.CanOpenInventory"/>:
+    /// from a running game it pauses as <see cref="OpenPause"/> does (the mouse released, the street label hidden) and
+    /// the state becomes <see cref="MainState.Inventory"/>; from the pause menu's top level it opens over the paused game
+    /// and the state stays <see cref="MainState.Paused"/>. False otherwise (no game, loading, a dialog or another view
+    /// open, the player not alive, the debug or death camera current).
+    /// </summary>
+    public bool OpenInventory()
+    {
+        if (World is not { } world || !IsInstanceValid(world) || !world.CanOpenInventory || Dialog.IsOpen
+            || InventoryScreen.Visible)
+        {
+            return false;
+        }
+
+        if (State == MainState.Playing)
+        {
+            if (world.PlayerCamera is { } camera && IsInstanceValid(camera))
+            {
+                camera.ReleaseForPause();
+            }
+
+            Input.MouseMode = Input.MouseModeEnum.Visible;
+            GetTree().Paused = true;
+            State = MainState.Inventory;
+            SetHudVisible(world, false);
+            InventoryScreen.Open(fromPauseMenu: false);
+            return true;
+        }
+
+        if (State == MainState.Paused && PauseMenu.Visible && !SettingsView.Visible && !SlotList.Visible)
+        {
+            PauseMenu.Visible = false;
+            InventoryScreen.Open(fromPauseMenu: true);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Closes the inventory screen: opened from the game it resumes as <see cref="Resume"/> does; opened from the pause
+    /// menu it returns there with the focus on Inventory. A dialog over it is closed too. False when it isn't open.
+    /// </summary>
+    public bool CloseInventory()
+    {
+        if (!InventoryScreen.Visible)
+        {
+            return false;
+        }
+
+        if (State == MainState.Inventory)
+        {
+            return Resume();
+        }
+
+        Dialog.Close();
+        InventoryScreen.Close();
+        if (State == MainState.Paused)
+        {
+            ShowPauseMenuWithFocus(PauseMenu.InventoryButton);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Closes the pause menu (or the inventory screen opened from the game) and everything over it, unpauses, releases the actions pressed in this frame and tells
     /// <c>World</c> (<see cref="World.OnResumedFromPause"/>: the player ignores <c>jump</c> and <c>run_toggle</c> until
     /// released, the death screen ignores dismiss presses in this frame), so the closing press never reaches the game,
     /// even a tap shorter than one physics tick; and lets the player camera capture the mouse again when it wanted it.
@@ -440,13 +584,14 @@ public partial class Main : Node
     /// </summary>
     public bool Resume()
     {
-        if (State != MainState.Paused)
+        if (State is not (MainState.Paused or MainState.Inventory))
         {
             return false;
         }
 
         SettingsView.Close(notify: false);
         Dialog.Close();
+        InventoryScreen.Close();
         SlotList.Visible = false;
         PauseMenu.Visible = false;
         GetTree().Paused = false;
@@ -516,7 +661,8 @@ public partial class Main : Node
     /// </summary>
     public void UseSavesFolder(string folder)
     {
-        Slots = new SaveSlots(NewSaveStore(folder));
+        _savesStore = NewSaveStore(folder);
+        Slots = new SaveSlots(_savesStore);
         SlotList.Slots = Slots;
     }
 
@@ -526,7 +672,8 @@ public partial class Main : Node
     /// on its background. The others pause the tree first: the pause menu, the settings view's Display tab opened from
     /// it (with <see cref="GameSettings.Defaults"/> on a <see cref="ScreenshotUsableScreen"/> screen, so the image
     /// doesn't depend on the machine's screen or settings file), or the slot list in load mode opened from it (saved times shown in UTC, so the image doesn't depend on the
-    /// machine's time zone). Call <see cref="UseSavesFolder"/> first.
+    /// machine's time zone). Call <see cref="UseSavesFolder"/> first. <see cref="MenuShot.Inventory"/>: the inventory
+    /// screen as opened from the game, over the paused game (the screenshot tool gives and equips the items first).
     /// </summary>
     /// <returns>False outside a <c>--menu</c> direct start (no UI built).</returns>
     public bool ShowMenuForScreenshot(MenuShot shot)
@@ -547,8 +694,15 @@ public partial class Main : Node
 
         GetTree().Paused = true;
         SetHudVisible(_directWorld, false);
+        if (shot == MenuShot.Inventory)
+        {
+            InventoryScreen.Open(fromPauseMenu: false);
+            return true;
+        }
+
         PauseMenu.Visible = true;
-        PauseMenu.Refresh(canSave: _directWorld is { } world && IsInstanceValid(world) && world.CanSave, canLoad: AnyValidSlot());
+        var alive = _directWorld is { } world && IsInstanceValid(world) && world.CanSave;
+        PauseMenu.Refresh(canSave: alive, canLoad: AnyValidSlot(), canInventory: alive);
         switch (shot)
         {
             case MenuShot.Settings:
@@ -606,6 +760,20 @@ public partial class Main : Node
         {
             OpenPause();
         }
+        else if (State == MainState.Inventory)
+        {
+            // The game is paused already: the question goes over the pause menu, so Cancel returns there.
+            Dialog.Close();
+            InventoryScreen.Close();
+            State = MainState.Paused;
+            ShowPauseMenuWithFocus(null);
+        }
+        else if (State == MainState.Paused && InventoryScreen.Visible)
+        {
+            Dialog.Close();
+            InventoryScreen.Close();
+            ShowPauseMenuWithFocus(PauseMenu.InventoryButton);
+        }
 
         if (State == MainState.Paused)
         {
@@ -628,7 +796,7 @@ public partial class Main : Node
     /// </summary>
     public void ConfirmQuitGame()
     {
-        if (State is not (MainState.Playing or MainState.Paused) || TryAutosave())
+        if (State is not (MainState.Playing or MainState.Paused or MainState.Inventory) || TryAutosave())
         {
             Quit(0);
             return;
@@ -724,7 +892,7 @@ public partial class Main : Node
     /// <summary>The display name of <paramref name="mapId"/> from its manifest; the id when that can't be read.</summary>
     public static string DisplayNameOf(string mapId) => SlotList.MapDisplayNameOf(mapId);
 
-    private void BeginGame(SaveGame? save)
+    private void BeginGame(SaveGame? save, string? source = null)
     {
         var generation = ++_gameGeneration;
         EndWorld();
@@ -740,6 +908,8 @@ public partial class Main : Node
         LoadingScreen.ShowLoading(DisplayNameOf(mapId));
 
         var playerState = GameState.Instance?.Player;
+        _pendingItemNotice = null;
+        var load = save?.Player;
         if (save is null)
         {
             playerState?.Reset();
@@ -747,12 +917,47 @@ public partial class Main : Node
         }
         else
         {
-            playerState?.Restore(save.Player);
+            load = CleanSaveItems(save.Player, playerState?.Catalog ?? ItemCatalog.Default, source);
+            playerState?.Restore(load);
             PlayTime = new PlayTime(save.PlaySeconds);
         }
 
-        AddWorldAfterLoadingScreenAsync(generation, save?.MapId, save?.Player);
+        AddWorldAfterLoadingScreenAsync(generation, save?.MapId, load);
     }
+
+    /// <summary>
+    /// The load cleanup (<c>docs/specs/inventory.md</c>, "Loading: unknown items"): <see cref="SaveItemCheck.Clean"/>
+    /// of <paramref name="player"/>; each removed id and each unequipped item is pushed as one warning naming
+    /// <paramref name="source"/> and the id, and the notice to show once the player is placed is set.
+    /// </summary>
+    /// <returns>The cleaned player part.</returns>
+    private SavePlayer CleanSaveItems(SavePlayer player, ItemCatalog catalog, string? source)
+    {
+        var check = SaveItemCheck.Clean(player, catalog);
+        if (!check.Changed)
+        {
+            return check.Player;
+        }
+
+        var file = source ?? "the save";
+        foreach (var id in check.RemovedIds)
+        {
+            GD.PushWarning($"Main: {file}: item '{id}' no longer exists; removed from the gear (and its slot)");
+        }
+
+        foreach (var unequip in check.Unequipped)
+        {
+            GD.PushWarning(
+                $"Main: {file}: item '{unequip.ItemId}' doesn't fit the {unequip.Slot.ToString().ToLowerInvariant()} slot; unequipped and kept");
+        }
+
+        _pendingItemNotice = check.RemovedIds.Count > 0 ? ItemsRemovedNotice : ItemsUnequippedNotice;
+        return check.Player;
+    }
+
+    /// <summary>The full path of <paramref name="slot"/>'s file in the saves folder in use.</summary>
+    private string SaveFileOf(SlotId slot) =>
+        _savesStore is { } store ? Path.Combine(ProjectSettings.GlobalizePath(store.Folder), slot.FileName) : slot.FileName;
 
     private async void AddWorldAfterLoadingScreenAsync(int generation, string? mapId, SavePlayer? load)
     {
@@ -771,6 +976,10 @@ public partial class Main : Node
         world.MapId = mapId;
         world.Seed = _seedArg ?? World.TimeSeed();
         world.PendingLoad = load;
+
+        // --give goes to every world until one places its player (applied after its first placement; cleared in
+        // OnPlayerPlaced), so a start that fails (StartFailed) doesn't use it up.
+        world.GiveItems = _giveItems;
         world.CameraSettings = GameState.Instance?.Settings.Gameplay;
         world.QualitySettings = QualityPreset.For((GameState.Instance?.Settings ?? GameSettings.Default).Display.Quality);
         world.PlayerSpawned += _ => OnPlayerPlaced(world, moved: false);
@@ -786,6 +995,12 @@ public partial class Main : Node
 
     private void OnPlayerPlaced(World world, bool moved)
     {
+        if (world == World)
+        {
+            // The world applied --give at this first placement (World.GiveItems); later worlds get nothing.
+            _giveItems = [];
+        }
+
         if (world != World || State != MainState.Loading)
         {
             return;
@@ -793,10 +1008,12 @@ public partial class Main : Node
 
         LoadingScreen.Visible = false;
         State = MainState.Playing;
-        if (moved)
+        if (PlacementNotice(moved, _pendingItemNotice) is { } notice)
         {
-            Notice.ShowNotice(MapChangedNotice);
+            Notice.ShowNotice(notice);
         }
+
+        _pendingItemNotice = null;
 
         EmitSignal(SignalName.GameStarted);
         var quitAsked = _quitAskedWhileLoading && Dialog.IsOpen;
@@ -858,6 +1075,7 @@ public partial class Main : Node
     {
         SettingsView.Close(notify: false);
         Dialog.Close();
+        InventoryScreen.Close();
         Background.Visible = false;
         MainMenu.Visible = false;
         PauseMenu.Visible = false;
@@ -869,7 +1087,23 @@ public partial class Main : Node
 
     private void RefreshMainMenu() => MainMenu.Refresh(canContinue: Slots.MostRecent() is not null, canLoad: AnyValidSlot());
 
-    private void RefreshPauseMenu() => PauseMenu.Refresh(canSave: World?.CanSave == true, canLoad: AnyValidSlot());
+    private void RefreshPauseMenu() =>
+        PauseMenu.Refresh(
+            canSave: World?.CanSave == true,
+            canLoad: AnyValidSlot(),
+            canInventory: World?.CanOpenInventory == true,
+            inventoryHint: World is { } world && IsInstanceValid(world) && world.Death.State != DeathState.Alive);
+
+    /// <summary>Shows the pause menu (refreshed) with the focus on <paramref name="focus"/> when it can take it.</summary>
+    private void ShowPauseMenuWithFocus(Control? focus)
+    {
+        PauseMenu.Visible = true;
+        RefreshPauseMenu();
+        if (focus is not null && UiFocus.IsFocusable(focus))
+        {
+            focus.GrabFocus();
+        }
+    }
 
     /// <summary>
     /// Applies a change made in the settings view at once: the display group (<see cref="SettingsApplier.ApplyDisplay"/>
@@ -1014,6 +1248,8 @@ public partial class Main : Node
         SettingsView = new SettingsView { Name = "SettingsView" };
         root.AddChild(SettingsView);
         Dialog = new ConfirmDialog { Name = "ConfirmDialog" };
+        InventoryScreen = new InventoryScreen { Name = "InventoryScreen", Dialog = Dialog };
+        root.AddChild(InventoryScreen);
         root.AddChild(Dialog);
 
         MainMenu.NewGameButton.Pressed += StartNewGame;
@@ -1023,6 +1259,8 @@ public partial class Main : Node
         MainMenu.QuitButton.Pressed += RequestQuitGame;
 
         PauseMenu.ResumeButton.Pressed += () => Resume();
+        PauseMenu.InventoryButton.Pressed += () => OpenInventory();
+        InventoryScreen.CloseRequested += () => CloseInventory();
         PauseMenu.SaveButton.Pressed += () => OpenSlotList(SlotListMode.Save);
         PauseMenu.LoadButton.Pressed += () => OpenSlotList(SlotListMode.Load);
         PauseMenu.SettingsButton.Pressed += () => OpenSettings();

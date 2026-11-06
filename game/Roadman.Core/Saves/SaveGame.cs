@@ -6,7 +6,7 @@ namespace Roadman.Core.Saves;
 public static class SaveFormat
 {
     /// <summary>The format version this game writes and reads without migration.</summary>
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 }
 
 /// <summary>
@@ -20,7 +20,7 @@ public static class SaveFormat
 /// <param name="MapId">The map id, a slug (<see cref="MapPack.SlugPattern"/>).</param>
 /// <param name="MapGeneratedAt">The manifest's <c>generated_at</c>, as written there; not blank.</param>
 /// <param name="Player">The player's part.</param>
-/// <param name="Quests">Quest progress; empty in format version 1.</param>
+/// <param name="Quests">Quest progress; empty in format versions 1 and 2.</param>
 public sealed record SaveGame(
     int FormatVersion,
     string GameVersion,
@@ -84,12 +84,12 @@ public sealed record SaveGame(
 }
 
 /// <summary>
-/// Quest progress in a save. Format version 1 holds nothing (<c>"quests": {}</c>); the quest system spec defines its
-/// content and raises the format version. All instances are equal.
+/// Quest progress in a save. Format versions 1 and 2 hold nothing (<c>"quests": {}</c>); the quest system spec
+/// defines its content and raises the format version. All instances are equal.
 /// </summary>
 public sealed record SaveQuests
 {
-    /// <summary>The empty quest progress of format version 1.</summary>
+    /// <summary>The empty quest progress of format versions 1 and 2.</summary>
     public static SaveQuests Empty { get; } = new();
 }
 
@@ -101,21 +101,25 @@ public sealed record SaveQuests
 /// <remarks>
 /// Construction normalises: <see cref="FacingYaw"/> is wrapped into (−π, π] (a value already in it is kept as is;
 /// a non-finite value is kept and fails <see cref="Problem"/>), and <see cref="Gear"/> is copied and sorted
-/// ordinal. Nothing else is checked on construction; <see cref="Problem"/> holds the rules. Equality compares the
-/// gear item by item.
+/// ordinal. Nothing else is checked on construction (except a null <see cref="Equipped"/>); <see cref="Problem"/>
+/// holds the rules. Equality compares the gear item by item.
 /// </remarks>
 public sealed record SavePlayer
 {
     private readonly double? _facingYaw;
     private readonly IReadOnlyList<string> _gear = [];
+    private readonly SaveEquipped _equipped = SaveEquipped.Empty;
 
-    /// <exception cref="ArgumentNullException"><paramref name="gear"/> is null.</exception>
-    public SavePlayer(LocalPoint? position, double? facingYaw, int money, IEnumerable<string> gear, int wantedLevel)
+    /// <exception cref="ArgumentNullException"><paramref name="gear"/> or <paramref name="equipped"/> is null.</exception>
+    public SavePlayer(
+        LocalPoint? position, double? facingYaw, int money, IEnumerable<string> gear, SaveEquipped equipped, int wantedLevel)
     {
+        ArgumentNullException.ThrowIfNull(gear);
         Position = position;
         FacingYaw = facingYaw;
         Money = money;
         Gear = gear.ToList();
+        Equipped = equipped;
         WantedLevel = wantedLevel;
     }
 
@@ -145,6 +149,17 @@ public sealed record SavePlayer
         }
     }
 
+    /// <summary>
+    /// The item id in each slot, or null. Each id is in <see cref="Gear"/> (<see cref="Problem"/>); whether it is a
+    /// known item that fits the slot isn't a save format rule (<see cref="Items.SaveItemCheck"/> handles that at load).
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Set to null.</exception>
+    public SaveEquipped Equipped
+    {
+        get => _equipped;
+        init => _equipped = value ?? throw new ArgumentNullException(nameof(Equipped));
+    }
+
     /// <summary>Wanted level, 0..<see cref="PlayerState.MaxWantedLevel"/>.</summary>
     public int WantedLevel { get; init; }
 
@@ -166,8 +181,9 @@ public sealed record SavePlayer
     /// <summary>
     /// The rules of a valid player part, shared by <see cref="SaveReader"/>, <see cref="SaveWriter"/> and
     /// <see cref="PlayerState.Restore"/>: money ≥ 0; wanted level 0..<see cref="PlayerState.MaxWantedLevel"/>; gear
-    /// ids not null or blank and not repeated; a finite position when present; a finite facing in (−π, π] when
-    /// present; and a facing only with a position.
+    /// ids not null or blank and not repeated; each equipped id null, or non-blank and in the gear; a finite position
+    /// when present; a finite facing in (−π, π] when present; and a facing only with a position. Structural rules
+    /// only: the save format doesn't know the item catalogue.
     /// </summary>
     /// <param name="requireFacingPair">
     /// True for a save (reader and writer): a position also needs a facing. False for
@@ -193,6 +209,16 @@ public sealed record SavePlayer
             {
                 return ($"gear[{i}]", $"'{Gear[i]}' appears more than once");
             }
+        }
+
+        if (EquippedProblem("equipped.weapon", Equipped.Weapon) is { } weapon)
+        {
+            return weapon;
+        }
+
+        if (EquippedProblem("equipped.outfit", Equipped.Outfit) is { } outfit)
+        {
+            return outfit;
         }
 
         if (WantedLevel is < 0 or > PlayerState.MaxWantedLevel)
@@ -223,12 +249,28 @@ public sealed record SavePlayer
         return null;
     }
 
+    private (string KeyPath, string Problem)? EquippedProblem(string keyPath, string? id)
+    {
+        if (id is null)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return (keyPath, "must be null or a non-blank string");
+        }
+
+        return Gear.Contains(id, StringComparer.Ordinal) ? null : (keyPath, $"'{id}' is not in gear");
+    }
+
     public bool Equals(SavePlayer? other) =>
         other is not null
         && Position == other.Position
         && Nullable.Equals(FacingYaw, other.FacingYaw)
         && Money == other.Money
         && WantedLevel == other.WantedLevel
+        && Equipped == other.Equipped
         && Gear.SequenceEqual(other.Gear, StringComparer.Ordinal);
 
     public override int GetHashCode()
@@ -238,11 +280,24 @@ public sealed record SavePlayer
         hash.Add(FacingYaw);
         hash.Add(Money);
         hash.Add(WantedLevel);
+        hash.Add(Equipped);
         foreach (var item in Gear)
         {
             hash.Add(item, StringComparer.Ordinal);
         }
 
-        return hash.GetHashCode();
+        return hash.ToHashCode();
     }
+}
+
+/// <summary>
+/// The equipped item ids in a save's player part (<c>player.equipped</c>), one per <see cref="Items.EquipSlot"/>, each
+/// null for an empty slot. Ordinal value equality.
+/// </summary>
+/// <param name="Weapon">The id in the weapon slot, or null.</param>
+/// <param name="Outfit">The id in the outfit slot, or null.</param>
+public sealed record SaveEquipped(string? Weapon, string? Outfit)
+{
+    /// <summary>Both slots empty.</summary>
+    public static SaveEquipped Empty { get; } = new(null, null);
 }

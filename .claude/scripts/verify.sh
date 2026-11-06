@@ -94,13 +94,13 @@ if GODOT_BIN="$(find_godot)"; then
     report N/A "gdunit4 tests" "dotnet not on PATH"
   else
     log="$LOGS/gdunit4.log"
-    (cd "$ROOT" && GODOT_BIN="$GODOT_BIN" run_with_timeout "${GDUNIT_TIMEOUT:-600}" "$log" \
+    (cd "$ROOT" && GODOT_BIN="$GODOT_BIN" run_with_timeout "${GDUNIT_TIMEOUT:-1200}" "$log" \
       dotnet test "$GAME_CSPROJ" --settings "$RUNSETTINGS")
     rc=$?
     if [ "$rc" -eq 0 ]; then
       report PASS "gdunit4 tests" "log: $log"
     elif [ "$rc" -eq 124 ]; then
-      report FAIL "gdunit4 tests" "timed out after ${GDUNIT_TIMEOUT:-600}s (log: $log)"
+      report FAIL "gdunit4 tests" "timed out after ${GDUNIT_TIMEOUT:-1200}s (log: $log)"
     else
       report FAIL "gdunit4 tests" "$(tail -3 "$log" | tr '\n' ' ') (log: $log)"
     fi
@@ -251,14 +251,19 @@ else
     esac
   done
   # The menus over the overview preset: main menu, pause menu, settings view, slot list with sample saves
-  # (docs/specs/menu-settings-save.md, criterion 24).
-  for menu in main pause settings slots; do
+  # (docs/specs/menu-settings-save.md, criterion 24), and the inventory screen with five items given
+  # (docs/specs/inventory.md, criterion 24).
+  for menu in main pause settings slots inventory; do
     log="$LOGS/screenshot-menu-$menu.log"
     if ! grep -qx "overview" <<<"$PRESETS"; then
       report N/A "screenshot menu $menu" "pack has no overview preset"
       continue
     fi
-    screenshot_preset "$GODOT_BIN" "$MAP_ID" overview "$SHOTS/menu-$menu.png" "$log" --menu "$menu"
+    menu_args=(--menu "$menu")
+    if [ "$menu" = inventory ]; then
+      menu_args+=(--give baseball_bat,crowbar,tracksuit,hoodie,phone)
+    fi
+    screenshot_preset "$GODOT_BIN" "$MAP_ID" overview "$SHOTS/menu-$menu.png" "$log" "${menu_args[@]}"
     case $? in
       0) report PASS "screenshot menu $menu" "build/screenshots/menu-$menu.png" ;;
       2) report N/A "screenshot menu $menu" "outside built area (log: $log)" ;;

@@ -1,5 +1,6 @@
 using Roadman.Core.Maps;
 using Roadman.Core.Saves;
+using Roadman.Core.Tests.Items;
 
 namespace Roadman.Core.Tests.Saves;
 
@@ -15,7 +16,7 @@ public class SaveFactoryTests
 
     private static PlayerState AlivePlayer()
     {
-        var player = new PlayerState();
+        var player = new PlayerState(TestCatalogs.Plain);
         player.SetPosition(new LocalPoint(12.5, 101.25, -40.125));
         player.AddMoney(120);
         player.AddGear("b");
@@ -195,5 +196,39 @@ public class SaveFactoryTests
         Assert.Null(read.Player.Position);
         Assert.Equal("unknown", read.MapGeneratedAt);
         Assert.Equal("dev", read.GameVersion);
+    }
+
+    // docs/specs/inventory.md, "Save format, version 2": slots are saved; an autosave during a death has none.
+
+    [Fact]
+    public void Inventory_ManualSave_HoldsTheEquippedItems_AndRoundTrips()
+    {
+        var player = new PlayerState(TestCatalogs.Mixed);
+        player.SetPosition(new LocalPoint(1, 2, 3));
+        player.AddGear("crowbar");
+        player.AddGear("suit");
+        player.AddGear("phone");
+        player.Equip("crowbar");
+        player.Equip("suit");
+
+        var save = Make(player: player)!;
+
+        Assert.Equal(new SaveEquipped("crowbar", "suit"), save.Player.Equipped);
+        Assert.Equal(save, SaveReader.Read(SaveWriter.Write(save)));
+    }
+
+    [Fact]
+    public void Inventory_AutosaveAfterDeath_HasNoGearAndEmptySlots()
+    {
+        var player = new PlayerState(TestCatalogs.Mixed);
+        player.AddGear("bat");
+        player.Equip("bat");
+        player.Die();
+
+        var save = Make(autosave: true, canSave: false, player: player)!;
+
+        Assert.Empty(save.Player.Gear);
+        Assert.Equal(SaveEquipped.Empty, save.Player.Equipped);
+        Assert.Null(save.Problem());
     }
 }

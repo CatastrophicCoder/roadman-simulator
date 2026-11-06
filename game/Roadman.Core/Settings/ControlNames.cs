@@ -23,6 +23,7 @@ public static class ControlNames
         ["camera_up"] = "Camera up",
         ["camera_down"] = "Camera down",
         ["pause"] = "Pause",
+        ["inventory"] = "Inventory",
         ["debug_camera"] = "Debug camera",
         ["debug_orthophoto"] = "Orthophoto view",
         ["debug_road_graph"] = "Road graph view",
@@ -70,6 +71,7 @@ public static class ControlNames
         "camera_up",
         "camera_down",
         "pause",
+        "inventory",
     ];
 
     /// <summary>The label of <paramref name="action"/> ("Move forward", "Run (hold)", ...); an unknown action gives its own name.</summary>

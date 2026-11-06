@@ -94,6 +94,6 @@ public class SlotTextTests
             4980,
             "somero",
             "2026-11-01T10:00:00Z",
-            new SavePlayer(new LocalPoint(1, 2, 3), 0.5, 120, ["a", "b"], 2),
+            new SavePlayer(new LocalPoint(1, 2, 3), 0.5, 120, ["a", "b"], SaveEquipped.Empty, 2),
             SaveQuests.Empty);
 }

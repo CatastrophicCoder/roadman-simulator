@@ -1,16 +1,21 @@
 using Roadman.Core.Edge;
+using Roadman.Core.Items;
 using Roadman.Core.Maps;
+using Roadman.Core.Tests.Items;
 
 namespace Roadman.Core.Tests.Edge;
 
-/// <summary><see cref="DeathSequence"/>: <c>docs/specs/world-edge-game.md</c>, acceptance criterion 3.</summary>
+/// <summary>
+/// <see cref="DeathSequence"/>: <c>docs/specs/world-edge-game.md</c>, acceptance criterion 3; the tests named
+/// <c>Ac6_Inventory_...</c> are <c>docs/specs/inventory.md</c>, acceptance criterion 6 (the equipped items in the losses).
+/// </summary>
 public class DeathSequenceTests
 {
     private const double Step = 1.0 / 60;
 
     private static readonly VoidEntry Entry = new(new LocalPoint(-1155, 86.5, 980), new PlanarPoint(-1, 0));
 
-    private readonly PlayerState _player = new();
+    private readonly PlayerState _player = new(TestCatalogs.Plain);
     private readonly DeathSequence _sequence;
     private readonly List<(DeathState From, DeathState To)> _changes = [];
     private int _died;
@@ -73,26 +78,71 @@ public class DeathSequenceTests
     [Fact]
     public void EnterVoid_GearLosses_AreSortedOrdinal() // criterion 3
     {
-        var player = new PlayerState();
-        player.AddGear("knife");
-        player.AddGear("Zippo"); // ordinal: 'Z' (90) before 'k' (107); a culture sort would put knife first
+        var player = new PlayerState(TestCatalogs.Plain);
+        player.AddGear("a_b");
+        player.AddGear("a1"); // ordinal: '1' (49) before '_' (95); a culture sort puts punctuation before digits
         var sequence = new DeathSequence(player);
 
         sequence.EnterVoid(Entry);
 
-        Assert.Equal(["Zippo", "knife"], sequence.Losses!.Gear);
+        Assert.Equal(["a1", "a_b"], sequence.Losses!.Gear);
         Assert.Equal(0, sequence.Losses.Money);
+        Assert.Empty(sequence.Losses.Equipped);
+    }
+
+    [Fact]
+    public void Ac6_Inventory_EnterVoid_RecordsTheEquippedItemsBeforeDie()
+    {
+        var player = new PlayerState(TestCatalogs.Mixed);
+        player.AddMoney(120);
+        player.AddGear("phone");
+        player.AddGear("suit");
+        player.AddGear("bat");
+        player.AddGear("crowbar");
+        player.Equip("crowbar");
+        player.Equip("suit");
+        var sequence = new DeathSequence(player);
+        DeathLosses? lossesAtFirstUnequip = null;
+        player.EquipmentChanged += _ => lossesAtFirstUnequip ??= sequence.Losses;
+
+        Assert.True(sequence.EnterVoid(Entry));
+
+        Assert.NotNull(lossesAtFirstUnequip); // recorded before Die() emptied the slots
+        var losses = sequence.Losses!;
+        Assert.Same(lossesAtFirstUnequip, losses);
+        Assert.Equal(120, losses.Money);
+        Assert.Equal(["bat", "crowbar", "phone", "suit"], losses.Gear); // the equipped ids too, sorted ordinal
+        Assert.Equal(2, losses.Equipped.Count);
+        Assert.Equal("crowbar", losses.Equipped[EquipSlot.Weapon]);
+        Assert.Equal("suit", losses.Equipped[EquipSlot.Outfit]);
+        Assert.Empty(player.Equipped);
+        Assert.Empty(player.Gear);
+    }
+
+    [Fact]
+    public void Ac6_Inventory_EnterVoid_OneSlotEquipped_RecordsOnlyThatSlot()
+    {
+        var player = new PlayerState(TestCatalogs.Mixed);
+        player.AddGear("hoodie");
+        player.Equip("hoodie");
+        var sequence = new DeathSequence(player);
+
+        sequence.EnterVoid(Entry);
+
+        Assert.Equal([KeyValuePair.Create(EquipSlot.Outfit, "hoodie")], sequence.Losses!.Equipped.ToList());
+        Assert.Equal(["hoodie"], sequence.Losses.Gear);
     }
 
     [Fact]
     public void EnterVoid_NothingToLose_RecordsEmptyLosses()
     {
-        var sequence = new DeathSequence(new PlayerState());
+        var sequence = new DeathSequence(new PlayerState(TestCatalogs.Plain));
 
         Assert.True(sequence.EnterVoid(Entry));
 
         Assert.Equal(0, sequence.Losses!.Money);
         Assert.Empty(sequence.Losses.Gear);
+        Assert.Empty(sequence.Losses.Equipped);
     }
 
     [Theory]

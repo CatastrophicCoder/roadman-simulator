@@ -143,7 +143,7 @@ public class MainMenuTest
         WorldEdgeTest.AssertPackPresent();
         var state = WorldEdgeTest.PlayerStateOfGame();
         state.AddMoney(777);
-        state.AddGear("old-pipe");
+        state.AddGear("baseball_bat");
         state.SetWantedLevel(4);
         using var runner = ISceneRunner.Load(_main = NewMain(_folder), true);
         await WorldEdgeTest.PhysicsFrames(_main, MenuFrames);

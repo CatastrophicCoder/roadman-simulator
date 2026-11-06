@@ -42,7 +42,7 @@ CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull requ
 - Never commit raw data (`tools/mapgen/data/raw/`).
 - External data is fetched once. Builds, `/verify`, `/regen-map` and `mapgen snapshot create` use only the local data in `tools/mapgen/data/raw/<map-id>/` and never contact Overpass or MML. Never run `mapgen download` or any other external data fetch unless the user explicitly asks. `mapgen snapshot fetch` is for fresh clones and CI and never replaces local data without `--force`. Never run `mapgen snapshot publish` without asking first (ADR 0011).
 - Ask before adding any dependency (NuGet, Python package, Godot add-on, GitHub Action).
-- No other games' names or trademarks in code, assets or text.
+- No other games' names or trademarks in code, assets or text. One exception: test files may list such names (brand and game names, console makers' button names) solely to check that they don't appear in game content (ADR 0019).
 - Map packs store real names from OSM (streets, buildings, points of interest). How real business names are shown in the game (real, fictional replacements or generic labels) is an open decision. Logos are never used.
 - Record new decisions as ADRs in `docs/decisions/`.
 - Record the licence of every new asset or add-on in `CREDITS.md`.

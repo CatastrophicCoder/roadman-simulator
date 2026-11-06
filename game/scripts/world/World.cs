@@ -5,6 +5,7 @@ using Godot;
 using Roadman.Autoload;
 using Roadman.Core;
 using Roadman.Core.Edge;
+using Roadman.Core.Items;
 using Roadman.Core.Maps;
 using Roadman.Core.Player;
 using Roadman.Core.Saves;
@@ -58,6 +59,15 @@ namespace Roadman.Scenes;
 /// pending load the first map load places the player from it (<see cref="LoadPlayer"/>, signal
 /// <see cref="SignalName.PlayerLoaded"/>) instead of the spawn draw. <see cref="SignalName.StartFailed"/> reports a map
 /// load or first spawn that failed, with the error text pushed.
+/// </para>
+/// <para>
+/// <c>--give &lt;id,...&gt;</c> (<c>docs/specs/inventory.md</c>, "Getting items: debug tools"; debug builds only): the ids
+/// in <see cref="GiveItems"/> are added to the player state once, through <see cref="PlayerState.AddGear"/> in order,
+/// right after the first player is placed (<see cref="SpawnPlayer"/> or <see cref="LoadPlayer"/>, before
+/// <see cref="SignalName.PlayerSpawned"/> or <see cref="SignalName.PlayerLoaded"/>, so before <c>Main</c>'s
+/// <c>GameStarted</c>), never on a respawn or a later map load. One owner parses the argument: <c>Main</c> when it
+/// starts a game (it sets <see cref="GiveItems"/>), else this node from its own command line (a direct <c>World</c>
+/// run, and <c>Main</c>'s direct start for <c>--screenshot</c> and <c>--perf</c>) with <see cref="ResolveGiveArg"/>.
 /// </para>
 /// </summary>
 public partial class World : Node3D
@@ -114,6 +124,9 @@ public partial class World : Node3D
     /// <summary>Opens the pause menu (Esc, the gamepad start button); never dismisses the death screen.</summary>
     public const string PauseAction = "pause";
 
+    /// <summary>The inventory action (Tab, the gamepad Back button); it never dismisses the death screen.</summary>
+    public const string InventoryAction = "inventory";
+
     /// <summary>
     /// How far above a saved position's height the load placement ray starts (<see cref="CheckLoadPlacement"/>), so a
     /// save under a bridge deck finds the ground under the deck, not the deck.
@@ -126,6 +139,8 @@ public partial class World : Node3D
     private QualityPreset? _qualitySettings;
     private bool _mapSignalsHooked;
     private bool _playerCameraHadMouse;
+    private bool _giveApplied;
+    private PlayerState _playerState = null!;
     private ulong? _resumeProcessFrame;
     private readonly Dictionary<Node3D, Action> _trackedBodies = [];
     private readonly HashSet<ulong> _voidFallers = [];
@@ -243,6 +258,16 @@ public partial class World : Node3D
     public SavePlayer? PendingLoad { get; set; }
 
     /// <summary>
+    /// The item ids to give after the first placement (<c>--give</c>, already checked). Null: this node reads
+    /// <c>--give</c> from the command line in <see cref="_Ready"/> (<see cref="ResolveGiveArg"/>). <c>Main</c> sets it
+    /// (empty when it has nothing to give) before the node enters the tree, so the argument is applied by one owner only.
+    /// </summary>
+    public IReadOnlyList<string>? GiveItems { get; set; }
+
+    /// <summary>The ids <see cref="GiveItems"/> added, in order, once they were applied; empty before.</summary>
+    public IReadOnlyList<string> GivenItems { get; private set; } = [];
+
+    /// <summary>
     /// The player's gameplay settings, applied to every new or respawned player camera
     /// (<see cref="ApplyCameraSettings"/>); null leaves the camera's exports as they are (direct <c>World</c> runs and
     /// tests).
@@ -274,6 +299,14 @@ public partial class World : Node3D
     /// </summary>
     public bool CanSave =>
         Death is not null && Death.State == DeathState.Alive && Player is not null && IsInstanceValid(Player) && Player.IsInsideTree();
+
+    /// <summary>
+    /// Whether the inventory screen may open (<c>docs/specs/inventory.md</c>, "Opening"): the death sequence is
+    /// <see cref="DeathState.Alive"/>, a player exists and its camera is current (not the debug camera, not the death
+    /// camera; never in a screenshot run, where the capture camera renders).
+    /// </summary>
+    public bool CanOpenInventory =>
+        CanSave && !DebugCameraActive && PlayerCamera is not null && IsInstanceValid(PlayerCamera) && PlayerCamera.IsCurrent;
 
     /// <summary>The player's facing yaw in radians; null without a player.</summary>
     public float? PlayerFacingYaw => Player is not null && IsInstanceValid(Player) ? Player.FacingYaw : null;
@@ -366,7 +399,8 @@ public partial class World : Node3D
         AddChild(Sun);
         ApplyQualitySettings();
 
-        Death = new DeathSequence(GameState.Instance?.Player ?? new PlayerState());
+        _playerState = GameState.Instance?.Player ?? new PlayerState(ItemCatalog.Default);
+        Death = new DeathSequence(_playerState);
         Death.StateChanged += OnDeathStateChanged;
         DeathCamera = new DeathCamera { Name = "DeathCamera" };
         AddChild(DeathCamera);
@@ -437,6 +471,7 @@ public partial class World : Node3D
 
         _screenshotRun = screenshot is not null;
         ResetSpawnRandom(Seed ?? SeedFromCommandLine());
+        GiveItems ??= ResolveGiveArg(OS.GetCmdlineUserArgs(), _playerState.Catalog, "World");
 
         if (perf is not null)
         {
@@ -515,12 +550,14 @@ public partial class World : Node3D
     /// <see cref="DeathSequence.Dismiss"/>; when that ends the screen (at or after <see cref="MinScreenTime"/>), the event
     /// is marked handled and the respawn runs in the next physics frame. The mouse wheel and joypad motion (sticks and
     /// analog triggers) never count, nor does a <see cref="PauseAction"/> press (it opens the pause menu in a game
-    /// started by <c>Main</c>); a press before <see cref="MinScreenTime"/> is ignored, and so is one delivered in the
+    /// started by <c>Main</c>) or an <see cref="InventoryAction"/> press (Tab, the gamepad Back button: it does nothing
+    /// on the death screen); a press before <see cref="MinScreenTime"/> is ignored, and so is one delivered in the
     /// process frame of a resume from the pause menu (<see cref="OnResumedFromPause"/>).
     /// </summary>
     public override void _Input(InputEvent @event)
     {
         if (Death?.State == DeathState.DeathScreen && IsDismissPress(@event) && !@event.IsAction(PauseAction)
+            && !(InputMap.HasAction(InventoryAction) && @event.IsAction(InventoryAction))
             && _resumeProcessFrame != Engine.GetProcessFrames()
             && Death.Dismiss())
         {
@@ -546,7 +583,8 @@ public partial class World : Node3D
     /// <summary>
     /// Whether <paramref name="event"/> may dismiss the death screen: a keyboard key pressed (not an echo), a gamepad
     /// button pressed, or a mouse button pressed (a click; the wheel isn't). Mouse motion, the wheel and joypad motion
-    /// (including analog triggers) never do.
+    /// (including analog triggers) never do. <see cref="_Input"/> also skips the <see cref="PauseAction"/> and
+    /// <see cref="InventoryAction"/> presses, which this check doesn't look at.
     /// </summary>
     public static bool IsDismissPress(InputEvent @event) => @event switch
     {
@@ -746,6 +784,7 @@ public partial class World : Node3D
         }
 
         CreatePlayer(position, facing);
+        ApplyGiveOnce();
         GD.Print(FormattableString.Invariant(
             $"Player: spawned at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}), seed {Seed}, draw {LastSpawnAttempts}{(_screenshotRun ? ", hidden for the screenshot" : "")}"));
         EmitSignal(SignalName.PlayerSpawned, position);
@@ -785,6 +824,7 @@ public partial class World : Node3D
         }
 
         CreatePlayer(position, facing);
+        ApplyGiveOnce();
         GD.Print(FormattableString.Invariant(
             $"Player: loaded at ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}){(moved ? ", moved by the spawn draw: the saved spot failed the placement check" : save.Position is null ? ", spawn draw for an empty position" : "")}"));
         EmitSignal(SignalName.PlayerLoaded, position, moved);
@@ -1185,7 +1225,8 @@ public partial class World : Node3D
     {
         if (Death.Losses is { } losses)
         {
-            DeathScreen.ShowLosses(DeathScreenText.Format(losses));
+            DeathScreen.ShowLosses(
+                DeathScreenText.Format(losses, GameState.Instance?.Player.Catalog ?? ItemCatalog.Default));
         }
 
         if (Player is not null && IsInstanceValid(Player))
@@ -1462,6 +1503,68 @@ public partial class World : Node3D
         }
 
         return TimeSeed();
+    }
+
+    /// <summary>
+    /// Reads <c>--give</c> from <paramref name="userArgs"/> (<see cref="GiveArg.Parse"/>) for <paramref name="owner"/>:
+    /// the ids to give, or empty when it is absent. An argument error (an empty list, a blank entry, an unknown id), or
+    /// the argument outside a debug build (<see cref="DebugBuild.IsDebug"/>), pushes one error naming the problem and
+    /// the known ids, and gives nothing.
+    /// </summary>
+    public static IReadOnlyList<string> ResolveGiveArg(IReadOnlyList<string> userArgs, ItemCatalog catalog, string owner)
+    {
+        var give = GiveArg.Parse(userArgs, catalog);
+        if (!give.Present)
+        {
+            return [];
+        }
+
+        if (give.Error is { } error)
+        {
+            GD.PushError($"{owner}: {error}; nothing is given");
+            return [];
+        }
+
+        if (!DebugBuild.IsDebug)
+        {
+            GD.PushError(
+                $"{owner}: {GiveArg.Flag} needs a debug build (known ids: {string.Join(", ", catalog.All.Select(item => item.Id))}); nothing is given");
+            return [];
+        }
+
+        return give.Ids;
+    }
+
+    /// <summary>Adds <see cref="GiveItems"/> to the player state, once per node (the first placement only).</summary>
+    private void ApplyGiveOnce()
+    {
+        if (_giveApplied)
+        {
+            return;
+        }
+
+        _giveApplied = true;
+        var given = new List<string>();
+        foreach (var id in GiveItems ?? [])
+        {
+            try
+            {
+                if (_playerState.AddGear(id))
+                {
+                    given.Add(id);
+                }
+            }
+            catch (ArgumentException ex)
+            {
+                GD.PushError($"World: {GiveArg.Flag}: {ex.Message}");
+            }
+        }
+
+        GivenItems = given.AsReadOnly();
+        if (given.Count > 0)
+        {
+            GD.Print($"World: {GiveArg.Flag} gave {string.Join(", ", given)}");
+        }
     }
 
     /// <summary>A spawn-draw seed from the current time, used when no <c>--seed</c> is given.</summary>

@@ -55,12 +55,12 @@ internal static class MainTestSupport
     /// <summary>The keys the tests inject; <see cref="ReleaseInputs"/> releases each.</summary>
     private static readonly Key[] InjectedKeys =
     [
-        Key.Escape, Key.Enter, Key.Space, Key.Up, Key.Down, Key.Left, Key.Right, Key.Quoteleft, Key.F2, Key.G, Key.I, Key.W,
+        Key.Escape, Key.Enter, Key.Space, Key.Tab, Key.Up, Key.Down, Key.Left, Key.Right, Key.Quoteleft, Key.F2, Key.G, Key.I, Key.W,
     ];
 
     private static readonly JoyButton[] InjectedButtons =
     [
-        GamepadButtons.South, GamepadButtons.East, GamepadButtons.Start,
+        GamepadButtons.South, GamepadButtons.East, GamepadButtons.Start, GamepadButtons.Back,
         JoyButton.DpadUp, JoyButton.DpadDown, JoyButton.DpadLeft, JoyButton.DpadRight,
     ];
 
@@ -73,7 +73,7 @@ internal static class MainTestSupport
     private static EngineState? _savedState;
 
 
-    private static readonly string[] PressedActions = [Player.MoveForwardAction, Player.JumpAction, World.PauseAction, "ui_cancel", "ui_accept"];
+    private static readonly string[] PressedActions = [Player.MoveForwardAction, Player.JumpAction, World.PauseAction, Main.InventoryAction, "ui_cancel", "ui_accept"];
 
     /// <summary>One way of driving the menus: four directions, accept and back.</summary>
     internal sealed record Nav(string Name, Action Up, Action Down, Action Left, Action Right, Action Accept, Action Cancel)
@@ -507,7 +507,7 @@ internal static class MainTestSupport
             playSeconds,
             mapId,
             "2026-01-01T00:00:00Z",
-            new SavePlayer(position, position is null ? null : facingYaw ?? 0d, money, gear ?? [], wantedLevel),
+            new SavePlayer(position, position is null ? null : facingYaw ?? 0d, money, gear ?? [], SaveEquipped.Empty, wantedLevel),
             SaveQuests.Empty);
 
     /// <summary>Writes <paramref name="save"/> to <paramref name="slot"/> in the test's saves folder, as the game does.</summary>

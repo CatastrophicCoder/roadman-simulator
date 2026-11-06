@@ -62,7 +62,7 @@ public class SaveSlotsTests
         var save = Save(Noon);
         slots.Write(SlotId.Manual(1), save);
         store.WriteText("slot_2.json", "this is not JSON");
-        store.WriteText("slot_3.json", SaveReaderWriterTests.ValidSave.Replace("\"format_version\": 1", "\"format_version\": 2", StringComparison.Ordinal));
+        store.WriteText("slot_3.json", SaveReaderWriterTests.ValidSave.Replace($"\"format_version\": {SaveFormat.CurrentVersion}", $"\"format_version\": {SaveFormat.CurrentVersion + 1}", StringComparison.Ordinal));
         store.WriteText("slot_4.json", SaveReaderWriterTests.ValidSave.Replace("\"money\": 120", "\"money\": -1", StringComparison.Ordinal));
 
         var list = slots.List();
@@ -140,7 +140,7 @@ public class SaveSlotsTests
         slots.Write(SlotId.Manual(2), Save(Noon));
         // A newer save made unreadable, and one from a newer game version, both with later timestamps.
         store.WriteText("slot_1.json", SaveWriter.Write(Save(Noon.AddHours(1))).Replace("\"money\": 10", "\"money\": -10", StringComparison.Ordinal));
-        store.WriteText("autosave.json", SaveWriter.Write(Save(Noon.AddHours(2))).Replace("\"format_version\": 1", "\"format_version\": 2", StringComparison.Ordinal));
+        store.WriteText("autosave.json", SaveWriter.Write(Save(Noon.AddHours(2))).Replace($"\"format_version\": {SaveFormat.CurrentVersion}", $"\"format_version\": {SaveFormat.CurrentVersion + 1}", StringComparison.Ordinal));
 
         Assert.Equal(SlotStatus.Damaged, slots.Get(SlotId.Manual(1)).Status);
         Assert.Equal(SlotStatus.Damaged, slots.Get(SlotId.Autosave).Status);
@@ -266,6 +266,6 @@ public class SaveSlotsTests
             60,
             "somero",
             "2026-11-01T10:00:00Z",
-            new SavePlayer(new LocalPoint(1, 2, 3), 0.5, money, ["a"], 1),
+            new SavePlayer(new LocalPoint(1, 2, 3), 0.5, money, ["a"], SaveEquipped.Empty, 1),
             SaveQuests.Empty);
 }

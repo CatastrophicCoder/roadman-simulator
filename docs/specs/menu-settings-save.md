@@ -256,6 +256,11 @@ Four tabs, each a column of labelled controls, operated with the mouse, the keyb
   5. The death screen uses `UiTheme`, so the `world-edge-death-screen` image changed look.
   6. From the part A review: the load placement ray starts `World.LoadRayHeadroom` (2 m) above the saved height instead of high above the map, so a save under a bridge loads under the deck. The save-building rules are in `Roadman.Core` (`SaveFactory`), settings file I/O in `SettingsFile`, save and settings files are flushed to disk before the rename, and CI runs the headless startup against the test-area pack.
   7. Part A's full-rect menu controls were anchored in `_Ready` with `SetAnchorsPreset`, which left them 0×0 in the window; fixed with `SetAnchorsAndOffsetsPreset`.
+- 2026-11-06, inventory (`docs/specs/inventory.md`, ADR 0019):
+  1. Save format version 2: `player.equipped` (`weapon`, `outfit`, each `null` or an id in `gear`). `SaveMigrations.Default` has its first step, 1 → 2, which adds empty slots.
+  2. The pause menu has six buttons: Resume, Inventory, Save, Load, Settings, Quit to menu (criterion 11's "five buttons").
+  3. A load drops items the catalogue doesn't know (and unequips an item in a slot it doesn't fit) with a warning per change and the notice "Some items in this save no longer exist and were removed." (or "Some items in this save were unequipped.").
+  4. The gamepad's Back button is bound to `inventory`.
 
 ## Open questions
 

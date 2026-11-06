@@ -5,7 +5,7 @@ namespace Roadman.Core.Saves;
 /// <summary>
 /// The chain of JSON-level migrations that bring an older save up to <see cref="SaveFormat.CurrentVersion"/>, one
 /// version at a time: the step registered for version <c>n</c> turns a version-<c>n</c> file into a version-<c>n+1</c>
-/// one. <see cref="Default"/> is the game's chain (empty for version 1). Tests build their own with
+/// one. <see cref="Default"/> is the game's chain (version 1 → 2 adds <c>player.equipped</c>). Tests build their own with
 /// <see cref="Register"/> and pass it to <see cref="SaveReader.Read(string, SaveMigrations)"/>.
 /// </summary>
 public sealed class SaveMigrations
@@ -14,7 +14,7 @@ public sealed class SaveMigrations
     private bool _readOnly;
 
     /// <summary>
-    /// The game's migrations, read-only (<see cref="Register"/> on it throws). None exist for format version 1; add
+    /// The game's migrations, read-only (<see cref="Register"/> on it throws): 1 → 2 (<see cref="Version1To2"/>). Add
     /// later ones in <see cref="CreateDefault"/>.
     /// </summary>
     public static SaveMigrations Default { get; } = CreateDefault();
@@ -55,9 +55,31 @@ public sealed class SaveMigrations
     {
         var migrations = new SaveMigrations();
 
-        // Register each format change here: migrations.Register(1, Version1To2);
+        // Register each format change here, one step per version.
+        migrations.Register(1, Version1To2);
         migrations._readOnly = true;
         return migrations;
+    }
+
+    /// <summary>
+    /// Format 1 → 2 (<c>docs/specs/inventory.md</c>, "Save format, version 2"): adds
+    /// <c>"equipped": {"weapon": null, "outfit": null}</c> to <c>player</c>, so the gear is kept unequipped. A
+    /// <c>player</c> that isn't an object is left as it is for the strict read to reject.
+    /// </summary>
+    /// <exception cref="SaveFormatException"><c>player.equipped</c> is already there: not a key of format version 1.</exception>
+    private static JsonObject Version1To2(JsonObject root)
+    {
+        if (root["player"] is JsonObject player)
+        {
+            if (player.ContainsKey("equipped"))
+            {
+                throw SaveJson.Error("player.equipped", "is not a known key in format version 1");
+            }
+
+            player["equipped"] = new JsonObject { ["weapon"] = null, ["outfit"] = null };
+        }
+
+        return root;
     }
 
     /// <summary>

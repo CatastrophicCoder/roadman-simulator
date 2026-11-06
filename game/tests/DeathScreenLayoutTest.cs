@@ -1,7 +1,9 @@
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using GdUnit4;
 using Godot;
 using Roadman.Core.Edge;
+using Roadman.Core.Items;
 using Roadman.Hud;
 using static GdUnit4.Assertions;
 
@@ -28,7 +30,7 @@ public class DeathScreenLayoutTest
         {
             var screen = new DeathScreen { Name = "DeathScreen", FadeTime = 0f };
             first.AddChild(screen);
-            screen.ShowLosses(DeathScreenText.Format(new DeathLosses(0, [])));
+            screen.ShowLosses(DeathScreenText.Format(new DeathLosses(0, [], new Dictionary<EquipSlot, string>()), ItemCatalog.Default));
             await AssertFills(screen, first, "in a 1600×900 viewport");
 
             first.Size = new Vector2I(800, 1200);

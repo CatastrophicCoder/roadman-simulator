@@ -5,7 +5,9 @@ using Path = System.IO.Path;
 using System.Linq;
 using System.Threading.Tasks;
 using Godot;
+using Roadman.Autoload;
 using Roadman.Core.Edge;
+using Roadman.Core.Items;
 using Roadman.Core.Maps;
 using Roadman.Core.Saves;
 using Roadman.Core.Tools;
@@ -16,7 +18,7 @@ namespace Roadman.Debug;
 
 /// <summary>
 /// Renders the world from a named camera preset to a PNG and quits:
-/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots&gt;] [--seed &lt;n&gt;]</c>.
+/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots|inventory&gt;] [--give &lt;id,...&gt;] [--seed &lt;n&gt;]</c>.
 /// <para>
 /// The image comes from its own <see cref="SubViewport"/> of <see cref="ImageSize"/>, so it doesn't depend on the
 /// window size, display scaling or where the window is. Rendering needs a real display server: the tool refuses to
@@ -42,13 +44,16 @@ namespace Roadman.Debug;
 /// viewport, whose 3D view isn't rendered.
 /// </para>
 /// <para>
-/// With <c>--menu &lt;main|pause|settings|slots&gt;</c> (debug builds only; <c>docs/specs/menu-settings-save.md</c>,
+/// With <c>--menu &lt;main|pause|settings|slots|inventory&gt;</c> (debug builds only; <c>docs/specs/menu-settings-save.md</c>,
 /// "Screenshots"), after the usual checks the tool writes sample saves to a new temporary folder
 /// (<see cref="WriteSampleSaves"/>), points <c>Main</c>'s slots at it, moves <c>Main.Ui</c> into the capture viewport
 /// (with the window's 2D scale, <see cref="MenuCanvasSize"/>, so the menu is laid out as in the game) and asks
 /// <c>Main</c> to show the view (<see cref="Main.ShowMenuForScreenshot"/>; all but <c>main</c> pause the tree, so the
 /// tool and its viewport then run with <see cref="Node.ProcessModeEnum.Always"/>). The folder is deleted when the run
-/// finishes. <c>Main</c> must be the world's parent (the main scene), else exit 1.
+/// finishes. <c>Main</c> must be the world's parent (the main scene), else exit 1. <c>--menu inventory</c>
+/// (<c>docs/specs/inventory.md</c>, "Screenshots") first waits for the spawned player, which got the <c>--give</c> items
+/// (<see cref="Scenes.World.GivenItems"/>), equips the first weapon and the first clothing item given, and shows the
+/// inventory screen as opened from the game; without <c>--give</c> it is the empty screen.
 /// </para>
 /// </summary>
 public partial class ScreenshotTool : Node
@@ -819,6 +824,11 @@ public partial class ScreenshotTool : Node
         ui.GetParent()?.RemoveChild(ui);
         _viewport.AddChild(ui);
 
+        if (menu == MenuShot.Inventory && !await GiveAndEquipForInventoryAsync(flag))
+        {
+            return;
+        }
+
         // Pausing stops the world; the tool's waits and its viewport must go on.
         ProcessMode = ProcessModeEnum.Always;
         _viewport.ProcessMode = ProcessModeEnum.Always;
@@ -839,6 +849,38 @@ public partial class ScreenshotTool : Node
         }
 
         Save();
+    }
+
+    /// <summary>
+    /// <c>--menu inventory</c>: waits for the spawned player (the world applies <c>--give</c> at its placement), then
+    /// equips the first weapon and the first clothing item of <see cref="Scenes.World.GivenItems"/>.
+    /// </summary>
+    private async Task<bool> GiveAndEquipForInventoryAsync(string flag)
+    {
+        if (!await WaitForPlayerAsync(flag))
+        {
+            return false;
+        }
+
+        if (GameState.Instance?.Player is not { } state)
+        {
+            Finish(ScreenshotExitCode.Error, $"{flag}: no GameState autoload");
+            return false;
+        }
+
+        foreach (var category in new[] { ItemCategory.Weapon, ItemCategory.Clothing })
+        {
+            var id = World!.GivenItems.FirstOrDefault(
+                id => state.Catalog.TryGet(id, out var item) && item.Category == category);
+            if (id is not null)
+            {
+                state.Equip(id);
+            }
+        }
+
+        var equipped = string.Join(", ", ItemCatalog.Slots.Select(slot => state.EquippedIn(slot) ?? "-"));
+        GD.Print($"Screenshot: {flag} gear {string.Join(", ", state.Gear.Order(StringComparer.Ordinal))}; equipped {equipped}");
+        return true;
     }
 
     /// <summary>
@@ -873,11 +915,11 @@ public partial class ScreenshotTool : Node
                 playSeconds,
                 mapId,
                 stamp,
-                new SavePlayer(point, 0d, money, gear, 0),
+                new SavePlayer(point, 0d, money, gear, SaveEquipped.Empty, 0),
                 SaveQuests.Empty);
 
         slots.Write(SlotId.Autosave, Sample(SampleSavedAt[0], 4_980, 120, ["phone"]));
-        slots.Write(SlotId.Manual(1), Sample(SampleSavedAt[1], 43_500, 2_450, ["lockpick", "phone"]));
+        slots.Write(SlotId.Manual(1), Sample(SampleSavedAt[1], 43_500, 2_450, ["crowbar", "phone"]));
         new Saves.FileSaveStore(folder).WriteText(SlotId.Manual(2).FileName, "{ not json");
     }
 

@@ -12,7 +12,10 @@ namespace Roadman.Core.Saves;
 /// <c>saved_at_utc</c> is an ISO 8601 timestamp with a zero offset (<c>Z</c> or <c>+00:00</c>); <c>position</c>
 /// is <c>null</c> or an array of 3 finite numbers; <c>facing_yaw</c> is <c>null</c> or a finite number already in
 /// (−π, π] (the reader doesn't normalise); both of those keys must be present, and both <c>null</c> or neither;
-/// <c>gear</c> holds non-blank strings, each once, in any order (stored sorted); <c>quests</c> is an empty object.
+/// <c>gear</c> holds non-blank strings, each once, in any order (stored sorted); <c>equipped</c> is an object with
+/// exactly the keys <c>weapon</c> and <c>outfit</c>, each <c>null</c> or a non-blank id that is in <c>gear</c>
+/// (unknown ids and an item in the wrong slot are accepted: <see cref="Items.SaveItemCheck"/> cleans them at load);
+/// <c>quests</c> is an empty object.
 /// </summary>
 /// <remarks>
 /// <c>format_version</c> is read first. Above <see cref="SaveFormat.CurrentVersion"/> it is an error with
@@ -27,7 +30,9 @@ public static class SaveReader
         "quests",
     ];
 
-    private static readonly string[] PlayerKeys = ["position", "facing_yaw", "money", "gear", "wanted_level"];
+    private static readonly string[] PlayerKeys = ["position", "facing_yaw", "money", "gear", "equipped", "wanted_level"];
+
+    private static readonly string[] EquippedKeys = ["weapon", "outfit"];
 
     /// <summary>Reads <paramref name="json"/> with <see cref="SaveMigrations.Default"/>.</summary>
     /// <exception cref="SaveFormatException">Any problem; see the class remarks.</exception>
@@ -170,8 +175,32 @@ public static class SaveReader
 
         var money = SaveJson.Int(element, "money", path);
         var gear = Gear(element, path);
+        var equipped = Equipped(element, path);
         var wanted = SaveJson.Int(element, "wanted_level", path);
-        return new SavePlayer(position, facing, money, gear, wanted);
+        return new SavePlayer(position, facing, money, gear, equipped, wanted);
+    }
+
+    /// <summary>
+    /// The <c>equipped</c> object: exactly <c>weapon</c> and <c>outfit</c>, each <c>null</c> or a string. Blank ids and
+    /// ids not in the gear are <see cref="SavePlayer.Problem"/>'s, checked with the whole save.
+    /// </summary>
+    private static SaveEquipped Equipped(JsonElement parent, string path)
+    {
+        var equipped = SaveJson.Object(parent, "equipped", path);
+        var equippedPath = SaveJson.Join(path, "equipped");
+        SaveJson.RejectUnknown(equipped, equippedPath, EquippedKeys);
+        return new SaveEquipped(SlotId(equipped, "weapon", equippedPath), SlotId(equipped, "outfit", equippedPath));
+    }
+
+    private static string? SlotId(JsonElement parent, string name, string path)
+    {
+        var value = SaveJson.Present(parent, name, path);
+        return value.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.String => value.GetString()!,
+            _ => throw SaveJson.Error(SaveJson.Join(path, name), "must be null or a non-blank string"),
+        };
     }
 
     /// <summary>The gear array, checked in file order so the key path names the file's index.</summary>

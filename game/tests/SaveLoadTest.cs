@@ -121,7 +121,7 @@ public class SaveLoadTest
     // ----- Criterion 14: save and load in one session -----
 
     /// <summary>
-    /// Saves to slot 2 at the settled spawn point with money 120, gear <c>a</c> and <c>b</c> and wanted level 2 (an empty
+    /// Saves to slot 2 at the settled spawn point with money 120, gear <c>crowbar</c> and <c>phone</c> and wanted level 2 (an empty
     /// slot: written without asking; the save stores the game version, criterion 23), then walks, spends, breaks a
     /// barrier and dies. Loading slot 2 from the pause menu on the death screen asks first (Cancel keeps the game);
     /// after Load the player is within 0.05 m (x/z) of the saved spot on the ground, facing the saved yaw (± 0.01 rad),
@@ -139,8 +139,8 @@ public class SaveLoadTest
         await WaitForEdge(world);
         await Settle(world);
         state.AddMoney(120);
-        state.AddGear("a");
-        state.AddGear("b");
+        state.AddGear("crowbar");
+        state.AddGear("phone");
         state.SetWantedLevel(2);
         await WorldEdgeTest.PhysicsFrames(world, 2);
 
@@ -150,7 +150,7 @@ public class SaveLoadTest
         AssertThat(saved.GameVersion).IsEqual("dev");
         AssertThat(GameVersionInFile(SlotPath(_folder, SlotId.Manual(2)))).IsEqual("dev");
         AssertInt(saved.Player.Money).IsEqual(120);
-        AssertThat(string.Join(",", saved.Player.Gear)).IsEqual("a,b");
+        AssertThat(string.Join(",", saved.Player.Gear)).IsEqual("crowbar,phone");
         AssertInt(saved.Player.WantedLevel).IsEqual(2);
         AssertThat(saved.Player.Position).IsNotNull();
         AssertFloat((float)saved.Player.Position!.Value.X).IsEqualApprox(player.GlobalPosition.X, 1e-3f);
@@ -219,8 +219,8 @@ public class SaveLoadTest
             var world = await WaitForGame(_main);
             await Settle(world);
             state.AddMoney(120);
-            state.AddGear("a");
-            state.AddGear("b");
+            state.AddGear("crowbar");
+            state.AddGear("phone");
             state.SetWantedLevel(2);
             await WorldEdgeTest.PhysicsFrames(world, 2);
             slot2 = SaveThroughTheMenu(_main, SlotId.Manual(2), expectAsk: false);
@@ -230,7 +230,7 @@ public class SaveLoadTest
             await WalkForward(world, WalkFrames);
             await Settle(world);
             state.AddMoney(30);
-            state.RemoveGear("a");
+            state.RemoveGear("crowbar");
             state.SetWantedLevel(1);
             await WorldEdgeTest.PhysicsFrames(world, 2);
             AssertBool(_main.TryAutosave()).OverrideFailureMessage($"autosave failed: {_main.LastAutosaveError}").IsTrue();
@@ -306,7 +306,7 @@ public class SaveLoadTest
         var world = await WaitForGame(_main);
         await Settle(world);
         state.AddMoney(40);
-        state.AddGear("torch");
+        state.AddGear("bike_lock");
         state.SetWantedLevel(3);
         await WorldEdgeTest.PhysicsFrames(world, 2);
         var saved = SaveThroughTheMenu(_main, SlotId.Manual(1), expectAsk: false);
@@ -321,7 +321,7 @@ public class SaveLoadTest
         _blocker = blocker;
         blocker.GlobalPosition = new Vector3((float)spot.X, (float)spot.Y + 1f, (float)spot.Z);
         state.TrySpend(40);
-        state.RemoveGear("torch");
+        state.RemoveGear("bike_lock");
         state.SetWantedLevel(0);
 
         var (watch, disconnect) = Watch(_main);
@@ -346,7 +346,7 @@ public class SaveLoadTest
             AssertBool(SpawnPicker.Contains(loaded.MapLoader.Boundary!.SpawnArea.OpenGround, at.X, at.Z))
                 .OverrideFailureMessage($"{at} is outside spawn_area.open_ground").IsTrue();
             AssertInt(state.Money).IsEqual(40);
-            AssertThat(string.Join(",", state.Gear)).IsEqual("torch");
+            AssertThat(string.Join(",", state.Gear)).IsEqual("bike_lock");
             AssertInt(state.WantedLevel).IsEqual(3);
             AssertThat(loaded.Death.State).IsEqual(DeathState.Alive);
         }
@@ -429,7 +429,7 @@ public class SaveLoadTest
         AssertFloat(under.X).IsEqualApprox(x, 1e-4f);
         AssertFloat(under.Z).IsEqualApprox(z, 1e-4f);
 
-        AssertBool(world.LoadPlayer(new SavePlayer(new LocalPoint(x, groundY, z), 0.5, 0, [], 0))).IsTrue();
+        AssertBool(world.LoadPlayer(new SavePlayer(new LocalPoint(x, groundY, z), 0.5, 0, [], SaveEquipped.Empty, 0))).IsTrue();
         await Settle(world);
         var atGround = world.Player!.GlobalPosition;
         GD.Print(Invariant($"SaveLoadTest: bridge (a) loaded under the deck at {atGround}"));
@@ -441,7 +441,7 @@ public class SaveLoadTest
         loaded.Clear();
         AssertBool(world.CheckLoadPlacement(x, z, out var onDeck, fromY: deckTop)).OverrideFailureMessage("fromY deck: the deck spot fails").IsTrue();
         AssertFloat(onDeck.Y).IsEqualApprox(deckTop + world.SpawnDropHeight, 1e-3f);
-        AssertBool(world.LoadPlayer(new SavePlayer(new LocalPoint(x, deckTop, z), 0.5, 0, [], 0))).IsTrue();
+        AssertBool(world.LoadPlayer(new SavePlayer(new LocalPoint(x, deckTop, z), 0.5, 0, [], SaveEquipped.Empty, 0))).IsTrue();
         await Settle(world);
         var atDeck = world.Player!.GlobalPosition;
         GD.Print(Invariant($"SaveLoadTest: bridge (b) loaded on the deck at {atDeck}"));
@@ -600,7 +600,7 @@ public class SaveLoadTest
         var world = await WaitForGame(_main);
         await Settle(world);
         state.AddMoney(75);
-        state.AddGear("x");
+        state.AddGear("hoodie");
         state.SetWantedLevel(1);
         await WorldEdgeTest.PhysicsFrames(world, 2);
         var player = world.Player!;
@@ -651,7 +651,7 @@ public class SaveLoadTest
         AssertThat(autosave.Status).IsEqual(SlotStatus.Valid);
         var save = autosave.Save!;
         AssertInt(save.Player.Money).IsEqual(75);
-        AssertThat(string.Join(",", save.Player.Gear)).IsEqual("x");
+        AssertThat(string.Join(",", save.Player.Gear)).IsEqual("hoodie");
         AssertInt(save.Player.WantedLevel).IsEqual(1);
         AssertThat(save.Player.Position).IsNotNull();
         AssertFloat((float)save.Player.Position!.Value.X).IsEqualApprox(at.X, 1e-3f);
@@ -662,7 +662,7 @@ public class SaveLoadTest
     }
 
     /// <summary>
-    /// Quit to menu during <c>Falling</c> (the player had money 50 and gear <c>a</c> before the void): the autosave
+    /// Quit to menu during <c>Falling</c> (the player had money 50 and gear <c>crowbar</c> before the void): the autosave
     /// has an empty position and facing, money 0, no gear and wanted level 0. Continue then spawns the player on the
     /// spawn area's open ground with nothing, no notice, and <c>PlayerLoaded</c> once with <c>moved</c> false.
     /// </summary>
@@ -676,7 +676,7 @@ public class SaveLoadTest
         await WaitForEdge(world);
         await WaitForPlayTime(_main);
         state.AddMoney(50);
-        state.AddGear("a");
+        state.AddGear("crowbar");
         await EnterVoid(world);
         AssertThat(world.Death.State).IsEqual(DeathState.Falling);
 
@@ -740,7 +740,7 @@ public class SaveLoadTest
         Click(_main.PauseMenu.ResumeButton);
 
         state.AddMoney(50);
-        state.AddGear("a");
+        state.AddGear("crowbar");
         world.FallTime = ShortFallTime;
         await EnterVoid(world);
         AssertBool(await WorldEdgeTest.WaitUntil(world, () => world.Death.State == DeathState.DeathScreen, WorldEdgeTest.FramesFor(ShortFallTime, Engine.PhysicsTicksPerSecond) + 10)).IsTrue();
@@ -755,6 +755,236 @@ public class SaveLoadTest
         AssertThat(_main.ExitCode).IsEqual(0);
         AssertThat(string.Join(",", quits)).IsEqual("0");
         AssertPostDeathAutosave("the death screen");
+    }
+
+    // ----- docs/specs/inventory.md, criteria 12, 13 and 21 -----
+
+    /// <summary>
+    /// <c>docs/specs/inventory.md</c> criteria 13, 21 and 12, in one game. <c>--give crowbar,tracksuit,phone</c> gives
+    /// the three before <c>GameStarted</c> (13). Through the inventory screen the crowbar (Enter on its Equip) and the
+    /// tracksuit (a click) are equipped; saving to slot 1 stores the gear and both slots. Then the screen unequips the
+    /// crowbar and discards the phone, and the player dies; loading slot 1 from the pause menu gives the same gear and
+    /// slots, with no notice, and the screen shows them (21). Last, a hand-written slot 2 with an unknown id held and
+    /// in the weapon slot, and a weapon in the outfit slot, shows as <c>Valid</c> in the slot list; loading it pushes
+    /// one warning per change naming <c>slot_2.json</c> and the id, shows "Some items in this save no longer exist and
+    /// were removed.", and the player holds the known items only, none equipped (12).
+    /// </summary>
+    [TestCase]
+    public async Task InventoryAc12_Ac13_Ac21_GiveThenEquipSaveDiscardDieAndLoad_RestoresGearAndSlots_AHandWrittenSaveWithUnknownItemsLoadsCleanedWithWarningsAndNotice()
+    {
+        WorldEdgeTest.AssertPackPresent();
+        var state = WorldEdgeTest.PlayerStateOfGame();
+        string? gearAtStart = null;
+        _main = NewMain(_folder, "--new-game", "--give", "crowbar,tracksuit,phone");
+        var main = _main;
+        main.GameStarted += () => gearAtStart ??= string.Join(",", state.Gear.Order(StringComparer.Ordinal));
+        using var runner = ISceneRunner.Load(main, true);
+        var world = await WaitForGame(main);
+        await WaitForEdge(world);
+        await Settle(world);
+        var screen = main.InventoryScreen;
+
+        // Criterion 13: given before GameStarted.
+        AssertThat(gearAtStart).IsEqual("crowbar,phone,tracksuit");
+        AssertThat(string.Join(",", world.GivenItems)).IsEqual("crowbar,tracksuit,phone");
+
+        // Equip through the screen: Enter on the crowbar's Equip, a click on the tracksuit's.
+        TapKey(Key.Tab);
+        AssertThat(main.State).IsEqual(MainState.Inventory);
+        screen.EquipButtonOf("crowbar")!.GrabFocus();
+        TapKey(Key.Enter);
+        Click(screen.EquipButtonOf("tracksuit")!);
+        AssertThat(state.EquippedIn(Core.Items.EquipSlot.Weapon)).IsEqual("crowbar");
+        AssertThat(state.EquippedIn(Core.Items.EquipSlot.Outfit)).IsEqual("tracksuit");
+        TapKey(Key.Tab);
+        AssertThat(main.State).IsEqual(MainState.Playing);
+        await WorldEdgeTest.PhysicsFrames(world, 2);
+
+        var saved = SaveThroughTheMenu(main, SlotId.Manual(1), expectAsk: false);
+        AssertThat(string.Join(",", saved.Player.Gear.Order(StringComparer.Ordinal))).IsEqual("crowbar,phone,tracksuit");
+        AssertThat(saved.Player.Equipped).IsEqual(new SaveEquipped("crowbar", "tracksuit"));
+        Click(main.SlotList.BackButton);
+        Click(main.PauseMenu.ResumeButton);
+
+        // Unequip and discard through the screen, then die.
+        await WorldEdgeTest.PhysicsFrames(world, 2);
+        TapKey(Key.Tab);
+        AssertThat(main.State).IsEqual(MainState.Inventory);
+        Click(screen.SlotRowOf(Core.Items.EquipSlot.Weapon).UnequipButton);
+        Click(screen.DiscardButtonOf("phone")!);
+        ClickDialog(main, "Discard");
+        AssertThat(state.EquippedIn(Core.Items.EquipSlot.Weapon)).IsNull();
+        AssertThat(string.Join(",", state.Gear.Order(StringComparer.Ordinal))).IsEqual("crowbar,tracksuit");
+        TapKey(Key.Tab);
+        AssertThat(main.State).IsEqual(MainState.Playing);
+        await WorldEdgeTest.PhysicsFrames(world, 2);
+        await EnterVoid(world);
+        AssertInt(state.Gear.Count).IsEqual(0);
+
+        // Load slot 1 from the pause menu (it asks first).
+        TapKey(Key.Escape);
+        AssertThat(main.State).IsEqual(MainState.Paused);
+        Click(main.PauseMenu.LoadButton);
+        main.SlotList.Choose(SlotId.Manual(1));
+        ClickDialog(main, "Load");
+        var loaded = await WaitForNewGame(main, world);
+        await Settle(loaded);
+        AssertThat(string.Join(",", state.Gear.Order(StringComparer.Ordinal))).IsEqual("crowbar,phone,tracksuit");
+        AssertThat(state.EquippedIn(Core.Items.EquipSlot.Weapon)).IsEqual("crowbar");
+        AssertThat(state.EquippedIn(Core.Items.EquipSlot.Outfit)).IsEqual("tracksuit");
+        AssertBool(main.Notice.Visible).OverrideFailureMessage($"a notice after a clean load: '{main.Notice.Text}'").IsFalse();
+        AssertThat(string.Join(",", loaded.GivenItems)).OverrideFailureMessage("--give was applied again on a load").IsEqual("");
+        TapKey(Key.Tab);
+        AssertThat(main.State).IsEqual(MainState.Inventory);
+        AssertThat(screen.SlotRowOf(Core.Items.EquipSlot.Weapon).ItemLabel.Text).IsEqual("Crowbar");
+        AssertThat(screen.SlotRowOf(Core.Items.EquipSlot.Outfit).ItemLabel.Text).IsEqual("Tracksuit");
+        AssertThat(string.Join("|", screen.ItemRows.Select(r => $"{r.Item.Id}:{r.EquippedLabel.Visible}")))
+            .IsEqual("crowbar:True|tracksuit:True|phone:False");
+        TapKey(Key.Tab);
+        AssertThat(main.State).IsEqual(MainState.Playing);
+
+        // Criterion 12: a hand-written save with unknown and misplaced items.
+        var slot2 = SlotPath(_folder, SlotId.Manual(2));
+        File.WriteAllText(slot2, """
+            {
+              "format_version": 2,
+              "game_version": "dev",
+              "saved_at_utc": "2026-11-05T12:00:00Z",
+              "play_seconds": 300,
+              "map_id": "somero",
+              "map_generated_at": "2026-01-01T00:00:00Z",
+              "player": {
+                "position": null,
+                "facing_yaw": null,
+                "money": 5,
+                "gear": ["crowbar", "old_pipe", "phone"],
+                "equipped": { "weapon": "old_pipe", "outfit": "crowbar" },
+                "wanted_level": 0
+              },
+              "quests": {}
+            }
+            """);
+        await WorldEdgeTest.PhysicsFrames(loaded, 2);
+        TapKey(Key.Escape);
+        AssertThat(main.State).IsEqual(MainState.Paused);
+        Click(main.PauseMenu.LoadButton);
+        var row = main.SlotList.RowOf(SlotId.Manual(2));
+        AssertThat(row.Info.Status).OverrideFailureMessage($"the slot list shows slot 2 as {row.Info.Status} ({row.Info.DamageDetail})").IsEqual(SlotStatus.Valid);
+        AssertBool(row.Button.Disabled).IsFalse();
+
+        var capture = new ErrorCapture();
+        OS.AddLogger(capture);
+        World cleaned;
+        try
+        {
+            main.SlotList.Choose(SlotId.Manual(2));
+            ClickDialog(main, "Load");
+            cleaned = await WaitForNewGame(main, loaded);
+        }
+        finally
+        {
+            OS.RemoveLogger(capture);
+        }
+
+        var warnings = capture.Errors.Where(e => e.Contains("slot_2.json", StringComparison.Ordinal)).ToList();
+        GD.Print($"SaveLoadTest: inventory Ac12 warnings: {string.Join(" | ", warnings)}; all captured: {string.Join(" | ", capture.Errors)}");
+        AssertInt(warnings.Count).OverrideFailureMessage($"expected 2 warnings naming slot_2.json, got: {string.Join(" | ", warnings)}").IsEqual(2);
+        AssertInt(warnings.Count(w => w.Contains("old_pipe", StringComparison.Ordinal))).IsEqual(1);
+        AssertInt(warnings.Count(w => w.Contains("crowbar", StringComparison.Ordinal))).IsEqual(1);
+        AssertInt(capture.ErrorsOnly.Count(e => e.Contains("slot_2.json", StringComparison.Ordinal))).OverrideFailureMessage("the cleanup pushed errors, not warnings").IsEqual(0);
+        AssertBool(main.Notice.Visible).OverrideFailureMessage("no notice after loading removed items").IsTrue();
+        AssertThat(main.Notice.Text).IsEqual("Some items in this save no longer exist and were removed.");
+        AssertThat(string.Join(",", state.Gear.Order(StringComparer.Ordinal))).IsEqual("crowbar,phone");
+        AssertInt(state.Equipped.Count).OverrideFailureMessage($"slots after the cleanup: {string.Join(",", state.Equipped)}").IsEqual(0);
+        AssertThat(cleaned.Death.State).IsEqual(DeathState.Alive);
+        AssertThat(main.State).IsEqual(MainState.Playing);
+    }
+
+    /// <summary>
+    /// <c>docs/specs/inventory.md</c> criterion 12 with the placement check of <c>docs/specs/menu-settings-save.md</c>
+    /// criterion 16, and criterion 13's "only items actually added". A hand-written slot 1 holds an unknown id
+    /// (<c>old_pipe</c>, also in the weapon slot) and a position far outside the pack, so the placement check fails.
+    /// A fresh <c>Main</c> with <c>--give crowbar,hoodie</c> loads it with Continue: one warning per removed id names
+    /// <c>slot_1.json</c>, the player is moved by the spawn draw (<c>PlayerLoaded</c> with <c>moved</c> true), and one
+    /// notice joins the two texts, the item text first. <c>--give</c> is applied after this first placement:
+    /// <c>crowbar</c> was already held, so <see cref="World.GivenItems"/> lists only <c>hoodie</c>.
+    /// </summary>
+    [TestCase]
+    public async Task InventoryAc12_Ac13_LoadThatRemovesItemsAndMovesThePlayer_ShowsOneJoinedNoticeItemTextFirst_AndGiveListsOnlyAddedItems()
+    {
+        WorldEdgeTest.AssertPackPresent();
+        var state = WorldEdgeTest.PlayerStateOfGame();
+        state.Reset();
+        Directory.CreateDirectory(SavesOf(_folder));
+        File.WriteAllText(SlotPath(_folder, SlotId.Manual(1)), """
+            {
+              "format_version": 2,
+              "game_version": "dev",
+              "saved_at_utc": "2026-11-05T12:00:00Z",
+              "play_seconds": 300,
+              "map_id": "somero",
+              "map_generated_at": "2026-01-01T00:00:00Z",
+              "player": {
+                "position": [100000.0, 100.0, 100000.0],
+                "facing_yaw": 0.5,
+                "money": 5,
+                "gear": ["crowbar", "old_pipe", "phone"],
+                "equipped": { "weapon": "old_pipe", "outfit": null },
+                "wanted_level": 0
+              },
+              "quests": {}
+            }
+            """);
+
+        using var runner = ISceneRunner.Load(_main = NewMain(_folder, "--give", "crowbar,hoodie"), true);
+        var main = _main;
+        await WorldEdgeTest.PhysicsFrames(main, 3);
+        AssertThat(main.State).IsEqual(MainState.MainMenu);
+        AssertBool(main.MainMenu.ContinueButton.Disabled).OverrideFailureMessage("Continue is disabled with the hand-written slot 1").IsFalse();
+
+        var (watch, disconnect) = Watch(main);
+        var capture = new ErrorCapture();
+        OS.AddLogger(capture);
+        World world;
+        try
+        {
+            Click(main.MainMenu.ContinueButton);
+            world = await WaitForGame(main);
+        }
+        finally
+        {
+            OS.RemoveLogger(capture);
+            disconnect();
+        }
+
+        var warnings = capture.Errors.Where(e => e.Contains("slot_1.json", StringComparison.Ordinal)).ToList();
+        GD.Print($"SaveLoadTest: inventory Ac12 joined notice: '{main.Notice.Text}'; warnings: {string.Join(" | ", warnings)}; loaded {string.Join(", ", watch.Loaded)}; given {string.Join(",", world.GivenItems)}");
+
+        // The placement check failed, so the player was moved.
+        AssertBool(world.CheckLoadPlacement(100000f, 100000f, out _, 100f))
+            .OverrideFailureMessage("the saved position passes the placement check").IsFalse();
+        AssertThat(string.Join(",", watch.Loaded.Select(l => l.Moved))).IsEqual("True");
+        AssertInt(watch.Spawned).IsEqual(0);
+
+        // The item warnings: one, for old_pipe (its slot goes with it), naming the file; warnings, not errors.
+        AssertInt(warnings.Count).OverrideFailureMessage($"expected 1 warning naming slot_1.json, got: {string.Join(" | ", warnings)}").IsEqual(1);
+        AssertBool(warnings[0].Contains("old_pipe", StringComparison.Ordinal)).IsTrue();
+        AssertInt(capture.ErrorsOnly.Count(e => e.Contains("slot_1.json", StringComparison.Ordinal))).OverrideFailureMessage("the cleanup pushed errors, not warnings").IsEqual(0);
+
+        // One notice, the item text first.
+        AssertBool(main.Notice.Visible).OverrideFailureMessage("no notice").IsTrue();
+        AssertThat(main.Notice.Text).IsEqual(
+            "Some items in this save no longer exist and were removed. The map has changed since this save, so you start somewhere else.");
+        AssertThat(main.Notice.Text).IsEqual(Main.CombinedNotice(Main.ItemsRemovedNotice));
+        AssertFloat((float)main.Notice.TimeLeft).IsGreater(0f);
+
+        // --give after the first placement: crowbar was held already, so only hoodie was added.
+        AssertThat(string.Join(",", world.GivenItems)).IsEqual("hoodie");
+        AssertThat(string.Join(",", state.Gear.Order(StringComparer.Ordinal))).IsEqual("crowbar,hoodie,phone");
+        AssertInt(state.Equipped.Count).OverrideFailureMessage($"slots after the cleanup: {string.Join(",", state.Equipped)}").IsEqual(0);
+        AssertInt(state.Money).IsEqual(5);
+        AssertThat(world.Death.State).IsEqual(DeathState.Alive);
+        AssertThat(main.State).IsEqual(MainState.Playing);
     }
 
     // ===== Helpers =====
