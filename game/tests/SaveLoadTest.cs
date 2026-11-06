@@ -458,7 +458,9 @@ public class SaveLoadTest
 
         // (c) Without fromY: the ray finds the deck first.
         AssertBool(world.CheckLoadPlacement(x, z, out var fromTop)).OverrideFailureMessage("no fromY: the deck spot fails").IsTrue();
-        AssertFloat(fromTop.Y).OverrideFailureMessage($"no fromY: placed at {fromTop}").IsEqualApprox(deckTop + world.SpawnDropHeight, 1e-3f);
+        // 1 cm: without fromY, CheckLoadPlacement's ray starts at 10 000 m, and a hit on a ray that long has
+        // sub-millimetre noise (up to 0.66 mm over 20 seeds), too close to a 1 mm tolerance.
+        AssertFloat(fromTop.Y).OverrideFailureMessage($"no fromY: placed at {fromTop}").IsEqualApprox(deckTop + world.SpawnDropHeight, 1e-2f);
 
         // (a) A save on the ground under the deck.
         AssertBool(world.CheckLoadPlacement(x, z, out var under, fromY: groundY))
