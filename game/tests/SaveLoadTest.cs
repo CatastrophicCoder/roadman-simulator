@@ -380,6 +380,41 @@ public class SaveLoadTest
         AssertBool(_main.Dialog.IsOpen).IsFalse();
     }
 
+    /// <summary>Half the length of <see cref="ShortRayHeight"/>'s ray.</summary>
+    private const float ShortRayReach = 0.5f;
+
+    /// <summary>
+    /// The height where a vertical ray from <see cref="ShortRayReach"/> above <paramref name="expectedY"/> to as far
+    /// below it hits <paramref name="body"/> (mask <see cref="CollisionLayers.Map"/>; hits on other bodies are skipped).
+    /// A 1 m ray keeps the hit precise to far below a millimetre. Fails the test when it misses the body.
+    /// </summary>
+    private static float ShortRayHeight(World world, float x, float z, float expectedY, StaticBody3D body)
+    {
+        var space = world.MapLoader.GetWorld3D().DirectSpaceState;
+        var query = PhysicsRayQueryParameters3D.Create(
+            new Vector3(x, expectedY + ShortRayReach, z), new Vector3(x, expectedY - ShortRayReach, z), CollisionLayers.Map);
+        var excluded = new Godot.Collections.Array<Rid>();
+        for (var i = 0; i < 8; i++)
+        {
+            query.Exclude = excluded;
+            var hit = space.IntersectRay(query);
+            if (hit.Count == 0)
+            {
+                break;
+            }
+
+            if (hit["collider"].AsGodotObject() == body)
+            {
+                return hit["position"].AsVector3().Y;
+            }
+
+            excluded.Add(hit["rid"].AsRid());
+        }
+
+        AssertBool(false).OverrideFailureMessage(Invariant($"the short ray at ({x}, {z}) around {expectedY} misses {body.Name}")).IsTrue();
+        return expectedY;
+    }
+
     /// <summary>
     /// Criterion 16 and "Loading a save", step 4, with a bridge deck: a road-group box (layer <c>Map</c>, group
     /// <c>map_roads</c>) <see cref="DeckHeight"/> m above the settled spawn point. (a) With the saved height
@@ -399,7 +434,10 @@ public class SaveLoadTest
         var (x, z) = (feet.X, feet.Z);
         var groundHit = world.MapLoader.GroundOrRoadHitAt(x, z);
         AssertThat(groundHit).OverrideFailureMessage($"no ground under the spawn point {feet}").IsNotNull();
-        var groundY = groundHit!.Value.Position.Y;
+
+        // The reference height from a short ray: GroundOrRoadHitAt's ray is about 20 km long, so its hit is only
+        // precise to about a millimetre, the size of the tolerance below.
+        var groundY = ShortRayHeight(world, x, z, groundHit!.Value.Position.Y, groundHit.Value.Body);
 
         // The deck: outside World, as the Ac16 blocker.
         var deckTop = groundY + DeckHeight;
@@ -412,7 +450,7 @@ public class SaveLoadTest
         await WorldEdgeTest.PhysicsFrames(world, 2);
         var deckHit = world.MapLoader.GroundOrRoadHitAt(x, z);
         AssertThat(deckHit?.Body).OverrideFailureMessage("the deck isn't the highest road hit").IsSame(deck);
-        AssertFloat(deckHit!.Value.Position.Y).IsEqualApprox(deckTop, 1e-3f);
+        AssertFloat(ShortRayHeight(world, x, z, deckTop, deck)).IsEqualApprox(deckTop, 1e-3f);
 
         var loaded = new List<(Vector3 Position, bool Moved)>();
         world.PlayerLoaded += (p, moved) => loaded.Add((p, moved));
@@ -425,6 +463,7 @@ public class SaveLoadTest
         // (a) A save on the ground under the deck.
         AssertBool(world.CheckLoadPlacement(x, z, out var under, fromY: groundY))
             .OverrideFailureMessage("fromY ground: the spot under the deck fails").IsTrue();
+        GD.Print(Invariant($"SaveLoadTest: bridge (a) placement residual {(under.Y - groundY - world.SpawnDropHeight) * 1000f} mm, (c) {(fromTop.Y - deckTop - world.SpawnDropHeight) * 1000f} mm"));
         AssertFloat(under.Y).OverrideFailureMessage($"fromY ground: placed at {under}").IsEqualApprox(groundY + world.SpawnDropHeight, 1e-3f);
         AssertFloat(under.X).IsEqualApprox(x, 1e-4f);
         AssertFloat(under.Z).IsEqualApprox(z, 1e-4f);
