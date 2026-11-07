@@ -41,8 +41,25 @@ godot --path game --resolution 1600x900 -- --screenshot overview build/screensho
 godot --path game --resolution 1600x900 -- --screenshot centre-street-level build/screenshots/centre-street-level-player.png --map somero --player --seed 1  # the player in the third-person view
 ```
 
+Run only some gdUnit4 suites with `--filter "FullyQualifiedName~Roadman.Tests.<Suite>."` (the trailing dot keeps `WorldEdgeTest` from matching `WorldEdgeBreakingTest`; join several with `|`); a filter that matches nothing fails (`TreatNoTestsAsError`). `.claude/scripts/verify.sh --quick` picks the filter from the changed files (see "Tests").
 `GODOT_BIN` must point at the real Godot .NET binary, not a symlink. The gdUnit4 adapter writes its runner scene to `game/gdunit4_testadapter_v*/` on each run (git-ignored).
 Building with `-c ExportRelease` or `ExportDebug` re-restores the shared `obj/` without test packages; the next Debug `dotnet build` or `dotnet test` restores them again, so don't pass `--no-restore` after switching configuration.
+
+## Tests
+
+Spec: `docs/specs/test-performance.md`; ADR 0020.
+
+- **Packs.** The gdUnit4 tests load one of two Somero packs, both with map id `somero`:
+  - the test-area pack in `tests/packs/somero-test/` (`TestPacks.TestAreaPath`): 4 tiles, git-ignored, built from the committed fixture by `.claude/scripts/build-test-pack.sh`. `/verify` and `/verify-quick` rebuild it when it is missing or its stamp is stale, and CI builds it too. The `tests/*` export filter keeps it out of both exports.
+  - the pack in `maps/somero/`: the full pack locally, the test-area pack in CI.
+- **Override.** `MapLoader.PackFolderOverride` (static; tests only, never set by the game) replaces the pack folder of every map id, through `MapLoader.PackPathFor(mapId)` and `PackPath`, for the manifest, tiles, road graph, places, boundary, the orthophoto folder and the slot list's installed-map check. `TestPacks.UseTestArea()` sets it (it fails naming the build script when the pack is missing and never falls back), and `TestPacks.UseFullPack()` clears it. Every suite that sets it clears it in `[AfterTest]`, and the full-pack suites (MapLoaderTest, WorldSceneTest) also clear it in `[BeforeTest]`, so they never depend on another suite's reset. A test that loads a temporary pack (`res://maps/tmp-*`) or checks a map id with no pack clears it first, because the override applies to every map id.
+- **Which tests use which pack.**
+  - The test pack, set in `[BeforeTest]`: MainMenuTest, PauseTest, SaveLoadTest, SettingsViewTest, InventoryTest, PlaceInformationTest, RoadGraphTest, PlayerOnFootTest, WorldEdgeTest and WorldEdgeBreakingTest, except the tests named next.
+  - The full pack: any test with a full-pack-only branch (`IsFullPack`, `Area == "full"`, `AssertNotFullPack`, an N/A path for the test area) or whose criterion names something only the full pack has. These call `UseFullPack()` first: PlayerOnFootTest Ac6 (its criterion names the full pack), Ac14 bridge railing and Ac15; WorldEdgeTest Ac8 and the three Ac9 tests; and WorldEdgeBreakingTest Ac12 and Ac17. MapLoaderTest (except its override test) and WorldSceneTest use the full pack throughout; OrthophotoDebugViewTest and DeathScreenLayoutTest load no pack.
+  - In suites that use the test pack, read pack files through `TestPacks.PackPath`, never a hard-coded `res://maps/somero`.
+- **Groups.** Every `[TestSuite]` is in one group in `tests/test-groups.json`, with ordered path rules from changed files to groups, `all` or `none`. `verify.sh --quick` (`/verify-quick`) runs only the selected groups. A new suite needs a group, and a helper file a suite uses needs a rule covering that suite's group (or `all`); `/verify`'s "test groups" step (`.claude/scripts/test_select.py check`) fails otherwise. The full `/verify` before a commit always runs every suite.
+- **Shared instances.** None. The spec's rules (one checked reset helper per suite, fresh instances for anything that depends on the first load or spawn, suite-level teardown) apply if a suite adopts them later.
+- **Timing.** `dotnet test ... --logger trx` writes per-test times; `python3 -I .claude/scripts/gdunit-report.py suites|compare` reads them (case counts, per-suite times, and new skip or N/A lines).
 
 ## Map loading
 

@@ -23,8 +23,8 @@ namespace Roadman.Tests;
 /// <see cref="PauseTest"/>, <see cref="SaveLoadTest"/>, <see cref="SettingsViewTest"/>): a <see cref="Main"/> on a temporary saves folder and settings
 /// file (never the real user folder), simulated keyboard and gamepad input, focus navigation, and sample saves.
 /// <para>
-/// <c>Main</c> starts games on the map in the project setting <c>roadman/map/id</c> (<c>somero</c>), the same pack
-/// every other suite runs on (the full pack, or the CI test area from the committed fixture), so positions are
+/// <c>Main</c> starts games on the map in the project setting <c>roadman/map/id</c> (<c>somero</c>), loaded from the
+/// test-area pack, which the Main suites select with <see cref="TestPacks.UseTestArea"/> (ADR 0020), so positions are
 /// derived from the loaded pack as in <see cref="WorldEdgeTest"/>.
 /// </para>
 /// <para>

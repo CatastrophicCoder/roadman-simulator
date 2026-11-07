@@ -23,6 +23,15 @@ public class MapLoaderTest
     /// <summary>Allowed distance between the ray hit and the terrain mesh's vertical extent (float rounding).</summary>
     private const float HeightTolerance = 0.05f;
 
+    /// <summary>The suite runs on the full pack; only the override test sets <see cref="MapLoader.PackFolderOverride"/>.</summary>
+    // The suite checks the full pack (its full-pack-only branches would skip on the test area), so it never relies on
+    // another suite having reset the override.
+    [BeforeTest]
+    public void UseFullPack() => TestPacks.UseFullPack();
+
+    [AfterTest]
+    public void ResetPackOverride() => TestPacks.UseFullPack();
+
     [TestCase]
     public async Task World_LoadsEveryManifestTile()
     {
@@ -39,6 +48,58 @@ public class MapLoaderTest
         foreach (var tile in manifest.Tiles)
         {
             AssertBool(loader.Tiles.HasNode(tile.Id)).OverrideFailureMessage($"tile {tile.Id} is not under Tiles").IsTrue();
+        }
+    }
+
+    /// <summary>
+    /// Test-performance criterion 9: with <see cref="MapLoader.PackFolderOverride"/> set to the test-area pack, a
+    /// <c>World</c> loads every tile of that pack's manifest (area <c>test</c>, map id unchanged) and reads its road
+    /// graph, places and boundary from that folder. With the override null again, <see cref="MapLoader.PackPath"/> is
+    /// <c>res://maps/somero</c>.
+    /// </summary>
+    [TestCase]
+    public async Task PackFolderOverride_LoadsTheWholeTestAreaPackFromItsFolder_AndNullGivesTheMapsFolderAgain()
+    {
+        TestPacks.UseTestArea();
+        var manifestPath = $"{TestPacks.TestAreaPath}/{MapPack.ManifestFile}";
+        var fileManifest = MapManifestReader.Parse(FileAccess.GetFileAsString(manifestPath), manifestPath);
+        using (var runner = ISceneRunner.Load(WorldScenePath, true))
+        {
+            await runner.SimulateFrames(2);
+            var loader = Loader(runner);
+
+            AssertThat(loader.ResolvedMapId).IsEqual(MapId);
+            AssertThat(loader.PackPath).IsEqual(TestPacks.TestAreaPath);
+            AssertThat(loader.Manifest).IsNotNull();
+            var manifest = loader.Manifest!;
+            AssertThat(manifest.MapId).IsEqual(MapId);
+            AssertThat(manifest.Area).IsEqual("test");
+            AssertInt(manifest.Tiles.Count).IsEqual(fileManifest.Tiles.Count);
+            AssertInt(manifest.Tiles.Count).IsGreater(0);
+            AssertInt(loader.LoadedTileCount).IsEqual(manifest.Tiles.Count);
+            AssertInt(loader.Tiles.GetChildCount()).IsEqual(manifest.Tiles.Count);
+            AssertThat(loader.RoadGraph).IsNotNull();
+            AssertThat(loader.Places).IsNotNull();
+            AssertThat(loader.Boundary).IsNotNull();
+            AssertThat(loader.Boundary!.Area).IsEqual("test");
+            foreach (var path in new[] { loader.RoadGraphPath, loader.BuildingsPath, loader.PoisPath, loader.BoundaryPath })
+            {
+                AssertBool(path.StartsWith($"{TestPacks.TestAreaPath}/", System.StringComparison.Ordinal))
+                    .OverrideFailureMessage($"{path} is not in {TestPacks.TestAreaPath}").IsTrue();
+            }
+        }
+
+        TestPacks.UseFullPack();
+        var fresh = new MapLoader { MapId = MapId };
+        try
+        {
+            AssertThat(MapLoader.PackFolderOverride).IsNull();
+            AssertThat(fresh.PackPath).IsEqual(TestPacks.FullPath);
+            AssertThat(fresh.PackPath).IsEqual($"res://maps/{MapId}");
+        }
+        finally
+        {
+            fresh.Free();
         }
     }
 

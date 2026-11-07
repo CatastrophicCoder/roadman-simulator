@@ -21,5 +21,6 @@ Look especially for:
 - map-specific code in `tools/mapgen/`
 - real business names, other games' names or trademarks
 - features beyond the version 1 scope in `docs/vision.md`
+- quick-mode test selection (ADR 0020): when a gdUnit4 suite in the diff starts using code from another group's area (a script, a `Roadman.Core` folder or a test helper), check that the path's rule in `game/tests/test-groups.json` selects that suite's group, or `all`. A new suite needs a group, and a new folder under `game/scripts/` or `game/Roadman.Core/` needs a rule. `python3 -I .claude/scripts/test_select.py check` catches direct type references; look for uses it can't see, such as code reached only through `World` or `Main`.
 
 Report each finding with `file:line`, the rule it breaks and a suggested fix, most serious first. If you find nothing, say so.

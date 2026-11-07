@@ -43,12 +43,18 @@ public class PauseTest
     private Main? _main;
     private Node? _testBody;
 
+    /// <summary>The suite runs on the test-area pack (no test here has a full-pack-only branch).</summary>
     [BeforeTest]
-    public void SetUp() => _folder = BeginTest("pause");
+    public void SetUp()
+    {
+        _folder = BeginTest("pause");
+        TestPacks.UseTestArea();
+    }
 
     [AfterTest]
     public void CleanUp()
     {
+        TestPacks.UseFullPack();
         TearDown(_folder, _testBody, _main);
         _main = null;
         _testBody = null;

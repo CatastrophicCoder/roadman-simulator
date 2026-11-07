@@ -65,12 +65,18 @@ public class SaveLoadTest
     private Main? _main;
     private Node? _blocker;
 
+    /// <summary>The suite runs on the test-area pack (no test here has a full-pack-only branch).</summary>
     [BeforeTest]
-    public void SetUp() => _folder = BeginTest("save-load");
+    public void SetUp()
+    {
+        _folder = BeginTest("save-load");
+        TestPacks.UseTestArea();
+    }
 
     [AfterTest]
     public void CleanUp()
     {
+        TestPacks.UseFullPack();
         TearDown(_folder, _blocker, _main);
         _main = null;
         _blocker = null;
@@ -363,6 +369,7 @@ public class SaveLoadTest
     [TestCase]
     public async Task Ac16_SaveNamingAMapWithNoPack_RowShowsNotInstalled_AndCantBeChosen()
     {
+        TestPacks.UseFullPack(); // Loads no pack: the override would point "not-installed-map" at the test pack.
         WriteSave(_folder, SlotId.Manual(3), SampleSave(mapId: "not-installed-map", position: new LocalPoint(1, 2, 3)));
         using var runner = ISceneRunner.Load(_main = NewMain(_folder), true);
         await WorldEdgeTest.PhysicsFrames(_main, 3);

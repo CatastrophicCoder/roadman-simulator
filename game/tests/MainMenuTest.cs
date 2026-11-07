@@ -36,12 +36,18 @@ public class MainMenuTest
     private Main? _main;
     private Variant? _savedMapIdSetting;
 
+    /// <summary>The suite runs on the test-area pack (no test here has a full-pack-only branch).</summary>
     [BeforeTest]
-    public void SetUp() => _folder = BeginTest("main-menu");
+    public void SetUp()
+    {
+        _folder = BeginTest("main-menu");
+        TestPacks.UseTestArea();
+    }
 
     [AfterTest]
     public void CleanUp()
     {
+        TestPacks.UseFullPack();
         TearDown(_folder, _main);
         _main = null;
         _folder = "";
@@ -244,6 +250,7 @@ public class MainMenuTest
     public async Task Ac10_NewGameOnAPackThatFailsToLoad_ShowsTheErrorAndBackToMainMenu_AndNoWorldIsLeft()
     {
         const string missing = "no-such-pack-test";
+        TestPacks.UseFullPack(); // Loads no pack: the override would point the missing map id at the test pack.
         _savedMapIdSetting = ProjectSettings.GetSetting(MapLoader.MapIdSetting, MapLoader.DefaultMapId);
         ProjectSettings.SetSetting(MapLoader.MapIdSetting, missing);
         var capture = new ErrorCapture();
@@ -609,6 +616,7 @@ public class MainMenuTest
 
     private async Task AssertLoadFailedScreen(Nav nav)
     {
+        TestPacks.UseFullPack(); // Loads no pack: the override would point "not-installed-map" at the test pack.
         using var runner = ISceneRunner.Load(_main = NewMain(_folder), true);
         await WorldEdgeTest.PhysicsFrames(_main, MenuFrames);
         AssertBool(_main.LoadSave(SampleSave(mapId: "not-installed-map", position: new LocalPoint(0, 0, 0)))).IsFalse();

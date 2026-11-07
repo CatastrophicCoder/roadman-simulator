@@ -188,7 +188,22 @@ public partial class MapLoader : Node3D
     public string ResolvedMapId =>
         string.IsNullOrEmpty(MapId) ? ProjectSettings.GetSetting(MapIdSetting, DefaultMapId).AsString() : MapId;
 
-    public string PackPath => $"res://maps/{ResolvedMapId}";
+    /// <summary>
+    /// Tests only: the pack folder to load instead of <c>res://maps/&lt;id&gt;</c>, for example
+    /// <c>res://tests/packs/somero-test</c>. Set and reset to null like <c>DebugBuild.Override</c>; the game never sets
+    /// it. The map id is unchanged: the pack in that folder still has to name the resolved map id.
+    /// </summary>
+    public static string? PackFolderOverride { get; set; }
+
+    /// <summary>
+    /// The pack folder of <paramref name="mapId"/>: <see cref="PackFolderOverride"/> when it is set, else
+    /// <c>res://maps/&lt;mapId&gt;</c>. Every place that reads a map's pack builds its path here. The override applies
+    /// to every map id, so a test that needs a map without a pack (or a temporary pack) clears it first.
+    /// </summary>
+    public static string PackPathFor(string mapId) => PackFolderOverride ?? $"res://maps/{mapId}";
+
+    /// <summary>The folder of the pack being loaded (<see cref="PackPathFor"/> of <see cref="ResolvedMapId"/>).</summary>
+    public string PackPath => PackPathFor(ResolvedMapId);
 
     public Node3D Tiles { get; private set; } = null!;
 

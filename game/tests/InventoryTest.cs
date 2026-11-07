@@ -59,12 +59,18 @@ public class InventoryTest
     private InventoryScreen? _screen;
     private ISceneRunner? _screenRunner;
 
+    /// <summary>The suite runs on the test-area pack (no test here has a full-pack-only branch).</summary>
     [BeforeTest]
-    public void SetUp() => _folder = BeginTest("inventory");
+    public void SetUp()
+    {
+        _folder = BeginTest("inventory");
+        TestPacks.UseTestArea();
+    }
 
     [AfterTest]
     public void CleanUp()
     {
+        TestPacks.UseFullPack();
         _screenRunner?.Dispose();
         _screenRunner = null;
         TearDown(_folder, _testBody, _screen, _main);

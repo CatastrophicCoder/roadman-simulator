@@ -11,6 +11,10 @@ public class WorldSceneTest
 {
     private const string WorldScenePath = "res://scenes/world/World.tscn";
 
+    // These load the pack in res://maps/somero, never relying on another suite having reset the override.
+    [BeforeTest]
+    public void UseFullPack() => TestPacks.UseFullPack();
+
     [TestCase]
     public void World_BuildsCameraSunAndEnvironment()
     {

@@ -5,6 +5,7 @@ using System.Linq;
 using Godot;
 using Roadman.Core.Maps;
 using Roadman.Core.Saves;
+using Roadman.Scenes;
 
 namespace Roadman.Ui;
 
@@ -204,9 +205,9 @@ public partial class SlotList : Control
         EmitSignal(SignalName.BackRequested);
     }
 
-    /// <summary>Whether <c>res://maps/&lt;id&gt;/manifest.json</c> exists.</summary>
+    /// <summary>Whether <c>res://maps/&lt;id&gt;/manifest.json</c> (<see cref="MapLoader.PackPathFor"/>) exists.</summary>
     public static bool IsMapInstalled(string mapId) =>
-        MapPack.IsValidMapId(mapId) && Godot.FileAccess.FileExists($"res://maps/{mapId}/{MapPack.ManifestFile}");
+        MapPack.IsValidMapId(mapId) && Godot.FileAccess.FileExists($"{MapLoader.PackPathFor(mapId)}/{MapPack.ManifestFile}");
 
     /// <summary>The manifest's display name of <paramref name="mapId"/>; the id when the manifest can't be read.</summary>
     public static string MapDisplayNameOf(string mapId)
@@ -216,7 +217,7 @@ public partial class SlotList : Control
             return mapId;
         }
 
-        var path = $"res://maps/{mapId}/{MapPack.ManifestFile}";
+        var path = $"{MapLoader.PackPathFor(mapId)}/{MapPack.ManifestFile}";
         try
         {
             return MapManifestReader.Parse(Godot.FileAccess.GetFileAsString(path), path).DisplayName;

@@ -83,6 +83,10 @@ jobs:
           mkdir -p tools/mapgen/data/raw
           cp -R tools/mapgen/tests/fixtures/raw/somero-test-area tools/mapgen/data/raw/somero
           uv run --project tools/mapgen mapgen build somero --area test
+      - name: Build the gdUnit4 test pack from the fixture
+        # The same test-area pack in game/tests/packs/somero-test/, which tests that need only the
+        # test area load through MapLoader.PackFolderOverride (ADR 0020); imported in the next step.
+        run: .claude/scripts/build-test-pack.sh --no-import
       - name: Godot headless import
         run: |
           ROOT="$PWD"

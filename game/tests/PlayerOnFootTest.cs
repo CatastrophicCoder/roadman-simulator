@@ -23,7 +23,8 @@ namespace Roadman.Tests;
 /// The player on foot in Godot, <c>docs/specs/player-on-foot.md</c> (<c>Ac</c> numbers are its acceptance criteria):
 /// spawn, spawn failure, movement, jump, collision, the third-person camera with the mouse and the gamepad, the debug
 /// camera toggle and the release layout, and the street label (criterion 20, the temporary fall respawn, is replaced by
-/// docs/specs/world-edge-game.md). They run on whichever Somero pack is built (full, or the CI test area from the
+/// docs/specs/world-edge-game.md). Most run on the test-area pack (<see cref="TestPacks"/>; ADR 0020), and the full-pack checks (criteria 6, 14 railing
+/// and 15) on whichever Somero pack is built (full, or the CI test area from the
 /// committed fixture), so every position is derived from the loaded pack: the spawn area's open ground from
 /// <see cref="MapLoader.Boundary"/>, roads, bridges and <c>span_end</c> nodes from <see cref="MapLoader.RoadGraph"/>,
 /// walls from the building collision bodies, heights from ray hits. Motion is scripted per physics frame through
@@ -124,11 +125,16 @@ public class PlayerOnFootTest
     private string _tempPack = "";
     private Variant? _savedMapIdSetting;
 
+    /// <summary>The suite runs on the test-area pack; Ac14's bridge railing and Ac15, which have N/A branches, use the full pack.</summary>
+    [BeforeTest]
+    public void UseTestPack() => TestPacks.UseTestArea();
+
     [AfterTest]
     public void CleanUp()
     {
         ReleaseAll();
         DebugBuild.Override = null;
+        TestPacks.UseFullPack();
         if (_tempPack != "" && Directory.Exists(_tempPack))
         {
             Directory.Delete(_tempPack, recursive: true);
@@ -147,6 +153,8 @@ public class PlayerOnFootTest
     [TestCase]
     public async Task Ac6_World_SpawnsThePlayerOnOpenGroundAndItSettlesOnTheFloorWithoutErrors()
     {
+        // Criterion 6 names the full Somero pack as well as the CI test area, so it runs on the full pack locally.
+        TestPacks.UseFullPack();
         AssertPackPresent();
         var capture = new ErrorCapture();
         OS.AddLogger(capture);
@@ -364,7 +372,7 @@ public class PlayerOnFootTest
             OS.RemoveLogger(capture);
         }
 
-        var path = $"res://maps/{MapId}/{MapPack.BoundaryFile}";
+        var path = $"{TestPacks.PackPath}/{MapPack.BoundaryFile}";
         var errors = capture.ErrorsOnly.Where(e => e.Contains("no player spawn")).ToList();
         AssertInt(errors.Count).OverrideFailureMessage($"no single spawn error; got: {string.Join(" | ", capture.ErrorsOnly)}").IsEqual(1);
         AssertThat(errors[0]).Contains(path).Contains($"/regen-map {MapId}").Contains($"{attempts} draws");
@@ -410,7 +418,7 @@ public class PlayerOnFootTest
 
         var errors = capture.ErrorsOnly.Where(e => e.Contains("no player spawn")).ToList();
         AssertInt(errors.Count).OverrideFailureMessage($"no single spawn error; got: {string.Join(" | ", capture.ErrorsOnly)}").IsEqual(1);
-        AssertThat(errors[0]).Contains("no terrain collision").Contains($"res://maps/{MapId}/{MapPack.BoundaryFile}").Contains($"/regen-map {MapId}");
+        AssertThat(errors[0]).Contains("no terrain collision").Contains($"{TestPacks.PackPath}/{MapPack.BoundaryFile}").Contains($"/regen-map {MapId}");
     }
 
     /// <summary>
@@ -694,6 +702,7 @@ public class PlayerOnFootTest
     [TestCase]
     public async Task Ac14_RunningAcrossABridgeDeckIntoItsRailing_DoesNotPassIt()
     {
+        TestPacks.UseFullPack(); // Full pack: the test has an N/A branch for a pack without a bridge route or railing.
         AssertPackPresent();
         using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
         var world = (World)runner.Scene()!;
@@ -751,6 +760,7 @@ public class PlayerOnFootTest
     [TestCase]
     public async Task Ac15_GoingUpABridgeRampAcrossTheDeckAndDown_StaysOnTheFloor()
     {
+        TestPacks.UseFullPack(); // Full pack: the test has an N/A branch for a pack without a bridge route or railing.
         AssertPackPresent();
         using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
         var world = (World)runner.Scene()!;
@@ -3108,11 +3118,14 @@ public class PlayerOnFootTest
     /// Copies the Somero pack's manifest and tile import files to a temporary pack <paramref name="mapId"/>, with
     /// <c>road_graph.json</c>, <c>buildings.json</c> and <c>pois.json</c> (their <c>map_id</c> set to it), and
     /// <c>boundary.json</c> changed by <paramref name="boundary"/>, or left out when it is null. The import files keep
-    /// pointing at the already imported tile scenes; their UIDs are dropped so they don't clash with the originals.
+    /// pointing at the already imported tile scenes; their UIDs are dropped so they don't clash with the originals. The
+    /// source is <see cref="TestPacks.PackPath"/>; the override is cleared, so the temporary map id loads from
+    /// <c>res://maps/&lt;mapId&gt;</c>.
     /// </summary>
     private int CopyPack(string mapId, Action<JsonNode>? boundary)
     {
-        var source = ProjectSettings.GlobalizePath($"res://maps/{MapId}");
+        var source = ProjectSettings.GlobalizePath(TestPacks.PackPath);
+        TestPacks.UseFullPack(); // The override would load the source pack instead of the temporary one.
         _tempPack = ProjectSettings.GlobalizePath($"res://maps/{mapId}");
         Directory.CreateDirectory(Path.Combine(_tempPack, "tiles"));
         var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(source, MapPack.ManifestFile)))!;
@@ -3150,9 +3163,9 @@ public class PlayerOnFootTest
 
     private static Boundary ReadPackBoundary()
     {
-        var manifestPath = $"res://maps/{MapId}/{MapPack.ManifestFile}";
+        var manifestPath = $"{TestPacks.PackPath}/{MapPack.ManifestFile}";
         var manifest = MapManifestReader.Parse(FileAccess.GetFileAsString(manifestPath), manifestPath);
-        var path = $"res://maps/{MapId}/{MapPack.BoundaryFile}";
+        var path = $"{TestPacks.PackPath}/{MapPack.BoundaryFile}";
         return BoundaryReader.Parse(FileAccess.GetFileAsString(path), manifest, path);
     }
 
@@ -3305,8 +3318,8 @@ public class PlayerOnFootTest
     {
         foreach (var file in new[] { MapPack.ManifestFile, MapPack.RoadGraphFile, MapPack.BuildingsFile, MapPack.PoisFile, MapPack.BoundaryFile })
         {
-            var path = $"res://maps/{MapId}/{file}";
-            AssertBool(FileAccess.FileExists(path)).OverrideFailureMessage($"no {file} at {path}; {MapPack.RegenHint(MapId)}").IsTrue();
+            var path = $"{TestPacks.PackPath}/{file}";
+            AssertBool(FileAccess.FileExists(path)).OverrideFailureMessage($"no {file} at {path}; {TestPacks.MissingPackHint(MapId)}").IsTrue();
         }
     }
 }

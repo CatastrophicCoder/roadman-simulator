@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # Runs every check in the definition of done and reports each step as
-# PASS, FAIL or N/A (not available yet). Always exits 0; read the summary.
+# PASS, FAIL, WARN or N/A (not available yet). Always exits 0 (except for a usage error,
+# exit 2, before any step runs); read the summary.
 # Logs go to $VERIFY_LOG_DIR (default: a temp directory).
+#
+# Usage: verify.sh                         the full run: the gate before every commit
+#        verify.sh --quick [<base>]        quick mode for iterating (docs/specs/test-performance.md,
+#                                          ADR 0020): only the gdUnit4 groups the changed files select
+#                                          (game/tests/test-groups.json), pytest only when a pytest input
+#                                          changed, no export check or screenshots. Changed files: the
+#                                          working tree against HEAD, or against <base>, plus untracked files.
+#        verify.sh --quick --dry-run [<base>]  print the changed paths, rules, groups and suites; run nothing
 
 set -u
 
@@ -9,9 +18,59 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=lib.sh
 . "$ROOT/.claude/scripts/lib.sh"
 
+QUICK=0
+DRY_RUN=0
+BASE=""
+for arg in "$@"; do
+  case "$arg" in
+    --quick) QUICK=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    -*) echo "usage: verify.sh [--quick [--dry-run] [<base>]]" >&2; exit 2 ;;
+    *)
+      [ -z "$BASE" ] || { echo "usage: verify.sh [--quick [--dry-run] [<base>]]" >&2; exit 2; }
+      BASE="$arg"
+      ;;
+  esac
+done
+if [ "$QUICK" -eq 0 ] && { [ "$DRY_RUN" -eq 1 ] || [ -n "$BASE" ]; }; then
+  echo "usage: --dry-run and <base> need --quick" >&2
+  exit 2
+fi
+
+SELECT=(python3 -I "$ROOT/.claude/scripts/test_select.py")
+if [ "$DRY_RUN" -eq 1 ]; then
+  "${SELECT[@]}" select --dry-run --repo "$ROOT" ${BASE:+"$BASE"}
+  exit 0
+fi
+
 LOGS="${VERIFY_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/verify.XXXXXX")}"
 mkdir -p "$LOGS"
 SUMMARY=()
+QUICK_NA="quick mode; the full /verify runs it"
+
+# Quick mode: the selection, computed once before any step (test_select.py, shell format).
+SEL_MODE=all SEL_GROUPS="" SEL_FILTER="" SEL_ALL_REASON="" SEL_PYTEST=1 SEL_PYTEST_REASON=""
+SEL_REASONS=()
+if [ "$QUICK" -eq 1 ]; then
+  if sel_out="$("${SELECT[@]}" select --format shell --repo "$ROOT" ${BASE:+"$BASE"} 2>"$LOGS/test-select.log")"; then
+    while IFS='=' read -r key value; do
+      case "$key" in
+        MODE) SEL_MODE="$value" ;;
+        GROUPS) SEL_GROUPS="$value" ;;
+        FILTER) SEL_FILTER="$value" ;;
+        ALL_REASON) SEL_ALL_REASON="$value" ;;
+        PYTEST) SEL_PYTEST="$value" ;;
+        PYTEST_REASON) SEL_PYTEST_REASON="$value" ;;
+        REASON_*) SEL_REASONS+=("$value") ;;
+      esac
+    done <<<"$sel_out"
+  else
+    SEL_MODE=all
+    SEL_ALL_REASON="test_select.py failed (log: $LOGS/test-select.log)"
+    SEL_PYTEST=1
+    SEL_PYTEST_REASON="$SEL_ALL_REASON"
+  fi
+fi
 
 report() { # report <status> <step> <detail>
   SUMMARY+=("$(printf '%-5s %-28s %s' "$1" "$2" "$3")")
@@ -78,9 +137,41 @@ elif ! command -v uv >/dev/null 2>&1; then
     report N/A "$s" "uv not on PATH"
   done
 else
-  step "pytest" pytest uv run --project "$MAPGEN" pytest "$MAPGEN"
+  if [ "$QUICK" -eq 1 ] && [ "$SEL_PYTEST" != 1 ]; then
+    report N/A "pytest" "quick mode; no pytest input changed (the full /verify runs it)"
+  else
+    step "pytest" pytest uv run --project "$MAPGEN" pytest "$MAPGEN"
+    [ "$QUICK" -eq 1 ] && SUMMARY[${#SUMMARY[@]}-1]+=" (quick: $SEL_PYTEST_REASON)"
+  fi
   step "ruff check" ruff-check uv run --project "$MAPGEN" ruff check "$MAPGEN"
   step "ruff format --check" ruff-format uv run --project "$MAPGEN" ruff format --check "$MAPGEN"
+fi
+
+# The gdUnit4 group map (criterion 7 of docs/specs/test-performance.md) and the selection
+# logic's self-tests, in both modes.
+if ! command -v python3 >/dev/null 2>&1; then
+  report N/A "test groups" "python3 not on PATH"
+else
+  log="$LOGS/test-groups.log"
+  if (cd "$ROOT" && python3 -I -m unittest discover -s .claude/scripts/tests &&
+    "${SELECT[@]}" check --repo "$ROOT") >"$log" 2>&1; then
+    report PASS "test groups" "$(tail -1 "$log") (log: $log)"
+  else
+    report FAIL "test groups" "$(grep -m1 -E 'ERROR|FAIL' "$log" || tail -1 "$log") (log: $log)"
+  fi
+fi
+
+# The test-area pack the gdUnit4 tests load (game/tests/packs/somero-test/), rebuilt from the
+# committed fixture when it is missing or stale; the import below picks it up.
+if ! command -v uv >/dev/null 2>&1 || [ ! -f "$ROOT/$MAPGEN/pyproject.toml" ]; then
+  report N/A "test pack" "uv or $MAPGEN/pyproject.toml missing"
+else
+  log="$LOGS/test-pack.log"
+  if "$ROOT/.claude/scripts/build-test-pack.sh" --if-stale --no-import >"$log" 2>&1; then
+    report PASS "test pack" "$(tail -1 "$log")"
+  else
+    report FAIL "test pack" "$(tail -1 "$log") (log: $log)"
+  fi
 fi
 
 # Godot. The import also builds the .godot/ cache that the gdUnit4 run needs.
@@ -90,19 +181,38 @@ if GODOT_BIN="$(find_godot)"; then
   else
     report FAIL "godot headless import" "$IMPORT_DETAIL (log: $LOGS/godot-import.log)"
   fi
+  gd_name="gdunit4 tests"
+  gd_filter=()
+  if [ "$QUICK" -eq 1 ]; then
+    case "$SEL_MODE" in
+      groups)
+        gd_name="gdunit4 tests (quick: ${SEL_GROUPS// /, })"
+        gd_filter=(--filter "$SEL_FILTER")
+        ;;
+      none) gd_name="gdunit4 tests (quick)" ;;
+      *) gd_name="gdunit4 tests (quick: all)" ;;
+    esac
+  fi
+  # Other Godot processes (an editor, a game, a stuck test host) slow the run down and skew timings.
+  others="$(pgrep -l '^[Gg]odot' 2>/dev/null || true)"
+  if [ -n "$others" ]; then
+    report WARN "other godot processes" "$(echo "$others" | wc -l | tr -d ' ') running before the gdUnit4 step; tests may be slower: $(echo "$others" | head -3 | cut -c1-80 | tr '\n' ';')"
+  fi
   if [ "$HAVE_DOTNET" -eq 0 ]; then
-    report N/A "gdunit4 tests" "dotnet not on PATH"
+    report N/A "$gd_name" "dotnet not on PATH"
+  elif [ "$QUICK" -eq 1 ] && [ "$SEL_MODE" = none ]; then
+    report N/A "$gd_name" "no changed file affects a gdUnit4 group"
   else
     log="$LOGS/gdunit4.log"
     (cd "$ROOT" && GODOT_BIN="$GODOT_BIN" run_with_timeout "${GDUNIT_TIMEOUT:-1200}" "$log" \
-      dotnet test "$GAME_CSPROJ" --settings "$RUNSETTINGS")
+      dotnet test "$GAME_CSPROJ" --settings "$RUNSETTINGS" ${gd_filter[@]+"${gd_filter[@]}"})
     rc=$?
     if [ "$rc" -eq 0 ]; then
-      report PASS "gdunit4 tests" "log: $log"
+      report PASS "$gd_name" "log: $log"
     elif [ "$rc" -eq 124 ]; then
-      report FAIL "gdunit4 tests" "timed out after ${GDUNIT_TIMEOUT:-1200}s (log: $log)"
+      report FAIL "$gd_name" "timed out after ${GDUNIT_TIMEOUT:-1200}s (log: $log)"
     else
-      report FAIL "gdunit4 tests" "$(tail -3 "$log" | tr '\n' ' ') (log: $log)"
+      report FAIL "$gd_name" "$(tail -3 "$log" | tr '\n' ' ') (log: $log)"
     fi
   fi
 else
@@ -136,7 +246,9 @@ TEMPLATES=""
 for d in "$HOME/Library/Application Support/Godot" "${XDG_DATA_HOME:-$HOME/.local/share}/godot" "${APPDATA:-}/Godot"; do
   [ -d "$d/export_templates/$GODOT_VERSION.stable.mono" ] && TEMPLATES="$d/export_templates/$GODOT_VERSION.stable.mono"
 done
-if ! GODOT_BIN="$(find_godot)"; then
+if [ "$QUICK" -eq 1 ]; then
+  report N/A "exported build" "$QUICK_NA"
+elif ! GODOT_BIN="$(find_godot)"; then
   report N/A "exported build" "godot not on PATH and \$GODOT not set"
 elif [ -z "$TEMPLATES" ]; then
   report N/A "exported build" "no export templates for $GODOT_VERSION.stable.mono installed"
@@ -166,7 +278,9 @@ fi
 MAP_ID="${MAP_ID:-somero}"
 PACK="$ROOT/game/maps/$MAP_ID"
 SHOTS="$ROOT/build/screenshots"
-if ! GODOT_BIN="$(find_godot)"; then
+if [ "$QUICK" -eq 1 ]; then
+  report N/A "screenshots" "$QUICK_NA"
+elif ! GODOT_BIN="$(find_godot)"; then
   report N/A "screenshots" "godot not on PATH and \$GODOT not set"
 elif [ "$BUILD_OK" -eq 0 ]; then
   report N/A "screenshots" "dotnet build failed or didn't run; the game would run stale code"
@@ -273,6 +387,23 @@ else
   done
 fi
 
-echo "verify summary (logs: $LOGS)"
+if [ "$QUICK" -eq 1 ]; then
+  echo "verify summary, quick mode (logs: $LOGS)"
+else
+  echo "verify summary (logs: $LOGS)"
+fi
 printf '%s\n' "${SUMMARY[@]}"
+if [ "$QUICK" -eq 1 ]; then
+  echo
+  case "$SEL_MODE" in
+    groups)
+      echo "gdUnit4 selection: ${SEL_GROUPS// /, }"
+      for r in ${SEL_REASONS[@]+"${SEL_REASONS[@]}"}; do echo "  $r"; done
+      ;;
+    none) echo "gdUnit4 selection: none (no changed file affects a gdUnit4 group)" ;;
+    *) echo "gdUnit4 selection: all suites, because $SEL_ALL_REASON" ;;
+  esac
+  echo "Git-ignored files (a regenerated pack in game/maps/, the test pack) are invisible to the selection."
+  echo "Quick mode doesn't meet the definition of done: run the full /verify before a commit."
+fi
 exit 0

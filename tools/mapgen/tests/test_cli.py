@@ -85,3 +85,65 @@ def test_unexpected_error_is_redacted(
     err = capsys.readouterr().err
     assert "unexpected RuntimeError" in err
     assert FAKE_KEY not in err
+
+
+def test_build_raw_defaults_to_none_and_takes_a_folder() -> None:
+    assert build_parser().parse_args(["build", "testtown"]).raw is None
+    args = build_parser().parse_args(["build", "testtown", "--raw", "some/raw"])
+    assert args.raw == Path("some/raw")
+
+
+def _capture_run_build(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace `run_build` with a stub that records its arguments and fails the build."""
+    import mapgen.build
+
+    seen: dict[str, Any] = {}
+
+    def fake_run_build(config: Any, area: str, **kwargs: Any) -> Any:
+        seen.update(kwargs, area=area)
+        raise mapgen.build.BuildError("stub")
+
+    monkeypatch.setattr(mapgen.build, "run_build", fake_run_build)
+    return seen
+
+
+def test_build_reads_the_default_raw_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_repo: TmpRepo, fixture_data: dict[str, Any]
+) -> None:
+    tmp_repo.write_map(fixture_data)
+    seen = _capture_run_build(monkeypatch)
+    main(["--repo-root", str(tmp_repo.root), "build", "testtown", "--area", "test"])
+    assert seen["raw_dir"] == tmp_repo.raw_dir("testtown").resolve()
+    assert seen["work_dir"] == paths.work_dir(tmp_repo.root, "testtown", "test")
+
+
+def test_build_passes_the_given_raw_folder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tmp_repo: TmpRepo,
+    fixture_data: dict[str, Any],
+) -> None:
+    tmp_repo.write_map(fixture_data)
+    other = tmp_path / "elsewhere" / "raw"
+    other.mkdir(parents=True)
+    seen = _capture_run_build(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    args = ["--repo-root", str(tmp_repo.root), "build", "testtown", "--area", "test"]
+    main([*args, "--raw", "elsewhere/raw"])  # relative to the working directory
+    assert seen["raw_dir"] == other.resolve()
+    assert seen["work_dir"] == paths.work_dir(tmp_repo.root, "testtown", "test")
+
+
+def test_build_with_a_missing_raw_folder_fails_before_building(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tmp_repo: TmpRepo,
+    fixture_data: dict[str, Any],
+) -> None:
+    tmp_repo.write_map(fixture_data)
+    seen = _capture_run_build(monkeypatch)
+    args = ["--repo-root", str(tmp_repo.root), "build", "testtown", "--area", "test"]
+    assert main([*args, "--raw", str(tmp_path / "missing")]) == EXIT_FAILED
+    assert seen == {}
+    assert "raw data folder not found" in capsys.readouterr().err

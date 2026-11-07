@@ -64,8 +64,8 @@ Nothing changes for the player. The changes are test code, a test-only override 
 6. **Path rules.** Each rule maps a repo path glob to one or more groups, or to one of two special targets:
    - **`all`** (the full suite) for shared code: `game/scripts/world/World.cs`, `game/scripts/world/MapLoader.cs`, `game/scripts/main/Main.cs`, `game/scripts/autoload/**`, `game/project.godot`, `game/*.csproj`, `game/Directory.Build.*`, `global.json`, `game/.runsettings`, `game/tests/MainTestSupport.cs`, `game/tests/ErrorCapture.cs`, `game/tests/test-groups.json`, `.claude/scripts/verify.sh`, `.claude/scripts/lib.sh`, `tools/mapgen/**` and `maps/**` (a pack change after `/regen-map`). The plan completes this list from the code.
    - **`none`** for documentation: `docs/**` and `**/*.md`. In quick mode these select no gdUnit4 test (and quick mode runs no screenshots in any case).
-   - `game/scripts/player/Player.cs` and `game/scripts/player/PlayerCamera.cs` → `player`, `world-edge`, `saves`, `inventory`.
-   - `Roadman.Core`: `Items/**` → `inventory`, `saves`; `Edge/**` → `world-edge`; `Saves/**` → `saves`; `Player/**` → `player`, `world-edge`. Every other `Roadman.Core` path (`PlayerState.cs`, `Maps/`, `IO/`, `Settings/`, `Tools/`, the project file) → `all`. `Roadman.Core` is covered by xUnit in every mode either way.
+   - `game/scripts/player/Player.cs` and `game/scripts/player/PlayerCamera.cs` → `all` (changed 2026-11-07 after review: every map suite spawns or checks the player, so they would select most groups).
+   - `Roadman.Core`: `Items/**` → `inventory`, `saves`, `world-edge`; `Edge/**` → `world-edge`, `saves`, `inventory`; `Saves/**` → `saves`; `Player/**` → `player`, `world-edge`, `inventory` (widened 2026-11-07 after review to every group whose suites use them). Every other `Roadman.Core` path (`PlayerState.cs`, `Maps/`, `IO/`, `Settings/`, `Tools/`, the project file) → `all`. `Roadman.Core` is covered by xUnit in every mode either way.
    - A changed suite file `game/tests/<Suite>.cs` selects that suite's group. A helper file used by more than one suite (for example `WorldEdgeTest.NewWorld`, used elsewhere) maps to all their groups, or to `all`.
    - **Fail-safe.** A changed path that matches no rule selects `all`. A deleted or renamed file counts under both its old and new path. When the result includes `all`, the full suite runs. When it is only `none`, no gdUnit4 test runs.
 
@@ -108,9 +108,9 @@ Nothing changes for the player. The changes are test code, a test-only override 
    - one suite file changed → its group;
    - `World.cs` → `all`;
    - `PlayerState.cs` → `all`;
-   - `Player.cs` → `player`, `world-edge`, `saves`, `inventory`;
-   - `Roadman.Core/Items/x.cs` → `inventory`, `saves`;
-   - `Roadman.Core/Player/x.cs` → `player`, `world-edge`;
+   - `Player.cs` → `all`;
+   - `Roadman.Core/Items/x.cs` → `inventory`, `saves`, `world-edge`;
+   - `Roadman.Core/Player/x.cs` → `player`, `world-edge`, `inventory`;
    - `Roadman.Core/Maps/x.cs` → `all`;
    - `docs/specs/x.md` alone → nothing;
    - `docs/specs/x.md` with a suite file → that suite's group;
@@ -148,35 +148,93 @@ Nothing changes for the player. The changes are test code, a test-only override 
 
 ## Measurements
 
-To be filled in during implementation.
-
 ### Baseline (criterion 1)
 
-| Suite | Time (s) |
-| --- | --- |
-| *(per suite)* | |
-| **Total** | |
+Full gdUnit4 suite on the full Somero pack, before any test change: **464 s wall** (`dotnet test` reported 7 m 39 s), 185 cases, all passed. Suite times are the summed per-test durations from the TRX (`python3 -I .claude/scripts/gdunit-report.py suites`).
 
-Machine, commit, Godot version, command: _
+| Suite | Cases | Time (s) |
+| --- | --- | --- |
+| PlayerOnFootTest | 43 | 148.2 |
+| WorldEdgeTest | 27 | 94.5 |
+| WorldEdgeBreakingTest | 12 | 52.4 |
+| SaveLoadTest | 12 | 40.4 |
+| PlaceInformationTest | 14 | 27.1 |
+| PauseTest | 6 | 20.9 |
+| MapLoaderTest | 12 | 17.6 |
+| MainMenuTest | 17 | 14.5 |
+| InventoryTest | 7 | 13.9 |
+| RoadGraphTest | 8 | 13.1 |
+| SettingsViewTest | 16 | 12.4 |
+| WorldSceneTest | 2 | 3.6 |
+| OrthophotoDebugViewTest | 8 | 0.1 |
+| DeathScreenLayoutTest | 1 | 0.1 |
+| **Total** | 185 | 458.7 (464 s wall) |
 
-CI baseline (run link, gdUnit4 step, whole `test` job): _
+**Setup.**
+- Machine: Apple M4 Pro, macOS 15 (Darwin 24.6.0).
+- Commit: `75b7819`.
+- Godot: 4.7.2.stable.mono.official.
+- Command: `GODOT_BIN=/Applications/Godot_mono.app/Contents/MacOS/Godot dotnet test game/RoadmanSimulator.csproj --settings game/.runsettings --logger "trx;LogFileName=baseline.trx"`.
+- The build and import were up to date.
+- Four orphaned gdUnit4 runner Godot processes from an earlier session (about 1 % CPU each) were running during both this run and the after run.
+
+**The earlier 884 s figure.** It didn't reproduce: the same suite took 464 s here. It was most likely measured while other processes were running, such as an editor, a game or stuck test hosts. `verify.sh` now reports a WARN line ("other godot processes") when another Godot process runs before the gdUnit4 step.
+
+**CI baseline.** Run [42293550026](https://github.com/CatastrophicCoder/roadman-simulator/actions/runs/42293550026) (`26d45f9`, test-area pack):
+- gdUnit4 step: 210 s (21:07:31 to 21:11:01)
+- whole `test` job: 449 s (21:03:42 to 21:11:11)
+- building the test-area pack: 3 s
 
 ### Selection trial (criterion 10)
 
-_
+With gdUnit4.test.adapter 3.2.0:
+- `dotnet test game/RoadmanSimulator.csproj --settings game/.runsettings --filter "FullyQualifiedName~Roadman.Tests.WorldSceneTest.|FullyQualifiedName~Roadman.Tests.DeathScreenLayoutTest."` ran exactly those suites' 3 cases (2 + 1) in 8 s wall, exit 0.
+- A filter that matches nothing (`FullyQualifiedName~Roadman.Tests.NoSuchSuite.`) exits 1 with "No test matches the given testcase filter" (`TreatNoTestsAsError`). A group naming a missing suite therefore fails loudly.
 
-### After (criteria 13, 14)
+Quick mode uses the class filter, with the trailing dot so `WorldEdgeTest.` doesn't match `WorldEdgeBreakingTest`. Nothing new was needed.
 
-| Suite | Before (s) | After (s) |
-| --- | --- | --- |
-| *(per suite)* | | |
-| **Total** (target < 480 s) | | |
+### Scope decisions during implementation (2026-11-07)
+
+- **No shared instances.** The baseline was already under the 480 s target, and most of the time goes to long movement runs, not loads. So the user chose the test-area pack only. Behaviour 2's rules stay in ADR 0020 for a later suite. **Criterion 5 doesn't apply**: no suite shares an instance, so no reset helper exists. Criterion 4 is met trivially: every test still builds its own instance.
+- **pytest in quick mode** (a deviation from Behaviour 8). The mapgen pytest suite alone takes about 167 s, which can't fit a 180 s quick run. Quick mode runs pytest only when a changed path is a pytest input, listed in `pytest_paths` in `game/tests/test-groups.json`:
+  - `tools/mapgen/**`, `maps/**`, `.github/**`, `docs/specs/place-information.md`, `docs/specs/roads-and-road-graph.md`;
+  - or on any fail-safe (a path matching no rule, a git state it can't read).
+
+  Otherwise pytest is N/A ("quick mode; no pytest input changed"). Ruff always runs.
+- **Wider rules** (review, 2026-11-07). Rules now select every group whose suites use the code: `Player.cs`/`PlayerCamera.cs` → `all`, and `Roadman.Core` `Items/`, `Edge/` and `Player/` widened as in Behaviour 6. `test_select.py check` also flags a script or `Roadman.Core` file whose rule misses the group of a suite that references one of its types. The reviewer checklist covers uses the check can't see, such as code reached only through `World`.
+- **Stale test pack.** `/verify` and `/verify-quick` rebuild it ("test pack" step) when it is missing or its stamp (fixture, pipeline source and lock, `maps/somero/`) has changed.
+
+### After (criteria 3, 6, 13)
+
+Same machine, pack and command, with the test-area pack moves (commit of this feature), after the orphaned runner processes were stopped and no other Godot process ran: **254 s wall** (`dotnet test` 4 m 8 s), 186 cases, all passed. An earlier after run with the orphans still running took 253 s, so they didn't measurably slow the suite. Full `/verify` on the full pack: every step PASS, no WARN (criterion 2).
+
+| Suite | Cases before / after | Before (s) | After (s) |
+| --- | --- | --- | --- |
+| PlayerOnFootTest | 43 / 43 | 148.2 | 94.8 |
+| WorldEdgeTest | 27 / 27 | 94.5 | 53.1 |
+| WorldEdgeBreakingTest | 12 / 12 | 52.4 | 40.1 |
+| SaveLoadTest | 12 / 12 | 40.4 | 11.4 |
+| PlaceInformationTest | 14 / 14 | 27.1 | 1.3 |
+| PauseTest | 6 / 6 | 20.9 | 10.7 |
+| MapLoaderTest | 12 / 13 | 17.6 | 17.1 |
+| MainMenuTest | 17 / 17 | 14.5 | 1.8 |
+| InventoryTest | 7 / 7 | 13.9 | 10.1 |
+| RoadGraphTest | 8 / 8 | 13.1 | 0.5 |
+| SettingsViewTest | 16 / 16 | 12.4 | 3.4 |
+| WorldSceneTest | 2 / 2 | 3.6 | 3.6 |
+| OrthophotoDebugViewTest | 8 / 8 | 0.1 | 0.1 |
+| DeathScreenLayoutTest | 1 / 1 | 0.1 | 0.1 |
+| **Total** (target < 480 s) | 185 / 186 | 458.7 (464 s wall) | 248.2 (254 s wall) |
+
+- **Case counts (criterion 3).** Unchanged except MapLoaderTest, which gained the pack override test of criterion 9 (`PackFolderOverride_LoadsTheWholeTestAreaPackFromItsFolder_AndNullGivesTheMapsFolderAgain`).
+- **Test-area pack build (criterion 9).** The fingerprint of `tools/mapgen/data/raw/somero/` (`find … -type f -exec stat -f '%m %N' {} + | sort | shasum`, file list and modification times) was `85611c70e30948beb4899bcb3a7870bf5afea8ad` before and after the build. The built manifest says `map_id` `somero`, `area` `test`, 4 tiles. The exported Windows build's PCK lists no file from `tests/`: `check-export.sh` fails on any, and the full `/verify` "exported build" step passes with the pack in place. The override is checked by MapLoaderTest `PackFolderOverride_LoadsTheWholeTestAreaPackFromItsFolder_AndNullGivesTheMapsFolderAgain`.
+- **Skip and N/A lines (criterion 6).** `gdunit-report.py compare baseline.trx after.trx` finds 0 skip or N/A lines in either run, so the after set is a subset. The ledge search's information line ("... midpoint(s) before it skipped near a ring corner") isn't a skipped check, so the script doesn't count it.
 
 | Group | Quick-mode wall time (s) (target < 180 s) |
 | --- | --- |
-| *(per group)* | |
+| *(measured after the commit, with a scratch change per group; see the follow-up)* | |
 
-CI after (run link, gdUnit4 step, whole `test` job): _
+CI after (run link, gdUnit4 step, whole `test` job): _after the push_
 
 ## Open questions
 

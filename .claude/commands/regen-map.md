@@ -9,4 +9,6 @@ Regenerate the map pack for `$ARGUMENTS`: run `.claude/scripts/regen-map.sh $ARG
 
 The script runs `uv run mapgen build <map-id>` (output in `game/maps/<map-id>/`), then a headless Godot import. Each step prints PASS, FAIL or N/A.
 
+This doesn't touch the gdUnit4 test pack in `game/tests/packs/somero-test/`. That pack is built from the committed fixture by `.claude/scripts/build-test-pack.sh`, which `/verify` and `/verify-quick` run on their own when the pack is missing or stale.
+
 Report each step's result. For a FAIL, read the log and quote the relevant error lines. Never fix a problem by editing `game/maps/`; fix the pipeline or `maps/<map-id>/` and run this again.

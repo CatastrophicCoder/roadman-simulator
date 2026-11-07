@@ -42,6 +42,7 @@ uv run mapgen download <map-id> --only osm --retries 3   # retry a busy Overpass
 uv run mapgen origin <map-id>             # print the bbox centre to use as origin in map.yaml
 uv run mapgen build <map-id>              # build the map pack (--area test: the small test area)
 uv run mapgen build <map-id> --release    # skip debug_only sources: no debug/orthophoto/ in the pack
+uv run mapgen build <map-id> --area test --raw <dir> --out <pack>   # another raw folder and pack folder (tests; .claude/scripts/build-test-pack.sh)
 uv run mapgen notice <map-id>... --out build/NOTICE.txt   # plain-text NOTICE from the packs' manifest credits
 uv run mapgen notice --check build/NOTICE.txt <map-id>... # exit 1 if any credit or licence line is missing
 uv run mapgen snapshot create <map-id>    # zip the non-debug raw data into build/snapshots/ (no network)

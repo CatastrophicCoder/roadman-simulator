@@ -19,7 +19,7 @@ namespace Roadman.Tests;
 /// <summary>
 /// Place information in Godot (<c>docs/specs/place-information.md</c>, criteria 15 to 17; <c>Ac</c> numbers refer to
 /// it): <see cref="MapLoader.Places"/> and the building bodies, the HUD street label and the debug place inspector.
-/// They run on whichever Somero pack is built (full, or the CI test area from the committed fixture), so every
+/// They run on the test-area pack (<see cref="TestPacks"/>; ADR 0020), so every
 /// position comes from the loaded data: edges from <see cref="MapLoader.RoadGraph"/>, buildings and POIs from
 /// <see cref="MapLoader.Places"/>, heights from <see cref="MapLoader.TerrainHeightAt"/> or ray hits. Like
 /// <see cref="MapLoaderTest"/>, these fail rather than skip without the pack.
@@ -43,9 +43,14 @@ public class PlaceInformationTest
 
     private string _tempPack = "";
 
+    /// <summary>The suite runs on the test-area pack (no test here has a full-pack-only branch).</summary>
+    [BeforeTest]
+    public void UseTestPack() => TestPacks.UseTestArea();
+
     [AfterTest]
     public void DeleteTemporaryPack()
     {
+        TestPacks.UseFullPack();
         if (_tempPack != "" && Directory.Exists(_tempPack))
         {
             Directory.Delete(_tempPack, recursive: true);
@@ -868,11 +873,14 @@ public class PlaceInformationTest
     /// <summary>
     /// Copies the Somero pack's manifest and tile import files to a temporary pack <paramref name="mapId"/>, plus the
     /// listed JSON files with their <c>map_id</c> set to <paramref name="mapId"/>. The import files keep pointing at
-    /// the already imported tile scenes; their UIDs are dropped so they don't clash with the originals.
+    /// the already imported tile scenes; their UIDs are dropped so they don't clash with the originals. The source is
+    /// <see cref="TestPacks.PackPath"/>; the override is cleared, so the temporary map id loads from
+    /// <c>res://maps/&lt;mapId&gt;</c>.
     /// </summary>
     private int CopyPack(string mapId, params string[] jsonFiles)
     {
-        var source = ProjectSettings.GlobalizePath($"res://maps/{MapId}");
+        var source = ProjectSettings.GlobalizePath(TestPacks.PackPath);
+        TestPacks.UseFullPack(); // The override would load the source pack instead of the temporary one.
         _tempPack = ProjectSettings.GlobalizePath($"res://maps/{mapId}");
         Directory.CreateDirectory(Path.Combine(_tempPack, "tiles"));
         var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(source, MapPack.ManifestFile)))!;
@@ -902,9 +910,9 @@ public class PlaceInformationTest
     {
         foreach (var file in new[] { MapPack.ManifestFile, MapPack.RoadGraphFile, MapPack.BuildingsFile, MapPack.PoisFile })
         {
-            var path = $"res://maps/{MapId}/{file}";
+            var path = $"{TestPacks.PackPath}/{file}";
             AssertBool(FileAccess.FileExists(path))
-                .OverrideFailureMessage($"no {file} at {path}; {MapPack.RegenHint(MapId)}")
+                .OverrideFailureMessage($"no {file} at {path}; {TestPacks.MissingPackHint(MapId)}")
                 .IsTrue();
         }
     }

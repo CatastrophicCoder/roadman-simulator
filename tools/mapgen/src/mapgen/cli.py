@@ -100,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="pack folder (default: game/maps/<map-id>/; meant for tests)",
     )
     build.add_argument(
+        "--raw",
+        type=Path,
+        default=None,
+        help="raw data folder (default: tools/mapgen/data/raw/<map-id>/; meant for tests)",
+    )
+    build.add_argument(
         "--release",
         action="store_true",
         help="skip sources marked debug_only in map.yaml (no debug/ folder in the pack)",
@@ -198,12 +204,18 @@ def cmd_build(args: argparse.Namespace, repo_root: Path) -> int:
 
     config = load_map_config(paths.map_config_path(repo_root, args.map_id))
     out = (args.out or paths.pack_dir(repo_root, args.map_id)).resolve()
+    raw = (args.raw or paths.raw_dir(repo_root, args.map_id)).resolve()
+    if args.raw is not None and not raw.is_dir():
+        print(f"error: raw data folder not found: {raw}", file=sys.stderr)
+        return EXIT_FAILED
+    # Every build clears its stage folders first and reads only what it wrote, so builds
+    # from different raw folders can share the work folder without reusing stale output.
     work = paths.work_dir(repo_root, args.map_id, args.area)
     try:
         report = run_build(
             config,
             args.area,
-            raw_dir=paths.raw_dir(repo_root, args.map_id),
+            raw_dir=raw,
             out_dir=out,
             work_dir=work,
             map_dir=paths.map_dir(repo_root, args.map_id),

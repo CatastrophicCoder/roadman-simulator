@@ -476,7 +476,7 @@ public partial class Main : Node
             HideViews();
             State = MainState.LoadFailed;
             LoadingScreen.Visible = true;
-            LoadingScreen.ShowError($"Map {save.MapId} not installed: res://maps/{save.MapId}/{MapPack.ManifestFile} doesn't exist");
+            LoadingScreen.ShowError($"Map {save.MapId} not installed: {MapLoader.PackPathFor(save.MapId)}/{MapPack.ManifestFile} doesn't exist");
             return false;
         }
 

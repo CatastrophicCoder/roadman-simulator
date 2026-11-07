@@ -69,16 +69,19 @@ public class SettingsViewTest
     private ISceneRunner? _runner;
     private RecordingDisplayBackend _backend = new();
 
+    /// <summary>The suite runs on the test-area pack (no test here has a full-pack-only branch).</summary>
     [BeforeTest]
     public void SetUp()
     {
         _folder = BeginTest("settings-view");
         _backend = new RecordingDisplayBackend();
+        TestPacks.UseTestArea();
     }
 
     [AfterTest]
     public void CleanUp()
     {
+        TestPacks.UseFullPack();
         _runner?.Dispose();
         _runner = null;
         TearDown(_folder, _main);

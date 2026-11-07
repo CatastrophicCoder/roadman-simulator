@@ -54,9 +54,14 @@ public class WorldEdgeBreakingTest
 
     private const int PadDevice = 0;
 
+    /// <summary>The suite runs on the test-area pack; the tests that go through FindBreakerRoute use the full pack.</summary>
+    [BeforeTest]
+    public void UseTestPack() => TestPacks.UseTestArea();
+
     [AfterTest]
     public void CleanUp()
     {
+        TestPacks.UseFullPack();
         Inject(new InputEventKey { PhysicalKeycode = DismissKey, Pressed = false });
         Inject(new InputEventJoypadButton { Device = PadDevice, ButtonIndex = DismissButton, Pressed = false });
         Inject(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false });
@@ -77,6 +82,7 @@ public class WorldEdgeBreakingTest
     [TestCase]
     public async Task Ac12_CarSizedBreakerAt15MetresPerSecond_BreaksTheRoadblock_EntersTheVoidWithin3s_AndItsLoosePiecesInTheVoidAreFreed()
     {
+        TestPacks.UseFullPack(); // Full pack: FindBreakerRoute has an N/A branch for the test area (AssertNotFullPack).
         AssertPackPresent();
         var capture = new ErrorCapture();
         OS.AddLogger(capture);
@@ -250,6 +256,7 @@ public class WorldEdgeBreakingTest
     [TestCase]
     public async Task Ac12_CarSizedBreakerAt2MetresPerSecond_BreaksNothingAndStopsAtTheRoadblock()
     {
+        TestPacks.UseFullPack(); // Full pack: FindBreakerRoute has an N/A branch for the test area (AssertNotFullPack).
         AssertPackPresent();
         using var runner = ISceneRunner.Load(NewWorld(TestSeed, ShortTime, ShortTime), true);
         var world = await StartWorld(runner);
@@ -352,6 +359,7 @@ public class WorldEdgeBreakingTest
     [TestCase]
     public async Task Ac17_AfterABreak_ADeathAndRespawn_RestoresTheRoadblockAndFreesTheLoosePieces()
     {
+        TestPacks.UseFullPack(); // Full pack: FindBreakerRoute has an N/A branch for the test area (AssertNotFullPack).
         AssertPackPresent();
         using var runner = ISceneRunner.Load(NewWorld(TestSeed, ShortTime, ShortTime), true);
         var world = await StartWorld(runner);
@@ -396,6 +404,7 @@ public class WorldEdgeBreakingTest
     [TestCase]
     public async Task Ac17_AfterABreak_AMapReload_GivesAnUnbrokenSetWithNoLoosePieces()
     {
+        TestPacks.UseFullPack(); // Full pack: FindBreakerRoute has an N/A branch for the test area (AssertNotFullPack).
         AssertPackPresent();
         using var runner = ISceneRunner.Load(NewWorld(TestSeed, ShortTime, ShortTime), true);
         var world = await StartWorld(runner);

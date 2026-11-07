@@ -284,6 +284,7 @@ TODO: traffic AI, pedestrian AI, police, missions. Each of these gets a spec in 
 
 - Pipeline: pytest, using a fixed small test area. `tools/mapgen/tests/fixtures/raw/somero-test-area/` holds the Somero test area's raw data (OSM buildings, highway ways, water, land use and points of interest touching the area, without contributor metadata, the Topographic Database `rakennus` records intersecting it, DEM, lidar and orthophoto cuts, download manifest, attribution in `NOTICE.md`), laid out like `data/raw/<map-id>/`, so tests and CI can build the test-area pack offline. `tools/mapgen/scripts/cut_test_area.py` recreates it.
 - Core: xUnit on `Roadman.Core`.
-- Engine: gdUnit4Net, run headless.
+- Engine: gdUnit4Net, run headless. Tests that need only the test area load the test-area pack in `game/tests/packs/somero-test/` (built from the fixture by `.claude/scripts/build-test-pack.sh`, chosen with the test-only `MapLoader.PackFolderOverride`); tests with full-pack-only checks load `game/maps/somero/` (ADR 0020).
+- Test selection (ADR 0020): every gdUnit4 suite is in one feature group in `game/tests/test-groups.json`, with path rules from changed files to groups. `verify.sh --quick` (`/verify-quick`) runs only the selected groups and falls back to the full suite for anything it can't place. The full `/verify` and CI always run the whole suite.
 - Visual: screenshots from the camera presets in the map pack, taken with a short windowed run (ADR 0008). `--player` (debug builds) renders the player in the third-person view at a preset's look-at point.
 - CI (ADR 0010): `ci.yml` builds the Somero test-area pack from the committed fixture; it ignores `data-*` tags. `release.yml` fetches each map's pinned snapshot and builds the full packs from it (ADR 0011).

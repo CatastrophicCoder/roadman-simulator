@@ -46,6 +46,7 @@ public class OrthophotoDebugViewTest
     [AfterTest]
     public void DeleteImageFolder()
     {
+        TestPacks.UseFullPack();
         if (Directory.Exists(_folder))
         {
             Directory.Delete(_folder, recursive: true);

@@ -6,6 +6,7 @@ mono_crash.*
 
 # Generated map packs (regenerate with the pipeline: uv run mapgen build <map-id>)
 game/maps/*/
+game/tests/packs/
 
 # IDEs
 .idea/

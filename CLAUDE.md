@@ -25,7 +25,7 @@ Version 1 scope: one map area with no interiors, a few vehicle types, one player
 
 ## Commands
 
-Build and test commands are listed in `tools/mapgen/CLAUDE.md` and `game/CLAUDE.md`. Run all checks at once with `/verify` (or `.claude/scripts/verify.sh`).
+Build and test commands are listed in `tools/mapgen/CLAUDE.md` and `game/CLAUDE.md`. Run all checks at once with `/verify` (or `.claude/scripts/verify.sh`). For faster feedback while iterating, `/verify-quick` (`verify.sh --quick [<base>]`) runs only the gdUnit4 groups the changed files affect (`game/tests/test-groups.json`; anything it can't place runs the full suite), runs pytest only when a pipeline input changed, and skips the export check and screenshots. A quick run doesn't meet the definition of done: run the full `/verify` before every commit (ADR 0020).
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, including the headless startup step but without screenshots, against a test-area pack built from the committed fixture. Pushing a tag `v*` runs `release.yml`, which fetches each map's pinned raw data snapshot (`snapshot` in `map.yaml`), builds the packs from it with the current pipeline, writes the tag without its `v` into `application/config/version` (committed as `dev`; ADR 0018), and publishes Windows and macOS builds with the download manifests. It needs no secrets. A tag with `-` (for example `v0.1.0-test1`) makes a pre-release. Snapshots live on `data-<map-id>-<date>` releases (`data-<map-id>-<date>.<n>`, n ≥ 2, when that date already has one; an existing data release is never changed), which never become the latest release and don't run CI. See ADRs 0010 and 0011.
 
@@ -58,10 +58,11 @@ Each feature goes through the loop in `docs/project-outline.md` ("Claude Code wo
 | --- | --- |
 | `/spec <feature>` | Drafts `docs/specs/<feature>.md` (goal, behaviour, acceptance criteria, test ideas, open questions). No code. Status stays `Draft` until the user approves it. |
 | `/implement <spec>` | Implements an `Approved` spec with tests: plan, subagents, `/verify`, reviewer, then commits (no push). |
-| `/verify` | Runs `.claude/scripts/verify.sh`: dotnet build, test and format check, pytest and ruff, headless Godot import, gdUnit4, an exported Windows build check, screenshots. Reports PASS, FAIL or N/A (not yet available) per step. |
+| `/verify` | Runs `.claude/scripts/verify.sh`: dotnet build, test and format check, pytest and ruff, the gdUnit4 group map check, the test-pack rebuild when stale, headless Godot import, gdUnit4, an exported Windows build check, screenshots. Reports PASS, FAIL, WARN or N/A (not yet available) per step. The gate before every commit. |
+| `/verify-quick [<base>]` | Runs `verify.sh --quick`: the same steps, but gdUnit4 only for the groups the changed files select, pytest only when a pytest input changed, no export check or screenshots. For iterating only; `--dry-run` shows the selection. |
 | `/regen-map <map-id>` | Runs `.claude/scripts/regen-map.sh`: `uv run mapgen build <map-id>`, then the headless Godot import. |
 
-`/spec`, `/implement` and `/regen-map` only run when the user types them. Claude may run `/verify` on its own.
+`/spec`, `/implement` and `/regen-map` only run when the user types them. Claude may run `/verify` and `/verify-quick` on its own; commits need a full `/verify`.
 
 **Subagents** (`.claude/agents/`)
 

@@ -175,6 +175,19 @@ def test_cli_build_out_option(fixture_build: FixtureBuild, tmp_path: Path) -> No
     assert (out / "manifest.json").is_file() and not (root / "game").exists()
 
 
+def test_cli_build_raw_option(fixture_build: FixtureBuild, tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    shutil.copytree(fixture_build.repo / "maps", root / "maps")
+    (root / "tools" / "mapgen").mkdir(parents=True)
+    raw = shutil.copytree(fixture_build.raw_dir, tmp_path / "fixture-raw")
+    out = tmp_path / "pack"
+    args = ["--repo-root", str(root), "build", "testtown", "--area", "test"]
+    assert main([*args, "--raw", str(raw), "--out", str(out)]) == EXIT_OK
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert (manifest["map_id"], manifest["area"]) == ("testtown", "test")
+    assert not (root / "tools" / "mapgen" / "data").exists()  # the default raw folder
+
+
 def test_build_fails_when_a_read_file_has_no_licence(
     tmp_repo: TmpRepo, fixture_data: dict, tmp_path: Path
 ) -> None:

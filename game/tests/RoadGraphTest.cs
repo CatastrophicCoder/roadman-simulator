@@ -17,8 +17,7 @@ using Path = System.IO.Path;
 namespace Roadman.Tests;
 
 /// <summary>
-/// The road graph and road collision in Godot, on the Somero pack (full or test area: <c>/regen-map somero</c>, or
-/// the CI test-area build from the committed fixture). Edges and the origin bridge are found in <c>road_graph.json</c>. Criterion numbers (<c>Ac</c>) refer to
+/// The road graph and road collision in Godot, on the Somero test-area pack (<see cref="TestPacks"/>; ADR 0020). Edges and the origin bridge are found in <c>road_graph.json</c>. Criterion numbers (<c>Ac</c>) refer to
 /// <c>docs/specs/roads-and-road-graph.md</c>. Like <see cref="MapLoaderTest"/>, these fail rather than skip without
 /// the pack.
 /// </summary>
@@ -46,9 +45,14 @@ public class RoadGraphTest
 
     private string _tempPack = "";
 
+    /// <summary>The suite runs on the test-area pack (no test here has a full-pack-only branch).</summary>
+    [BeforeTest]
+    public void UseTestPack() => TestPacks.UseTestArea();
+
     [AfterTest]
     public void DeleteTemporaryPack()
     {
+        TestPacks.UseFullPack();
         if (_tempPack != "" && Directory.Exists(_tempPack))
         {
             Directory.Delete(_tempPack, recursive: true);
@@ -65,7 +69,7 @@ public class RoadGraphTest
         await runner.SimulateFrames(2);
         var loader = Loader(runner);
 
-        var path = $"res://maps/{MapId}/{MapPack.RoadGraphFile}";
+        var path = $"{TestPacks.PackPath}/{MapPack.RoadGraphFile}";
         var file = JsonNode.Parse(FileAccess.GetFileAsString(path))!;
         AssertThat(loader.RoadGraph).IsNotNull();
         var graph = loader.RoadGraph!;
@@ -467,6 +471,7 @@ public class RoadGraphTest
     {
         AssertPackPresent();
         var mapId = $"tmp-empty-road-graph-{System.Guid.NewGuid():N}"[..30];
+        var source = TestPacks.PackPath; // Before the copy clears the override.
         CopyPackWithoutRoadGraph(mapId);
         File.WriteAllText(
             Path.Combine(_tempPack, MapPack.RoadGraphFile),
@@ -474,7 +479,7 @@ public class RoadGraphTest
         // The place data and the boundary too, so the only difference from a complete pack is the empty graph.
         foreach (var file in new[] { MapPack.BuildingsFile, MapPack.PoisFile, MapPack.BoundaryFile })
         {
-            var json = JsonNode.Parse(File.ReadAllText(ProjectSettings.GlobalizePath($"res://maps/{MapId}/{file}")))!;
+            var json = JsonNode.Parse(File.ReadAllText(ProjectSettings.GlobalizePath($"{source}/{file}")))!;
             json["map_id"] = mapId;
             File.WriteAllText(Path.Combine(_tempPack, file), json.ToJsonString());
         }
@@ -609,11 +614,13 @@ public class RoadGraphTest
     /// <summary>
     /// Copies the Somero pack's manifest (with <paramref name="mapId"/>) and tile import files to a temporary pack
     /// without <c>road_graph.json</c>. The import files keep pointing at the already imported tile scenes; their
-    /// UIDs are dropped so they don't clash with the originals.
+    /// UIDs are dropped so they don't clash with the originals. The source is <see cref="TestPacks.PackPath"/>; the
+    /// override is cleared, so the temporary map id loads from <c>res://maps/&lt;mapId&gt;</c>.
     /// </summary>
     private int CopyPackWithoutRoadGraph(string mapId)
     {
-        var source = ProjectSettings.GlobalizePath($"res://maps/{MapId}");
+        var source = ProjectSettings.GlobalizePath(TestPacks.PackPath);
+        TestPacks.UseFullPack(); // The override would load the source pack instead of the temporary one.
         _tempPack = ProjectSettings.GlobalizePath($"res://maps/{mapId}");
         Directory.CreateDirectory(Path.Combine(_tempPack, "tiles"));
         var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(source, MapPack.ManifestFile)))!;
@@ -642,9 +649,9 @@ public class RoadGraphTest
 
     private static void AssertPackPresent()
     {
-        var graph = $"res://maps/{MapId}/{MapPack.RoadGraphFile}";
+        var graph = $"{TestPacks.PackPath}/{MapPack.RoadGraphFile}";
         AssertBool(FileAccess.FileExists(graph))
-            .OverrideFailureMessage($"no road graph at {graph}; {MapPack.RegenHint(MapId)}")
+            .OverrideFailureMessage($"no road graph at {graph}; {TestPacks.MissingPackHint(MapId)}")
             .IsTrue();
     }
 }

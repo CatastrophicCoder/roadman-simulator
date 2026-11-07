@@ -35,7 +35,8 @@ namespace Roadman.Tests;
 /// <see cref="RigidBody3D"/> on <see cref="CollisionLayers.Barrier"/> given to <see cref="World.TrackVoidBody"/>, and its
 /// <see cref="IVoidFaller"/> is <see cref="TestVoidFaller"/>.
 /// <para>
-/// They run on whichever Somero pack is built (the full pack, or the CI test area from the committed fixture), so
+/// Most run on the test-area pack (<see cref="TestPacks"/>; ADR 0020), and the full-pack checks (Ac8, Ac9) on whichever
+/// Somero pack is built (the full pack, or the CI test area from the committed fixture), so
 /// every position is derived from the loaded pack: barrier items from <see cref="Barriers.Layouts"/> (built from
 /// <see cref="MapLoader.Boundary"/>), ring points, outward directions and ledge heights from
 /// <see cref="MapLoader.EdgeGeometry"/>, ground heights from ray hits. A pack without an item type the criterion needs
@@ -153,11 +154,16 @@ public class WorldEdgeTest
     private string _tempPack = "";
     private Variant? _savedMapIdSetting;
 
+    /// <summary>The suite runs on the test-area pack; Ac8 and Ac9, which reach <see cref="AssertNotFullPack"/>, use the full pack.</summary>
+    [BeforeTest]
+    public void UseTestPack() => TestPacks.UseTestArea();
+
     [AfterTest]
     public void CleanUp()
     {
         ReleaseAll();
         DebugBuild.Override = null;
+        TestPacks.UseFullPack();
         if (_tempPack != "" && Directory.Exists(_tempPack))
         {
             Directory.Delete(_tempPack, recursive: true);
@@ -281,6 +287,7 @@ public class WorldEdgeTest
     [TestCase]
     public async Task Ac8_NoBarrierOverlapsABuildingOrAVoidPrism_AndEveryRoadblockStandStandsOnTheGroundOrRoad()
     {
+        TestPacks.UseFullPack(); // Full pack: the test has an N/A branch for the test area (AssertNotFullPack).
         AssertPackPresent();
         using var runner = ISceneRunner.Load(NewWorld(TestSeed), true);
         var world = await StartWorld(runner);
@@ -442,16 +449,25 @@ public class WorldEdgeTest
     // ----- Criterion 9: barriers stop the player -----
 
     [TestCase]
-    public async Task Ac9_RunningIntoALandFence_StopsThePlayerInsideTheBoundaryWithin3sAndBreaksNothing() =>
+    public async Task Ac9_RunningIntoALandFence_StopsThePlayerInsideTheBoundaryWithin3sAndBreaksNothing()
+    {
+        TestPacks.UseFullPack(); // Full pack: the test has an N/A branch for the test area (AssertNotFullPack).
         await AssertRunIntoBarrierStops(BarrierKind.LandFence);
+    }
 
     [TestCase]
-    public async Task Ac9_RunningIntoAWaterFence_StopsThePlayerInsideTheBoundaryWithin3sAndBreaksNothing() =>
+    public async Task Ac9_RunningIntoAWaterFence_StopsThePlayerInsideTheBoundaryWithin3sAndBreaksNothing()
+    {
+        TestPacks.UseFullPack(); // Full pack: the test has an N/A branch for the test area (AssertNotFullPack).
         await AssertRunIntoBarrierStops(BarrierKind.WaterFence);
+    }
 
     [TestCase]
-    public async Task Ac9_RunningIntoARoadblock_StopsThePlayerInsideTheBoundaryWithin3sAndBreaksNothing() =>
+    public async Task Ac9_RunningIntoARoadblock_StopsThePlayerInsideTheBoundaryWithin3sAndBreaksNothing()
+    {
+        TestPacks.UseFullPack(); // Full pack: the test has an N/A branch for the test area (AssertNotFullPack).
         await AssertRunIntoBarrierStops(BarrierKind.Roadblock);
+    }
 
     // ----- Criterion 10: jumping a fence -----
 
@@ -1303,7 +1319,7 @@ public class WorldEdgeTest
             OS.RemoveLogger(capture);
         }
 
-        var path = $"res://maps/{MapId}/{MapPack.BoundaryFile}";
+        var path = $"{TestPacks.PackPath}/{MapPack.BoundaryFile}";
         var errors = capture.ErrorsOnly.Where(e => e.Contains("no player respawn")).ToList();
         AssertInt(errors.Count).OverrideFailureMessage($"no single respawn error; got: {string.Join(" | ", capture.ErrorsOnly)}").IsEqual(1);
         AssertThat(errors[0]).Contains(path).Contains($"/regen-map {MapId}").Contains($"none of {attempts} draws");
@@ -1755,11 +1771,13 @@ public class WorldEdgeTest
     /// Copies the Somero pack's manifest and tile import files to a temporary pack <paramref name="mapId"/>, with
     /// <c>road_graph.json</c>, <c>buildings.json</c> and <c>pois.json</c> (their <c>map_id</c> set to it), and
     /// <c>boundary.json</c> changed by <paramref name="boundary"/>, or left out when it is null (as
-    /// <see cref="PlayerOnFootTest"/> does).
+    /// <see cref="PlayerOnFootTest"/> does). The source is <see cref="TestPacks.PackPath"/>; the override is cleared, so
+    /// the temporary map id loads from <c>res://maps/&lt;mapId&gt;</c>.
     /// </summary>
     private int CopyPack(string mapId, Action<JsonNode>? boundary)
     {
-        var source = ProjectSettings.GlobalizePath($"res://maps/{MapId}");
+        var source = ProjectSettings.GlobalizePath(TestPacks.PackPath);
+        TestPacks.UseFullPack(); // The override would load the source pack instead of the temporary one.
         _tempPack = ProjectSettings.GlobalizePath($"res://maps/{mapId}");
         Directory.CreateDirectory(Path.Combine(_tempPack, "tiles"));
         var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(source, MapPack.ManifestFile)))!;
@@ -2683,8 +2701,8 @@ public class WorldEdgeTest
     {
         foreach (var file in new[] { MapPack.ManifestFile, MapPack.RoadGraphFile, MapPack.BuildingsFile, MapPack.PoisFile, MapPack.BoundaryFile })
         {
-            var path = $"res://maps/{MapId}/{file}";
-            AssertBool(FileAccess.FileExists(path)).OverrideFailureMessage($"no {file} at {path}; {MapPack.RegenHint(MapId)}").IsTrue();
+            var path = $"{TestPacks.PackPath}/{file}";
+            AssertBool(FileAccess.FileExists(path)).OverrideFailureMessage($"no {file} at {path}; {TestPacks.MissingPackHint(MapId)}").IsTrue();
         }
     }
 }
