@@ -16,7 +16,7 @@ public enum PerfSpot
 /// <summary>
 /// The performance tool's user arguments (after <c>--</c> on the Godot command line; <c>docs/specs/world-edge-game.md</c>,
 /// "Performance"):
-/// <c>--perf &lt;spawn|roadblock&gt; &lt;out.json&gt; [--map &lt;map-id&gt;] [--seed &lt;n&gt;] [--no-world-edge] [--no-space-sky] [--warmup &lt;frames&gt;] [--frames &lt;n&gt;]</c>.
+/// <c>--perf &lt;spawn|roadblock&gt; &lt;out.json&gt; [--map &lt;map-id&gt;] [--seed &lt;n&gt;] [--no-world-edge] [--no-space-sky] [--no-minimap] [--warmup &lt;frames&gt;] [--frames &lt;n&gt;]</c>.
 /// <c>--seed</c> belongs to <see cref="SeedArg"/>; here its value is only checked and skipped.
 /// </summary>
 /// <param name="Spot">Where the player stands.</param>
@@ -26,6 +26,7 @@ public enum PerfSpot
 /// <param name="SpaceSky">False with <c>--no-world-edge</c> or <c>--no-space-sky</c>: the plain procedural day sky.</param>
 /// <param name="WarmupFrames">Frames before the measurement starts.</param>
 /// <param name="Frames">Frames measured.</param>
+/// <param name="Minimap">False with <c>--no-minimap</c>: no minimap is added (<c>docs/specs/minimap.md</c>, "Godot").</param>
 public sealed record PerfArgs(
     PerfSpot Spot,
     string OutputPath,
@@ -33,12 +34,14 @@ public sealed record PerfArgs(
     bool WorldEdge = true,
     bool SpaceSky = true,
     int WarmupFrames = PerfArgs.DefaultWarmupFrames,
-    int Frames = PerfArgs.DefaultFrames)
+    int Frames = PerfArgs.DefaultFrames,
+    bool Minimap = true)
 {
     public const string PerfFlag = "--perf";
     public const string MapFlag = "--map";
     public const string NoWorldEdgeFlag = "--no-world-edge";
     public const string NoSpaceSkyFlag = "--no-space-sky";
+    public const string NoMinimapFlag = "--no-minimap";
     public const string WarmupFlag = "--warmup";
     public const string FramesFlag = "--frames";
     public const string SpawnValue = "spawn";
@@ -54,7 +57,7 @@ public sealed record PerfArgs(
     public const string RoadblockId = "roadblock:cut:way/1445392542:0";
 
     private const string Usage =
-        $"{PerfFlag} <{SpawnValue}|{RoadblockValue}> <out.json> [{MapFlag} <map-id>] [{SeedArg.Flag} <n>] [{NoWorldEdgeFlag}] [{NoSpaceSkyFlag}] [{WarmupFlag} <frames>] [{FramesFlag} <n>]";
+        $"{PerfFlag} <{SpawnValue}|{RoadblockValue}> <out.json> [{MapFlag} <map-id>] [{SeedArg.Flag} <n>] [{NoWorldEdgeFlag}] [{NoSpaceSkyFlag}] [{NoMinimapFlag}] [{WarmupFlag} <frames>] [{FramesFlag} <n>]";
 
     /// <summary>Parses the user arguments.</summary>
     /// <returns>Null when <c>--perf</c> isn't given; other user arguments are then left alone.</returns>
@@ -76,6 +79,7 @@ public sealed record PerfArgs(
         string? mapId = null;
         var noWorldEdge = false;
         var noSpaceSky = false;
+        var noMinimap = false;
         int? warmup = null;
         int? frames = null;
         var seenSeed = false;
@@ -129,6 +133,14 @@ public sealed record PerfArgs(
 
                     noSpaceSky = true;
                     break;
+                case NoMinimapFlag:
+                    if (noMinimap)
+                    {
+                        throw new ArgumentException($"{NoMinimapFlag} is given more than once");
+                    }
+
+                    noMinimap = true;
+                    break;
                 case WarmupFlag:
                     if (warmup is not null)
                     {
@@ -171,7 +183,8 @@ public sealed record PerfArgs(
             WorldEdge: !noWorldEdge,
             SpaceSky: !noWorldEdge && !noSpaceSky,
             WarmupFrames: warmup ?? DefaultWarmupFrames,
-            Frames: frames ?? DefaultFrames);
+            Frames: frames ?? DefaultFrames,
+            Minimap: !noMinimap);
     }
 
     private static int Count(IReadOnlyList<string> args, int index, string flag, int minimum)

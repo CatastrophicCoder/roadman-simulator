@@ -36,7 +36,8 @@
     ".github/**",
     "docs/specs/place-information.md",
     "docs/specs/roads-and-road-graph.md",
-    "docs/specs/world-edge-pipeline.md"
+    "docs/specs/world-edge-pipeline.md",
+    "game/Roadman.Core.Tests/Items/ItemCatalogTests.cs"
   ],
   "rules": [
     { "comment": "Documentation runs no engine test.", "glob": "docs/**", "targets": ["none"] },

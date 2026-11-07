@@ -83,6 +83,13 @@ stage output in the work folder, so they test what the game will load.
   overlaps; float32 slack 0.2 mm times the outline length); and the face reaches
   `cliff.bottom_y` all along the cap's outline (samples every 0.5 m within 1 mm of a
   vertical face's bottom edge).
+- Minimap (docs/specs/minimap.md, `check_minimap`): `minimap.json` matches its committed
+  schema and the manifest's map id and area; its bounds span width x height pixels of
+  `m_per_px` and cover every tile; `minimap.png` is 8-bit RGBA of that size, every pixel
+  is a palette colour, and a pixel whose centre is outside the `boundary.json` ring has
+  alpha 0, inside alpha 255 (centres within `MINIMAP_RING_SLACK_M` of the ring, which
+  `boundary.json` rounds to 1 µm, aren't judged); `minimap.png.import` holds exactly
+  `IMPORT_CONTENT`.
 - Custom boundary polygon (`check_custom_boundary`, only when `boundary.json` has
   `source` "custom"): every terrain triangle, road graph node and edge polyline, POI
   position and outline, and kept building centroid lies inside the polygon grown by 1 mm.
@@ -629,6 +636,7 @@ def check_pack(
     roadblocks = check_world_edge(pack_dir, work_dir, manifest, world_edge)
     check_cliff(pack_dir, manifest, tiles)
     check_custom_boundary(pack_dir, work_dir, manifest, tiles)
+    check_minimap(pack_dir, manifest)
     return PackSummary(len(manifest["tiles"]), glb_buildings, road_summary, poi_count, roadblocks)
 
 
@@ -2163,3 +2171,111 @@ def check_custom_boundary(
             "custom boundary",
         )
     return True
+
+
+MINIMAP_RING_SLACK_M = 1e-5  # boundary.json rounds the ring to 1 µm
+MINIMAP_BOUNDS_TOLERANCE = 1e-9  # relative: bounds = width x m_per_px in float arithmetic
+
+
+def check_minimap(pack_dir: Path, manifest: dict[str, Any]) -> None:
+    """The minimap checks on a staged pack (see the module docstring)."""
+    import warnings
+
+    import rasterio
+    from rasterio.errors import NotGeoreferencedWarning
+
+    from mapgen.build.minimap import (
+        IMPORT_CONTENT,
+        MINIMAP_IMPORT,
+        MINIMAP_JSON,
+        MINIMAP_PNG,
+        MINIMAP_SCHEMA,
+        PALETTE,
+        MinimapError,
+    )
+    from mapgen.build.world_edge.ring import Ring
+
+    path = pack_dir / MINIMAP_JSON
+    _require(path.is_file(), f"{MINIMAP_JSON} is missing")
+    document = _json(path)
+    try:
+        MINIMAP_SCHEMA.validate(document, MINIMAP_JSON)
+    except MinimapError as exc:
+        raise PackCheckError(str(exc)) from exc
+    _require(
+        (document["map_id"], document["area"]) == (manifest["map_id"], manifest["area"]),
+        f"{MINIMAP_JSON}: map_id/area differ from the manifest",
+    )
+    importer = pack_dir / MINIMAP_IMPORT
+    _require(importer.is_file(), f"{MINIMAP_IMPORT} is missing")
+    _require(
+        importer.read_bytes() == IMPORT_CONTENT.encode("utf-8"),
+        f"{MINIMAP_IMPORT} doesn't hold exactly {IMPORT_CONTENT!r}",
+    )
+
+    m, width, height = document["m_per_px"], document["width"], document["height"]
+    b = document["bounds_local"]
+    for low, high, pixels in (("min_x", "max_x", width), ("min_z", "max_z", height)):
+        span = b[high] - b[low]
+        _require(
+            abs(span - pixels * m) <= MINIMAP_BOUNDS_TOLERANCE * max(1.0, abs(pixels * m)),
+            f"{MINIMAP_JSON}: {high} - {low} is {span}, not {pixels} x {m}",
+        )
+    for tile in manifest["tiles"]:
+        min_x, min_n, max_x, max_n = tile["bounds_local"]
+        _require(
+            b["min_x"] <= min_x + TOLERANCE
+            and b["max_x"] >= max_x - TOLERANCE
+            and b["min_z"] <= -max_n + TOLERANCE
+            and b["max_z"] >= -min_n - TOLERANCE,
+            f"{MINIMAP_JSON}: bounds_local doesn't cover {tile['id']}",
+        )
+
+    png = pack_dir / MINIMAP_PNG
+    _require(png.is_file(), f"{MINIMAP_PNG} is missing")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NotGeoreferencedWarning)
+        with rasterio.open(png) as src:
+            _require(src.driver == "PNG", f"{MINIMAP_PNG} isn't a PNG")
+            _require(
+                (src.width, src.height) == (width, height),
+                f"{MINIMAP_PNG} is {src.width} x {src.height} px, {MINIMAP_JSON} says "
+                f"{width} x {height}",
+            )
+            _require(
+                src.count == 4 and all(d == "uint8" for d in src.dtypes),
+                f"{MINIMAP_PNG} isn't 8-bit RGBA",
+            )
+            rgba = src.read()
+    packed = np.ascontiguousarray(np.moveaxis(rgba, 0, -1)).view("<u4").ravel()
+    colours = np.array(list(PALETTE.values()), dtype=np.uint8).view("<u4").ravel()
+    known = np.isin(packed, colours)
+    _require(
+        known.all(),
+        f"{MINIMAP_PNG}: {int((~known).sum())} pixel(s) with a colour not in the palette",
+    )
+
+    ring_path = pack_dir / "boundary.json"
+    _require(ring_path.is_file(), "boundary.json is missing (the minimap check needs its ring)")
+    points = [_local_xz(p) for p in _json(ring_path)["boundary"]["ring"]]
+    polygon = Ring.from_coords(points).polygon()
+    shapely.prepare(polygon)
+    xs = b["min_x"] + (np.arange(width) + 0.5) * m
+    ns = -b["min_z"] - (np.arange(height) + 0.5) * m
+    gx, gn = np.meshgrid(xs, ns)
+    inside = shapely.contains_xy(polygon, gx.ravel(), gn.ravel())
+    alpha = rgba[3].ravel()
+    wrong = np.flatnonzero(np.where(inside, alpha != 255, alpha != 0))
+    if len(wrong):
+        distance = shapely.distance(
+            polygon.exterior, shapely.points(gx.ravel()[wrong], gn.ravel()[wrong])
+        )
+        wrong = wrong[distance > MINIMAP_RING_SLACK_M]
+    if len(wrong):
+        row, col = divmod(int(wrong[0]), width)
+        raise PackCheckError(
+            f"{MINIMAP_PNG}: {len(wrong)} pixel(s) with the wrong alpha for their side of the "
+            f"boundary ring, first: row {row}, column {col} (centre x {xs[col]:.3f}, z "
+            f"{-ns[row]:.3f}, {'inside' if inside[wrong[0]] else 'outside'}, alpha "
+            f"{int(alpha[wrong[0]])})"
+        )

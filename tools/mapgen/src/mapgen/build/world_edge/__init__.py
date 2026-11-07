@@ -53,6 +53,7 @@ from mapgen.build.world_edge.water import (
     WaterCrossing,
     WaterFeature,
     disagreements,
+    edge_water_areas,
     ids_on,
     line_crossings,
     water_crossings,
@@ -313,7 +314,7 @@ def water_setup(
     later). Raises `WorldEdgeError` for an OSM water relation left out near the boundary
     when the OSM areas are used."""
     report: dict[str, Any] = {"mode": loaded.edge_water_mode, "source": loaded.edge_water_source}
-    areas = [WaterFeature(w.id, w.geometry) for w in loaded.edge_water_areas]
+    areas = edge_water_areas(loaded)
     if loaded.edge_water_mode == "osm":
         reach = cfg.cliff.ledge_m + cfg.void.width_m
         near, unlocated = _check_left_out(loaded, ring, reach)

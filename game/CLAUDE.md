@@ -4,7 +4,7 @@ Godot 4 .NET project `RoadmanSimulator` (Forward+ renderer, Jolt physics), scrip
 
 ## Layout
 
-- `Roadman.Core/`: engine-free C# logic (road graph, routing, wanted level, missions, death and respawn, items in `Items/`, saves and settings in `Saves/` and `Settings/`). No Godot references. Tests in `Roadman.Core.Tests/` (xUnit).
+- `Roadman.Core/`: engine-free C# logic (road graph, routing, wanted level, missions, death and respawn, items in `Items/`, saves and settings in `Saves/` and `Settings/`, the minimap's geometry in `Minimap/`). No Godot references. Tests in `Roadman.Core.Tests/` (xUnit).
 - `scenes/`, `scripts/`: Godot scenes and node scripts. `scripts/autoload/` holds `Events` (signal bus: `MoneyChanged(money)`, `GearChanged`, `EquipmentChanged(slot)` (the `EquipSlot` as an int), `WantedLevelChanged(level)`, `PlayerDied`) and `GameState` (owns `PlayerState`, built with `ItemCatalog.Default`, and forwards its events to `Events`).
 - `tests/`: engine-dependent tests (gdUnit4Net). Built in `Debug` only; export builds contain no test code.
 - `addons/`: gdUnit4, and Terrain3D if ADR 0004 chooses it.

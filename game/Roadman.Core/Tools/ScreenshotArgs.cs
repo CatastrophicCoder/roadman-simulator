@@ -1,11 +1,12 @@
 using Roadman.Core.Items;
 using Roadman.Core.Maps;
+using Roadman.Core.Settings;
 
 namespace Roadman.Core.Tools;
 
 /// <summary>
 /// The screenshot tool's user arguments (after <c>--</c> on the Godot command line):
-/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots|inventory&gt;] [--give &lt;id,...&gt;]</c>.
+/// <c>--screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;camera_presets.json&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots|inventory&gt;] [--give &lt;id,...&gt;] [--minimap-corner &lt;top-left|top-right|bottom-left|bottom-right&gt;]</c>.
 /// <c>--seed &lt;n&gt;</c> may stand among them; it belongs to <see cref="SeedArg"/>, which reads it, and is skipped here
 /// (its value is still checked and a repeat is rejected, so a bad seed is an argument error of the screenshot run too).
 /// <c>--give &lt;id,...&gt;</c> is handled the same way: <see cref="GiveArg"/> reads it (the world applies it), and here its
@@ -45,6 +46,10 @@ namespace Roadman.Core.Tools;
 /// can't be combined with <paramref name="Player"/>, <paramref name="Inspect"/>, <paramref name="Death"/>,
 /// <paramref name="Orthophoto"/> or <paramref name="RoadGraph"/>. Null: no menu.
 /// </param>
+/// <param name="MinimapCorner">
+/// The minimap's corner in a <paramref name="Player"/> capture (<c>docs/specs/minimap.md</c>, "Godot"). Only with
+/// <paramref name="Player"/>; the debug-build check is the tool's. Null: the default corner.
+/// </param>
 public sealed record ScreenshotArgs(
     string Preset,
     string OutputPath,
@@ -55,7 +60,8 @@ public sealed record ScreenshotArgs(
     bool Inspect = false,
     bool Player = false,
     DeathShot? Death = null,
-    MenuShot? Menu = null)
+    MenuShot? Menu = null,
+    MinimapCorner? MinimapCorner = null)
 {
     public const string ScreenshotFlag = "--screenshot";
     public const string PresetsFlag = "--presets";
@@ -73,11 +79,19 @@ public sealed record ScreenshotArgs(
     public const string MenuSettingsValue = "settings";
     public const string MenuSlotsValue = "slots";
     public const string MenuInventoryValue = "inventory";
+    public const string MinimapCornerFlag = "--minimap-corner";
+    public const string MinimapTopLeftValue = "top-left";
+    public const string MinimapTopRightValue = "top-right";
+    public const string MinimapBottomLeftValue = "bottom-left";
+    public const string MinimapBottomRightValue = "bottom-right";
 
     private const string Usage =
-        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{PlayerFlag}] [{DeathFlag} <{DeathFallValue}|{DeathScreenValue}>] [{MenuFlag} <{MenuValues}>] [{GiveArg.Flag} <id,...>] [{SeedArg.Flag} <n>]";
+        $"{ScreenshotFlag} <preset> <out.png> [{PresetsFlag} <file>] [{MapFlag} <map-id>] [{OrthophotoFlag}] [{RoadGraphFlag}] [{InspectFlag}] [{PlayerFlag}] [{DeathFlag} <{DeathFallValue}|{DeathScreenValue}>] [{MenuFlag} <{MenuValues}>] [{GiveArg.Flag} <id,...>] [{MinimapCornerFlag} <{MinimapCornerValues}>] [{SeedArg.Flag} <n>]";
 
     private const string MenuValues = $"{MenuMainValue}|{MenuPauseValue}|{MenuSettingsValue}|{MenuSlotsValue}|{MenuInventoryValue}";
+
+    private const string MinimapCornerValues =
+        $"{MinimapTopLeftValue}|{MinimapTopRightValue}|{MinimapBottomLeftValue}|{MinimapBottomRightValue}";
 
     /// <summary>
     /// Parses the user arguments.
@@ -94,7 +108,8 @@ public sealed record ScreenshotArgs(
     /// <c>inventory</c>, <c>--give</c> is repeated or its list is missing, empty, has a blank entry or an id not in
     /// <see cref="ItemCatalog.Default"/>, or
     /// <c>--menu</c> is given with <c>--player</c>, <c>--inspect</c>, <c>--death</c>, <c>--orthophoto</c> or
-    /// <c>--road-graph</c>.
+    /// <c>--road-graph</c>, or <c>--minimap-corner</c> is repeated, has no value or an unknown one, or is given without
+    /// <c>--player</c>.
     /// </exception>
     public static ScreenshotArgs? Parse(IReadOnlyList<string> userArgs)
     {
@@ -119,6 +134,7 @@ public sealed record ScreenshotArgs(
         MenuShot? menu = null;
         var seenSeed = false;
         var seenGive = false;
+        MinimapCorner? minimapCorner = null;
 
         for (var i = 0; i < userArgs.Count; i++)
         {
@@ -215,6 +231,16 @@ public sealed record ScreenshotArgs(
                     menu = ParseMenu(menuValue)
                         ?? throw new ArgumentException($"{MenuFlag} needs {MenuValues}, got '{menuValue}'");
                     break;
+                case MinimapCornerFlag:
+                    if (minimapCorner is not null)
+                    {
+                        throw new ArgumentException($"{MinimapCornerFlag} is given more than once");
+                    }
+
+                    var cornerValue = Value(userArgs, ++i, $"{MinimapCornerFlag} needs {MinimapCornerValues}");
+                    minimapCorner = ParseMinimapCorner(cornerValue)
+                        ?? throw new ArgumentException($"{MinimapCornerFlag} needs {MinimapCornerValues}, got '{cornerValue}'");
+                    break;
                 case SeedArg.Flag:
                     // Read by SeedArg.Parse; here a repeat is rejected and the value is only checked and skipped.
                     if (seenSeed)
@@ -278,8 +304,37 @@ public sealed record ScreenshotArgs(
             }
         }
 
-        return new ScreenshotArgs(preset!, output, presetsPath, mapId, orthophoto, roadGraph, inspect, player, death, menu);
+        if (minimapCorner is not null && !player)
+        {
+            // Only --player captures show the minimap.
+            throw new ArgumentException($"{MinimapCornerFlag} needs {PlayerFlag}");
+        }
+
+        return new ScreenshotArgs(
+            preset!, output, presetsPath, mapId, orthophoto, roadGraph, inspect, player, death, menu, minimapCorner);
     }
+
+    /// <summary>The <see cref="Settings.MinimapCorner"/> of a <c>--minimap-corner</c> value; null when it isn't one.</summary>
+    public static MinimapCorner? ParseMinimapCorner(string value) =>
+        value switch
+        {
+            MinimapTopLeftValue => Settings.MinimapCorner.TopLeft,
+            MinimapTopRightValue => Settings.MinimapCorner.TopRight,
+            MinimapBottomLeftValue => Settings.MinimapCorner.BottomLeft,
+            MinimapBottomRightValue => Settings.MinimapCorner.BottomRight,
+            _ => null,
+        };
+
+    /// <summary>The <c>--minimap-corner</c> value of <paramref name="corner"/>.</summary>
+    public static string MinimapCornerValue(MinimapCorner corner) =>
+        corner switch
+        {
+            Settings.MinimapCorner.TopLeft => MinimapTopLeftValue,
+            Settings.MinimapCorner.TopRight => MinimapTopRightValue,
+            Settings.MinimapCorner.BottomLeft => MinimapBottomLeftValue,
+            Settings.MinimapCorner.BottomRight => MinimapBottomRightValue,
+            _ => throw new ArgumentOutOfRangeException(nameof(corner), corner, "not a minimap corner"),
+        };
 
     /// <summary>The <see cref="MenuShot"/> of a <c>--menu</c> value; null when it isn't one.</summary>
     public static MenuShot? ParseMenu(string value) =>
@@ -362,7 +417,8 @@ public static class ScreenshotExitCode
     /// debug build, with <c>--inspect</c>, or when the player didn't spawn or reach the ground, or <c>--death</c> outside a
     /// debug build, with <c>--player</c> or <c>--inspect</c>, without a spawned player, without world-edge geometry, or
     /// when the death sequence doesn't reach the stage to capture, or <c>--menu</c> outside a debug build, with another
-    /// debug flag, or without <c>Main</c>, or an invalid <c>--give</c> list.
+    /// debug flag, or without <c>Main</c>, or an invalid <c>--give</c> list, or <c>--minimap-corner</c> without
+    /// <c>--player</c>, with an unknown value or outside a debug build.
     /// </summary>
     public const int Error = 1;
 

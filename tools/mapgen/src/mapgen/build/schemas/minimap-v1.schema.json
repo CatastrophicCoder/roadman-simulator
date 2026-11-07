@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "minimap-v1.schema.json",
+  "$defs": {
+    "BoundsLocal": {
+      "additionalProperties": false,
+      "properties": {
+        "min_x": {
+          "title": "Min X",
+          "type": "number"
+        },
+        "max_x": {
+          "title": "Max X",
+          "type": "number"
+        },
+        "min_z": {
+          "description": "north edge (Godot z = -north)",
+          "title": "Min Z",
+          "type": "number"
+        },
+        "max_z": {
+          "description": "south edge",
+          "title": "Max Z",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min_x",
+        "max_x",
+        "min_z",
+        "max_z"
+      ],
+      "title": "BoundsLocal",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "map_id": {
+      "title": "Map Id",
+      "type": "string"
+    },
+    "area": {
+      "enum": [
+        "full",
+        "test"
+      ],
+      "title": "Area",
+      "type": "string"
+    },
+    "image": {
+      "const": "minimap.png",
+      "title": "Image",
+      "type": "string"
+    },
+    "m_per_px": {
+      "description": "metres per pixel",
+      "exclusiveMinimum": 0,
+      "title": "M Per Px",
+      "type": "number"
+    },
+    "width": {
+      "description": "pixels, west to east",
+      "minimum": 1,
+      "title": "Width",
+      "type": "integer"
+    },
+    "height": {
+      "description": "pixels, north to south",
+      "minimum": 1,
+      "title": "Height",
+      "type": "integer"
+    },
+    "bounds_local": {
+      "$ref": "#/$defs/BoundsLocal",
+      "description": "the image's outer pixel edges in Godot local x/z: max_x - min_x = width * m_per_px, max_z - min_z = height * m_per_px"
+    }
+  },
+  "required": [
+    "schema_version",
+    "map_id",
+    "area",
+    "image",
+    "m_per_px",
+    "width",
+    "height",
+    "bounds_local"
+  ],
+  "title": "MinimapDocument",
+  "type": "object"
+}

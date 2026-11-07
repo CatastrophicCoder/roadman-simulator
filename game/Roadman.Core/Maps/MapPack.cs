@@ -22,6 +22,15 @@ public static partial class MapPack
     /// <summary>The world edge and spawn area (ADR 0015), next to the manifest; found by this name, not listed in the manifest.</summary>
     public const string BoundaryFile = "boundary.json";
 
+    /// <summary>
+    /// The minimap background image's placement (<c>docs/specs/minimap.md</c>, ADR 0021), next to the manifest; found
+    /// by this name, not listed in the manifest.
+    /// </summary>
+    public const string MinimapFile = "minimap.json";
+
+    /// <summary>The minimap background image, next to <see cref="MinimapFile"/>; its <c>image</c> must be this name.</summary>
+    public const string MinimapImageFile = "minimap.png";
+
     /// <summary>The hint added to every pack error: the pack is generated, so the fix is to rebuild it.</summary>
     public static string RegenHint(string mapId) => $"run /regen-map {mapId} to (re)build the pack";
 

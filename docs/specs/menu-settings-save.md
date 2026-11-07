@@ -261,6 +261,9 @@ Four tabs, each a column of labelled controls, operated with the mouse, the keyb
   2. The pause menu has six buttons: Resume, Inventory, Save, Load, Settings, Quit to menu (criterion 11's "five buttons").
   3. A load drops items the catalogue doesn't know (and unequips an item in a slot it doesn't fit) with a warning per change and the notice "Some items in this save no longer exist and were removed." (or "Some items in this save were unequipped.").
   4. The gamepad's Back button is bound to `inventory`.
+- 2026-11-08, minimap (`docs/specs/minimap.md`, ADR 0021):
+  1. "Minimap corner" has no note: `SettingsView.MinimapNote` ("Used by the minimap") is removed, because the minimap now reads the setting.
+  2. Criterion 15 (the minimap in the bottom-left corner by default) is checked by the minimap's gdUnit4 tests.
 
 ## Open questions
 

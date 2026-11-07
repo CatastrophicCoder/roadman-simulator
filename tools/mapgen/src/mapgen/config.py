@@ -269,6 +269,17 @@ class WorldEdgeConfig(StrictModel):
     spawn: SpawnConfig = Field(default_factory=SpawnConfig)
 
 
+class MinimapConfig(StrictModel):
+    """The `minimap` block (docs/specs/minimap.md): the background image's resolution and
+    the painted width of narrow streams. Both have defaults, so map.yaml lists only what
+    it overrides."""
+
+    m_per_px: float = Field(default=1.0, ge=0.5, le=2.0)  # metres per image pixel
+    # Narrow streams (MML `virtavesikapea`) are painted this wide: 1 to 2 screen pixels at
+    # 1080p, where the minimap panel shows about 1.36 m per screen pixel.
+    stream_width_m: float = Field(default=2.0, ge=1.4, le=2.7)
+
+
 class MapConfig(StrictModel):
     id: str = Field(pattern=SLUG_PATTERN)
     display_name: str = Field(min_length=1)
@@ -282,6 +293,7 @@ class MapConfig(StrictModel):
     snapshot: SnapshotConfig | None = None
     roads: RoadsConfig | None = None  # without it, the map builds without roads
     world_edge: WorldEdgeConfig = Field(default_factory=WorldEdgeConfig)
+    minimap: MinimapConfig = Field(default_factory=MinimapConfig)
 
     @field_validator("crs")
     @classmethod

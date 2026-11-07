@@ -179,6 +179,11 @@ New folder `Roadman.Core/Minimap/`, engine-free, plus the reader in `Roadman.Cor
 
 The new gdUnit4 suite(s) need a group in `game/tests/test-groups.json` and path rules for `scripts/hud/MinimapHud.cs`, `Roadman.Core/Minimap/` and the pack's minimap files; the pytest selection in `verify.sh --quick` must include the new pipeline step's files.
 
+## Amendments
+
+- 2026-11-08, plan (the user's decisions; ADR 0021):
+  1. The PNG isn't imported as a texture. The pipeline writes `minimap.png.import` with exactly `[remap]` and `importer="keep"` (a pack check verifies the content), so Godot exports the raw PNG unchanged; the game reads its bytes at runtime, generates mipmaps and makes an `ImageTexture`. An imported texture exports only its `.ctex`, and a `.gdignore`d folder isn't exported at all.
+
 ## Open questions
 
 None. Resolved 2026-11-08 by the user:

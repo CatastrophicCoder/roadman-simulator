@@ -20,7 +20,7 @@ public class ItemCatalogTests
     /// so ordinary descriptions never trip it. Matched as whole words or whole phrases, case-insensitive, never as
     /// substrings; an id's '_' and '-' count as word breaks.
     /// </summary>
-    private static readonly string[] BrandAndGameWords =
+    internal static readonly string[] BrandAndGameWords =
     [
         // Sportswear and fashion
         "Adidas", "Nike", "Reebok", "Fila", "Umbro", "Lacoste", "Ellesse", "Sergio Tacchini", "Le Coq Sportif",
@@ -43,7 +43,7 @@ public class ItemCatalogTests
         "Resident Evil", "Silent Hill", "Max Payne", "Alan Wake", "Rovio", "Zelda", "Tetris", "Pokemon", "Pokémon",
     ];
 
-    private static readonly Regex BrandOrGamePattern = new(
+    internal static readonly Regex BrandOrGamePattern = new(
         @"(?<![\p{L}\p{N}])(" + string.Join("|", BrandAndGameWords.Select(Regex.Escape)) + @")(?![\p{L}\p{N}])",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 

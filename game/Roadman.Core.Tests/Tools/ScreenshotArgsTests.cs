@@ -1,3 +1,4 @@
+using Roadman.Core.Settings;
 using Roadman.Core.Tools;
 
 namespace Roadman.Core.Tests.Tools;
@@ -618,5 +619,71 @@ public class ScreenshotArgsTests
     {
         var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--gives"]));
         Assert.Contains("[--give <id,...>]", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("top-left", MinimapCorner.TopLeft)]
+    [InlineData("top-right", MinimapCorner.TopRight)]
+    [InlineData("bottom-left", MinimapCorner.BottomLeft)]
+    [InlineData("bottom-right", MinimapCorner.BottomRight)]
+    public void MinimapAc17_Parse_MinimapCornerWithPlayer_IsRead(string value, MinimapCorner expected)
+    {
+        var args = ScreenshotArgs.Parse(["--screenshot", "centre-street-level", "a.png", "--player", "--minimap-corner", value, "--seed", "1"]);
+
+        Assert.Equal(expected, args!.MinimapCorner);
+        Assert.True(args.Player);
+        Assert.Equal(value, ScreenshotArgs.MinimapCornerValue(expected));
+        Assert.Equal(expected, ScreenshotArgs.ParseMinimapCorner(value));
+    }
+
+    [Fact]
+    public void MinimapAc17_Parse_WithoutMinimapCorner_IsNull()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--player"])!.MinimapCorner);
+    }
+
+    [Theory]
+    [InlineData("without --player", "--screenshot", "a", "a.png", "--minimap-corner", "top-right")]
+    [InlineData("with --inspect instead", "--screenshot", "a", "a.png", "--inspect", "--minimap-corner", "top-left")]
+    [InlineData("with --menu", "--screenshot", "a", "a.png", "--menu", "main", "--minimap-corner", "top-left")]
+    [InlineData("unknown value", "--screenshot", "a", "a.png", "--player", "--minimap-corner", "middle")]
+    [InlineData("settings value spelling", "--screenshot", "a", "a.png", "--player", "--minimap-corner", "top_right")]
+    [InlineData("missing value", "--screenshot", "a", "a.png", "--player", "--minimap-corner")]
+    [InlineData("flag as value", "--screenshot", "a", "a.png", "--minimap-corner", "--player")]
+    [InlineData("repeated flag", "--screenshot", "a", "a.png", "--player", "--minimap-corner", "top-left", "--minimap-corner", "top-left")]
+    public void MinimapAc17_Parse_MinimapCornerArgumentError_Throws(string why, params string[] args)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(args));
+        Assert.True(ex.Message.Contains("--minimap-corner", StringComparison.Ordinal), $"{why}: {ex.Message}");
+    }
+
+    [Fact]
+    public void MinimapAc17_Parse_UnknownValue_ListsTheCorners()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--player", "--minimap-corner", "centre"]));
+        Assert.Contains("top-left|top-right|bottom-left|bottom-right", ex.Message);
+        Assert.Contains("'centre'", ex.Message);
+    }
+
+    [Fact]
+    public void MinimapAc17_Parse_WithoutPlayer_SaysItNeedsPlayer()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--minimap-corner", "top-right"]));
+        Assert.Contains("--player", ex.Message);
+    }
+
+    [Fact]
+    public void MinimapAc17_Parse_UnknownArgument_ListsMinimapCornerInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ScreenshotArgs.Parse(["--screenshot", "a", "a.png", "--minimap"]));
+        Assert.Contains("[--minimap-corner <top-left|top-right|bottom-left|bottom-right>]", ex.Message);
+    }
+
+    [Fact]
+    public void MinimapAc17_Parse_WithoutScreenshotFlag_IgnoresMinimapCorner()
+    {
+        Assert.Null(ScreenshotArgs.Parse(["--minimap-corner", "nowhere"]));
     }
 }

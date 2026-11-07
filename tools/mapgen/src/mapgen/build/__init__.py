@@ -33,6 +33,11 @@ The cliff (`world_edge/cliff.py`) is built from `boundary.json`'s ring, roadbloc
 and cliff values and the written tiles' terrain edge: every written tile the boundary
 passes through gets an `edge_cliff-col` node (ledge, face, seams and skirt) and every
 written tile an `edge_bottom` cap, both flat-shaded with the material `edge_cliff`.
+The minimap stage (`minimap.py`, docs/specs/minimap.md) runs after the world edge and
+the cliff: it paints the background image over the written tiles from the land use, the
+world edge's water and the buildings that go into `buildings.json`, writes
+`11-minimap/report.json`, and the export writes `minimap.png`, `minimap.png.import` and
+`minimap.json` into the pack.
 """
 
 import shutil
@@ -57,6 +62,8 @@ from mapgen.build.camera_presets import (
 )
 from mapgen.build.export_glb import AXES, TERRAIN_NODE, MeshNode, export_glb
 from mapgen.build.markers import MARKERS_NAME, MarkersError, read_markers
+from mapgen.build.minimap import STAGE_DIR as MINIMAP_DIR
+from mapgen.build.minimap import MinimapError, build_minimap, minimap_inputs, write_minimap
 from mapgen.build.mml_only import (
     MmlOnlySelection,
     mml_only_report,
@@ -143,6 +150,7 @@ STAGE_DIRS = (
     "07-road-graph",
     "08-places",
     WORLD_EDGE_DIR,
+    MINIMAP_DIR,
 )
 
 
@@ -172,6 +180,7 @@ class BuildReport:
     roadblocks: int = 0
     fences: int = 0
     water_crossings: int = 0
+    minimap_size: tuple[int, int] | None = None  # minimap.png width, height in pixels
 
 
 def _clear(folder: Path) -> None:
@@ -467,6 +476,18 @@ def run_build(
             f"in edge_bottom, {len(cliff.nodes)} tiles"
         )
 
+    with stage("minimap"):
+        minimap = build_minimap(
+            config.minimap,
+            [t.bounds for t in tiles],
+            minimap_inputs(
+                loaded, boundary.polygon(), [(b.id, b.footprint) for b in buildings.buildings]
+            ),
+            work_dir,
+            log=log,
+        )
+    report.minimap_size = (minimap.grid.width, minimap.grid.height)
+
     with stage("export"), ExitStack() as resources:
         by_tile = buildings.by_tile()
         unknown = set(by_tile) - {t.id for t in tiles}
@@ -550,6 +571,7 @@ def run_build(
                 log(f"[build] {len(written)} debug orthophoto textures in {ORTHOPHOTO_DIR}/")
             validate_road_graph_file(write_json(staging / ROAD_GRAPH_NAME, road_graph))
             BOUNDARY_SCHEMA.validate_file(write_json(staging / BOUNDARY_NAME, world.document))
+            write_minimap(staging, minimap, config.id, area_name)
             if presets_bytes is not None:
                 (staging / PRESETS_NAME).write_bytes(presets_bytes)  # unchanged
             validate_manifest_file(write_json(staging / MANIFEST_NAME, document))
@@ -568,6 +590,7 @@ def run_build(
             RoadGraphError,
             PlacesError,
             BoundaryError,
+            MinimapError,
         ) as exc:
             raise BuildError(str(exc)) from exc
         finally:

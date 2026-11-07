@@ -249,4 +249,46 @@ public class PerfArgsTests
         Assert.Equal(1, PerfExitCode.Error);
         Assert.Equal(2, PerfExitCode.NotApplicable);
     }
+
+    [Fact]
+    public void MinimapPerf_Parse_DefaultHasTheMinimap()
+    {
+        Assert.True(PerfArgs.Parse(["--perf", "spawn", "o.json"])!.Minimap);
+    }
+
+    [Fact]
+    public void MinimapPerf_Parse_NoMinimap_TurnsOnlyTheMinimapOff()
+    {
+        var args = PerfArgs.Parse(["--perf", "roadblock", "o.json", "--no-minimap", "--seed", "1"])!;
+
+        Assert.False(args.Minimap);
+        Assert.True(args.WorldEdge);
+        Assert.True(args.SpaceSky);
+        Assert.Equal(PerfSpot.Roadblock, args.Spot);
+    }
+
+    [Fact]
+    public void MinimapPerf_Parse_NoMinimapWithTheOtherSwitches_KeepsEach()
+    {
+        var args = PerfArgs.Parse(["--no-minimap", "--perf", "spawn", "o.json", "--no-world-edge"])!;
+
+        Assert.False(args.Minimap);
+        Assert.False(args.WorldEdge);
+        Assert.False(args.SpaceSky);
+    }
+
+    [Fact]
+    public void MinimapPerf_Parse_RepeatedNoMinimap_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => PerfArgs.Parse(["--perf", "spawn", "o.json", "--no-minimap", "--no-minimap"]));
+        Assert.Contains("--no-minimap is given more than once", ex.Message);
+    }
+
+    [Fact]
+    public void MinimapPerf_Parse_UnknownArgument_ListsNoMinimapInUsage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => PerfArgs.Parse(["--perf", "spawn", "o.json", "--minimap"]));
+        Assert.Contains("[--no-minimap]", ex.Message);
+    }
 }

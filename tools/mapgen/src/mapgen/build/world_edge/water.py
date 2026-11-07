@@ -8,13 +8,16 @@ that is never a water fence (the pack check uses the same limit).
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import shapely
 from shapely.geometry import LineString, MultiPoint, Point
 from shapely.geometry.base import BaseGeometry
 
 from mapgen.build.world_edge.ring import Interval, Ring
+
+if TYPE_CHECKING:
+    from mapgen.build.stage1_load import LoadResult
 
 MIN_CROSSING_M = 1e-3  # a stretch of water shorter than 1 mm isn't a crossing
 DISAGREEMENT_M = 1.0  # crossing ends further apart than this between sources: reported
@@ -26,6 +29,23 @@ class WaterFeature:
 
     id: str
     geometry: BaseGeometry
+
+
+def edge_water_areas(loaded: "LoadResult") -> list[WaterFeature]:
+    """The world edge's water areas: those of the `water_areas` source (mode
+    "water_areas"), else the OSM areas clipped to the area (mode "osm"), else none. The
+    world-edge stage and the minimap both take their water from here, so they never
+    disagree; each feature's geometry is the load stage's object itself."""
+    return [WaterFeature(w.id, w.geometry) for w in loaded.edge_water_areas]
+
+
+def edge_stream_lines(loaded: "LoadResult") -> list[WaterFeature]:
+    """The narrow streams drawn as water: the lines of the `water_areas` source (MML
+    `virtavesikapea`) in mode "water_areas"; none in the other modes (OSM `waterway` lines
+    aren't drawn)."""
+    if loaded.edge_water_mode != "water_areas":
+        return []
+    return [WaterFeature(w.id, w.geometry) for w in loaded.edge_water_lines]
 
 
 @dataclass(frozen=True)
