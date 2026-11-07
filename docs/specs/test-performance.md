@@ -232,7 +232,20 @@ Same machine, pack and command, with the test-area pack moves (commit of this fe
 
 | Group | Quick-mode wall time (s) (target < 180 s) |
 | --- | --- |
-| *(measured after the commit, with a scratch change per group; see the follow-up)* | |
+| map | 57 |
+| roads | 31 |
+| places | 31 |
+| player | 128 |
+| world-edge | 123 |
+| saves | 57 |
+| inventory | 40 |
+
+**How these were measured (criteria 11 and 13).**
+- Setup: `verify.sh --quick` on a clean tree at `f18eb26`, with the build and import cache warm.
+- Each run used one untracked scratch file that selects only that group (`game/tests/<Suite>.cs.scratch`), deleted afterwards. For world-edge the file was `game/scripts/world/edge/IBarrierBreaker.cs.scratch`.
+- Every step passed in every run. pytest, the export check and the screenshots were N/A ("quick mode").
+- **Criterion 11:** the world-edge run's gdUnit4 step ran 40 cases. That is exactly WorldEdgeTest (27), WorldEdgeBreakingTest (12) and DeathScreenLayoutTest (1). Its summary named `world-edge: game/scripts/world/edge/IBarrierBreaker.cs.scratch` and ended with the full-`/verify` line.
+- About 30 s of each run is the steps outside gdUnit4: build, xUnit, format, release check, ruff, import and startup.
 
 CI after (run link, gdUnit4 step, whole `test` job): _after the push_
 
