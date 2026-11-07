@@ -247,7 +247,24 @@ Same machine, pack and command, with the test-area pack moves (commit of this fe
 - **Criterion 11:** the world-edge run's gdUnit4 step ran 40 cases. That is exactly WorldEdgeTest (27), WorldEdgeBreakingTest (12) and DeathScreenLayoutTest (1). Its summary named `world-edge: game/scripts/world/edge/IBarrierBreaker.cs.scratch` and ended with the full-`/verify` line.
 - About 30 s of each run is the steps outside gdUnit4: build, xUnit, format, release check, ruff, import and startup.
 
-CI after (run link, gdUnit4 step, whole `test` job): _after the push_
+**CI after (criterion 14).** Run [42419269386](https://github.com/CatastrophicCoder/roadman-simulator/actions/runs/42419269386) (`a02b4da`, test-area pack), conclusion success, 186 cases:
+
+| | Baseline (run 42293550026) (s) | After (run 42419269386) (s) |
+| --- | --- | --- |
+| gdUnit4 step | 210 | 218 (22:14:57 to 22:18:35) |
+| Whole `test` job | 449 | 548 (22:09:34 to 22:18:42) |
+| pytest | 145 | 200 |
+| dotnet format | 31 | 46 |
+| dotnet build | 19 | 25 |
+| Fixture pack build (`game/maps/somero/`) | 3 | 6 |
+| gdUnit4 test pack build (new step) | — | 5 |
+
+**What the CI numbers show.**
+- **gdUnit4 step.** CI ran every suite on the test-area pack before this change too, so the step isn't expected to get faster. It ran the whole suite with the one new case.
+- **Whole job.** The 99 s increase comes almost entirely from steps outside gdUnit4.
+  - Steps this change didn't touch were slower too: dotnet format +15 s, the release check +2 s, the fixture pack build +3 s. That suggests a slower runner, but each figure is one run, so runner variance isn't proven.
+  - The change itself adds the test-pack step (5 s), and pytest gained one real fixture build test (`test_cli_build_raw_option`), which is part of its +55 s.
+- **Still to check.** A second run would show how much of the increase is variance.
 
 ## Open questions
 
