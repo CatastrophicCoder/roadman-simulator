@@ -135,6 +135,14 @@ public sealed class MinimapProjection
         return new PanelPoint(sin, -cos);
     }
 
+    /// <summary>
+    /// The yaw (radians, in (−π, π]) of a camera whose global basis x axis (its right vector) is
+    /// (<paramref name="rightX"/>, ·, <paramref name="rightZ"/>): atan2(−right.z, right.x). Pitching the camera turns it
+    /// round that axis, so the pitch doesn't change the result; a yaw y has the right vector (cos y, 0, −sin y). A right
+    /// vector with no horizontal part (a camera rolled 90°) gives 0.
+    /// </summary>
+    public static double HeadingFromCameraRight(double rightX, double rightZ) => Math.Atan2(-rightZ, rightX);
+
     /// <summary><paramref name="angle"/> in radians brought into (−π, π].</summary>
     public static double NormaliseAngle(double angle)
     {

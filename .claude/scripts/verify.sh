@@ -348,6 +348,20 @@ else
       *) report FAIL "screenshot player" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
     esac
   fi
+  # The minimap moved to another corner (docs/specs/minimap.md, criterion 17).
+  log="$LOGS/screenshot-centre-street-level-player-minimap-top-right.log"
+  if ! grep -qx "centre-street-level" <<<"$PRESETS"; then
+    report N/A "screenshot minimap corner" "pack has no centre-street-level preset"
+  else
+    screenshot_preset "$GODOT_BIN" "$MAP_ID" centre-street-level "$SHOTS/centre-street-level-player-minimap-top-right.png" "$log" \
+      --player --seed 1 --minimap-corner top-right
+    case $? in
+      0) report PASS "screenshot minimap corner" "build/screenshots/centre-street-level-player-minimap-top-right.png" ;;
+      2) report N/A "screenshot minimap corner" "outside built area (log: $log)" ;;
+      124) report FAIL "screenshot minimap corner" "timed out after ${GODOT_SCREENSHOT_TIMEOUT:-120}s (log: $log)" ;;
+      *) report FAIL "screenshot minimap corner" "$(grep -m1 -E 'ERROR|error' "$log" || tail -1 "$log") (log: $log)" ;;
+    esac
+  fi
   # The death sequence at the world edge: the death camera's frame and the death screen (docs/specs/world-edge-game.md,
   # criterion 25). N/A on a test-area pack, as the world-edge preset is.
   for death in fall screen; do

@@ -28,6 +28,10 @@
     "inventory": {
       "suites": ["InventoryTest"],
       "spec": "inventory"
+    },
+    "minimap": {
+      "suites": ["MinimapTest", "MinimapMainTest", "MinimapPackTest"],
+      "spec": "minimap"
     }
   },
   "pytest_paths": [
@@ -51,6 +55,9 @@
     { "comment": "Every debug-only decision of every suite goes through it.", "glob": "game/scripts/debug/DebugBuild.cs*", "targets": ["all"] },
     { "comment": "World adds it in debug builds; the debug camera toggle is tested in most groups.", "glob": "game/scripts/debug/DebugCamera.cs*", "targets": ["all"] },
     { "comment": "No suite tests it (World adds it only with --perf); all is the safe side.", "glob": "game/scripts/debug/PerfTool.cs*", "targets": ["all"] },
+    { "comment": "The minimap: World adds a MinimapHud in every build and runs it every frame, and every temp-pack helper copies the minimap files, so every group uses it.", "glob": "game/scripts/hud/MinimapHud.cs*", "targets": ["all"] },
+    { "glob": "game/Roadman.Core/Minimap/**", "targets": ["all"] },
+    { "glob": "game/Roadman.Core/Maps/MinimapImage*", "targets": ["all"] },
     { "glob": "game/scenes/**", "targets": ["all"] },
     { "glob": "game/materials/**", "targets": ["all"] },
     { "glob": "game/addons/**", "targets": ["all"] },
@@ -76,36 +83,36 @@
     { "glob": "game/scripts/player/PlayerCamera.cs*", "targets": ["all"] },
     { "glob": "game/scripts/player/GamepadButtons.cs*", "targets": ["all"] },
 
-    { "comment": "World edge. Barriers and DeathCamera are also used by SaveLoadTest and PauseTest.", "glob": "game/scripts/world/edge/Barriers.cs*", "targets": ["world-edge", "saves", "inventory"] },
-    { "glob": "game/scripts/world/edge/DeathCamera.cs*", "targets": ["world-edge", "saves"] },
-    { "comment": "The void entry and the death sequence, which the save, pause and inventory suites drive through World (EnterVoid, the ledge entry).", "glob": "game/scripts/world/edge/VoidTrigger.cs*", "targets": ["world-edge", "saves", "inventory"] },
-    { "glob": "game/scripts/world/edge/VoidFall.cs*", "targets": ["world-edge", "saves", "inventory"] },
+    { "comment": "World edge. Barriers and DeathCamera are also used by SaveLoadTest and PauseTest.", "glob": "game/scripts/world/edge/Barriers.cs*", "targets": ["world-edge", "saves", "inventory", "minimap"] },
+    { "glob": "game/scripts/world/edge/DeathCamera.cs*", "targets": ["world-edge", "saves", "minimap"] },
+    { "comment": "The void entry and the death sequence, which the save, pause and inventory suites drive through World (EnterVoid, the ledge entry).", "glob": "game/scripts/world/edge/VoidTrigger.cs*", "targets": ["world-edge", "saves", "inventory", "minimap"] },
+    { "glob": "game/scripts/world/edge/VoidFall.cs*", "targets": ["world-edge", "saves", "inventory", "minimap"] },
     { "comment": "Only WorldEdgeBreakingTest and TestBarrierBreaker use it.", "glob": "game/scripts/world/edge/IBarrierBreaker.cs*", "targets": ["world-edge"] },
-    { "comment": "WorldEdgeTest, which the Main suites use, references the barrier types.", "glob": "game/scripts/world/edge/**", "targets": ["world-edge", "saves", "inventory"] },
+    { "comment": "WorldEdgeTest, which the Main suites use, references the barrier types.", "glob": "game/scripts/world/edge/**", "targets": ["world-edge", "saves", "inventory", "minimap"] },
 
-    { "comment": "HUD: the death screen is checked by the pause, save and inventory suites; World.Hud (the street label) is hidden by the menus.", "glob": "game/scripts/hud/DeathScreen.cs*", "targets": ["world-edge", "saves", "inventory"] },
-    { "glob": "game/scripts/hud/StreetLabelHud.cs*", "targets": ["places", "player", "world-edge", "saves", "inventory"] },
+    { "comment": "HUD: the death screen is checked by the pause, save and inventory suites; World.Hud (the street label) is hidden by the menus.", "glob": "game/scripts/hud/DeathScreen.cs*", "targets": ["world-edge", "saves", "inventory", "minimap"] },
+    { "glob": "game/scripts/hud/StreetLabelHud.cs*", "targets": ["places", "player", "world-edge", "saves", "inventory", "minimap"] },
 
     { "comment": "Debug views and the screenshot tool, by the suites that use them.", "glob": "game/scripts/debug/OrthophotoDebugView.cs*", "targets": ["map", "player"] },
     { "glob": "game/scripts/debug/RoadGraphDebugView.cs*", "targets": ["roads", "player"] },
     { "glob": "game/scripts/debug/PlaceInspector.cs*", "targets": ["places", "player"] },
     { "glob": "game/scripts/debug/ScreenshotTool.cs*", "targets": ["player"] },
 
-    { "comment": "Menus, settings and saves: every Main suite (saves and inventory) builds them. UiTheme is also used by the death screen.", "glob": "game/scripts/ui/UiTheme.cs*", "targets": ["saves", "inventory", "world-edge"] },
-    { "glob": "game/scripts/ui/**", "targets": ["saves", "inventory"] },
-    { "glob": "game/scripts/saves/**", "targets": ["saves", "inventory"] },
-    { "glob": "game/scripts/settings/**", "targets": ["saves", "inventory"] },
+    { "comment": "Menus, settings and saves: every Main suite (saves and inventory) builds them. UiTheme is also used by the death screen.", "glob": "game/scripts/ui/UiTheme.cs*", "targets": ["saves", "inventory", "world-edge", "minimap"] },
+    { "glob": "game/scripts/ui/**", "targets": ["saves", "inventory", "minimap"] },
+    { "glob": "game/scripts/saves/**", "targets": ["saves", "inventory", "minimap"] },
+    { "glob": "game/scripts/settings/**", "targets": ["saves", "inventory", "minimap"] },
 
     { "comment": "Roadman.Core (spec Behaviour 6); xUnit covers it in every mode either way.", "glob": "game/Roadman.Core/Items/**", "targets": ["inventory", "saves", "world-edge"] },
-    { "glob": "game/Roadman.Core/Edge/**", "targets": ["world-edge", "saves", "inventory"] },
-    { "glob": "game/Roadman.Core/Saves/**", "targets": ["saves", "inventory"] },
-    { "glob": "game/Roadman.Core/Player/**", "targets": ["player", "world-edge", "inventory", "saves"] },
+    { "glob": "game/Roadman.Core/Edge/**", "targets": ["world-edge", "saves", "inventory", "minimap"] },
+    { "glob": "game/Roadman.Core/Saves/**", "targets": ["saves", "inventory", "minimap"] },
+    { "glob": "game/Roadman.Core/Player/**", "targets": ["player", "world-edge", "inventory", "saves", "minimap"] },
     { "glob": "game/Roadman.Core/**", "targets": ["all"] },
     { "comment": "The xUnit tests run in every mode and are not part of the game assembly that gdUnit4 loads.", "glob": "game/Roadman.Core.Tests/**", "targets": ["none"] },
 
-    { "comment": "Test helpers. WorldEdgeTest (NewWorld and others) is used by WorldEdgeBreakingTest, the Main suites and MainTestSupport.", "glob": "game/tests/WorldEdgeTest.cs*", "targets": ["world-edge", "saves", "inventory"] },
+    { "comment": "Test helpers. WorldEdgeTest (NewWorld and others) is used by WorldEdgeBreakingTest, the Main suites and MainTestSupport.", "glob": "game/tests/WorldEdgeTest.cs*", "targets": ["world-edge", "saves", "inventory", "minimap"] },
     { "glob": "game/tests/TestBarrierBreaker.cs*", "targets": ["world-edge"] },
-    { "comment": "Used by WorldEdgeTest, which the Main suites use.", "glob": "game/tests/TestVoidFaller.cs*", "targets": ["world-edge", "saves", "inventory"] },
+    { "comment": "Used by WorldEdgeTest, which the Main suites use.", "glob": "game/tests/TestVoidFaller.cs*", "targets": ["world-edge", "saves", "inventory", "minimap"] },
     { "glob": "game/tests/RecordingDisplayBackend.cs*", "targets": ["saves"] },
 
     { "comment": "Suite files select their own group.", "glob": "game/tests/MapLoaderTest.cs*", "targets": ["map"] },
@@ -121,6 +128,9 @@
     { "glob": "game/tests/SaveLoadTest.cs*", "targets": ["saves"] },
     { "glob": "game/tests/SettingsViewTest.cs*", "targets": ["saves"] },
     { "glob": "game/tests/InventoryTest.cs*", "targets": ["inventory"] },
+    { "comment": "MinimapTest (StartWorld) is also used by MinimapPackTest, in the same group.", "glob": "game/tests/MinimapTest.cs*", "targets": ["minimap"] },
+    { "glob": "game/tests/MinimapMainTest.cs*", "targets": ["minimap"] },
+    { "glob": "game/tests/MinimapPackTest.cs*", "targets": ["minimap"] },
 
     { "comment": "Read only by steps other than gdUnit4: the export check and screenshots (export presets; skipped in quick mode, run by the full /verify), formatting (.editorconfig), the release check, CI and release workflows, Claude Code settings, and scripts outside /verify's gdUnit4 step.", "glob": "game/export_presets.cfg", "targets": ["none"] },
     { "glob": "game/.editorconfig", "targets": ["none"] },
@@ -129,6 +139,7 @@
     { "glob": ".claude/scripts/check-release-assembly.cs", "targets": ["none"] },
     { "glob": ".claude/scripts/collect-licenses.py", "targets": ["none"] },
     { "glob": ".claude/scripts/perf-world-edge.sh", "targets": ["none"] },
+    { "glob": ".claude/scripts/perf-minimap.sh", "targets": ["none"] },
     { "comment": "Reads TRX files of timing runs; not used by /verify.", "glob": ".claude/scripts/gdunit-report.py", "targets": ["none"] },
     { "glob": ".claude/scripts/regen-map.sh", "targets": ["none"] },
     { "glob": ".claude/agents/**", "targets": ["none"] },

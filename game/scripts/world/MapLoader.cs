@@ -14,8 +14,9 @@ namespace Roadman.Scenes;
 /// then instances every tile under a <c>Tiles</c> child, named by tile id, at the origin (the tile meshes are
 /// already in map-local coordinates). All tiles load at once; streaming comes later.
 /// After the tiles it reads <c>road_graph.json</c> into <see cref="RoadGraph"/>, then <c>buildings.json</c> and
-/// <c>pois.json</c> into <see cref="Places"/>, then <c>boundary.json</c> into <see cref="Boundary"/>; a missing or
-/// invalid file is reported, and the tiles stay loaded. With a boundary it builds the world edge under the <c>Edge</c>
+/// <c>pois.json</c> into <see cref="Places"/>, then <c>boundary.json</c> into <see cref="Boundary"/>, then
+/// <c>minimap.json</c> and <c>minimap.png</c> into <see cref="MinimapImage"/> and <see cref="MinimapTexture"/>; a missing
+/// or invalid file is reported, and the tiles stay loaded. With a boundary it builds the world edge under the <c>Edge</c>
 /// child (<c>docs/specs/world-edge-game.md</c>): <see cref="EdgeGeometry"/> and the <see cref="VoidTrigger"/> before
 /// <see cref="SignalName.MapLoaded"/>, and the <see cref="Barriers"/> once the terrain collision is queryable.
 /// Building collision bodies are in <see cref="BuildingGroup"/>; <see cref="BuildingOf"/> resolves one to its building.
@@ -146,6 +147,25 @@ public partial class MapLoader : Node3D
     public string BoundaryPath => $"{PackPath}/{MapPack.BoundaryFile}";
 
     /// <summary>
+    /// Where the minimap's background image lies (<c>minimap.json</c>, <c>docs/specs/minimap.md</c>, ADR 0021), read
+    /// after <see cref="Boundary"/>; null before a <see cref="Load"/> and when <c>minimap.json</c> is missing or
+    /// invalid, or <c>minimap.png</c> is missing, unreadable or of another size (an error is pushed then).
+    /// </summary>
+    public MinimapImage? MinimapImage { get; private set; }
+
+    /// <summary>
+    /// The minimap's background image (<c>minimap.png</c>, read from the file's bytes at runtime, with mipmaps); null
+    /// whenever <see cref="MinimapImage"/> is.
+    /// </summary>
+    public ImageTexture? MinimapTexture { get; private set; }
+
+    /// <summary>Path of the minimap image description in the pack.</summary>
+    public string MinimapPath => $"{PackPath}/{MapPack.MinimapFile}";
+
+    /// <summary>Path of the minimap background image in the pack.</summary>
+    public string MinimapImagePath => $"{PackPath}/{MapPack.MinimapImageFile}";
+
+    /// <summary>
     /// The tuned barrier sizes, grouped per type (<see cref="Roadman.Scenes.Edge.BarrierSettings"/>). Every <see cref="Barriers"/>
     /// this loader creates uses this resource, so a change lasts across reloads and takes effect at the next load.
     /// </summary>
@@ -219,7 +239,7 @@ public partial class MapLoader : Node3D
 
     /// <summary>
     /// Reads the manifest and instances every tile. Emits <see cref="SignalName.MapLoaded"/> with the number of
-    /// tiles loaded (a missing tile is reported and skipped; <see cref="RoadGraph"/>, <see cref="Places"/> and <see cref="Boundary"/> are set before it), or <see cref="SignalName.MapLoadFailed"/> when the
+    /// tiles loaded (a missing tile is reported and skipped; <see cref="RoadGraph"/>, <see cref="Places"/>, <see cref="Boundary"/> and the minimap image are set before it), or <see cref="SignalName.MapLoadFailed"/> when the
     /// pack can't be used at all.
     /// </summary>
     /// <returns>True when the manifest was read and every tile loaded.</returns>
@@ -289,6 +309,8 @@ public partial class MapLoader : Node3D
         {
             GD.Print("MapLoader: world edge disabled (WorldEdgeEnabled false): no edge geometry, void trigger or barriers");
         }
+
+        (MinimapImage, MinimapTexture) = LoadMinimap(mapId, manifest);
 
         EmitSignal(SignalName.MapLoaded, LoadedTileCount);
         return complete;
@@ -486,6 +508,8 @@ public partial class MapLoader : Node3D
         RoadGraph = null;
         Places = null;
         Boundary = null;
+        MinimapImage = null;
+        MinimapTexture = null;
         LoadedTileCount = 0;
         BuildingBodyCount = 0;
     }
@@ -617,6 +641,67 @@ public partial class MapLoader : Node3D
         GD.Print(
             $"MapLoader: boundary with {boundary.SpawnArea.OpenGround.Count} open-ground polygons in the spawn area from {path}");
         return boundary;
+    }
+
+    /// <summary>
+    /// Reads <see cref="MinimapPath"/> (checked against <paramref name="manifest"/>) and the image at
+    /// <see cref="MinimapImagePath"/>. The PNG is kept as a raw file in the pack (<c>importer="keep"</c>, ADR 0021), so it
+    /// is read from its bytes, not through the resource loader, and gets mipmaps here. A missing or invalid JSON, a
+    /// missing or unreadable image, or an image whose size isn't the JSON's pushes one error naming the path and the
+    /// regen hint and gives nulls; everything else stays loaded.
+    /// </summary>
+    private (MinimapImage?, ImageTexture?) LoadMinimap(string mapId, MapManifest manifest)
+    {
+        var path = MinimapPath;
+        if (!FileAccess.FileExists(path))
+        {
+            GD.PushError($"MapLoader: no minimap image: {path} doesn't exist; {MapPack.RegenHint(mapId)}");
+            return (null, null);
+        }
+
+        MinimapImage description;
+        try
+        {
+            description = MinimapImageReader.Parse(FileAccess.GetFileAsString(path), manifest, path);
+        }
+        catch (MapPackException ex)
+        {
+            GD.PushError($"MapLoader: {ex.Message}; {MapPack.RegenHint(mapId)}");
+            return (null, null);
+        }
+
+        var imagePath = MinimapImagePath;
+        var bytes = FileAccess.FileExists(imagePath) ? FileAccess.GetFileAsBytes(imagePath) : [];
+        if (bytes.Length == 0)
+        {
+            GD.PushError($"MapLoader: no minimap image: {imagePath} doesn't exist or is empty ({path} names it); {MapPack.RegenHint(mapId)}");
+            return (null, null);
+        }
+
+        var image = new Image();
+        if (image.LoadPngFromBuffer(bytes) != Error.Ok || image.IsEmpty())
+        {
+            GD.PushError($"MapLoader: no minimap image: {imagePath} isn't a readable PNG; {MapPack.RegenHint(mapId)}");
+            return (null, null);
+        }
+
+        if (image.GetWidth() != description.Width || image.GetHeight() != description.Height)
+        {
+            GD.PushError(
+                $"MapLoader: no minimap image: {imagePath} is {image.GetWidth()} × {image.GetHeight()} px, but {path} says {description.Width} × {description.Height}; {MapPack.RegenHint(mapId)}");
+            return (null, null);
+        }
+
+        if (image.GetFormat() != Image.Format.Rgba8)
+        {
+            image.Convert(Image.Format.Rgba8);
+        }
+
+        image.GenerateMipmaps();
+        var texture = ImageTexture.CreateFromImage(image);
+        GD.Print(System.FormattableString.Invariant(
+            $"MapLoader: minimap image {description.Width} × {description.Height} px at {description.MetresPerPixel} m/px from {imagePath}"));
+        return (description, texture);
     }
 
     /// <summary>

@@ -41,6 +41,55 @@ public static class UiTheme
 
     public static readonly Color TextDisabled = new(0.42f, 0.44f, 0.48f);
 
+    // The minimap's live layers (docs/specs/minimap.md, "Style"): flat placeholder colours until the art-direction
+    // palette exists. The background image's colours are the pipeline's (tools/mapgen, minimap step); the ground colour
+    // here matches its "ground" entry, so a pack without the image still reads the same.
+
+    /// <summary>The minimap's void outside the world edge.</summary>
+    public static readonly Color MinimapVoid = new(0.07f, 0.08f, 0.11f);
+
+    /// <summary>The minimap's ground where there is no background image (the pipeline's ground colour).</summary>
+    public static readonly Color MinimapGround = new(218 / 255f, 214 / 255f, 196 / 255f);
+
+    /// <summary>The boundary ring line.</summary>
+    public static readonly Color MinimapRing = new(0.16f, 0.17f, 0.2f);
+
+    /// <summary>The roadblock bars across the road at the edge.</summary>
+    public static readonly Color MinimapRoadblock = new(0.82f, 0.2f, 0.18f);
+
+    /// <summary>Main roads (<c>primary</c>, <c>secondary</c>).</summary>
+    public static readonly Color MinimapMainRoad = new(0.27f, 0.28f, 0.33f);
+
+    /// <summary>Roads (<c>tertiary</c>, <c>residential</c> and the like).</summary>
+    public static readonly Color MinimapRoad = new(0.4f, 0.41f, 0.46f);
+
+    /// <summary>Minor drivable roads (<c>service</c>, <c>driveway</c> and the like).</summary>
+    public static readonly Color MinimapMinorRoad = new(0.52f, 0.53f, 0.57f);
+
+    /// <summary>Paths (<c>cycleway</c>, <c>footway</c> and the like); drawn fainter (<c>MinimapStyle.StrokeOf</c>).</summary>
+    public static readonly Color MinimapPath = new(0.46f, 0.4f, 0.33f);
+
+    /// <summary>Street label text; outlined with <see cref="Shade"/>.</summary>
+    public static readonly Color MinimapLabel = new(0.97f, 0.97f, 0.96f);
+
+    /// <summary>Shop symbols (squares).</summary>
+    public static readonly Color MinimapShop = new(0.8f, 0.3f, 0.55f);
+
+    /// <summary>Food and drink symbols (circles).</summary>
+    public static readonly Color MinimapFood = new(0.9f, 0.48f, 0.12f);
+
+    /// <summary>Public service symbols (diamonds).</summary>
+    public static readonly Color MinimapPublicService = new(0.45f, 0.32f, 0.72f);
+
+    /// <summary>Parking symbols (rounded squares with a letter).</summary>
+    public static readonly Color MinimapParking = new(0.2f, 0.42f, 0.8f);
+
+    /// <summary>Other points of interest (small dots).</summary>
+    public static readonly Color MinimapOtherPoi = new(0.32f, 0.33f, 0.38f);
+
+    /// <summary>Markers (the marker layer; empty until the quest system adds some).</summary>
+    public static readonly Color MinimapMarker = new(0.98f, 0.86f, 0.2f);
+
     public const int FontSize = 22;
 
     public const int TitleFontSize = 44;

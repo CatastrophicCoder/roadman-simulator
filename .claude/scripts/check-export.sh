@@ -13,6 +13,8 @@
 # - an exported game assembly contains test code (check-release-assembly.cs), or
 #   test framework files were exported;
 # - the PCK lists a file from game/tests/ or game/addons/gdUnit4/;
+# - the PCK lacks a pack's raw minimap.png or its minimap.json (ADR 0021: the PNG is
+#   kept as a raw file and loaded at runtime, so the exported game needs the file itself);
 # - macOS: the executable isn't universal (x86_64 + arm64) or the bundle is unsigned.
 # Prints one line per check and exits non-zero if any failed.
 
@@ -149,6 +151,29 @@ for line in sys.stdin.read().splitlines():
     fail "PCK contains excluded files: $(echo "$found" | head -3 | tr '\n' ' ')"
   else
     pass "PCK has none of $(echo "$excluded" | wc -l | tr -d ' ') files from tests/ and addons/gdUnit4/"
+  fi
+fi
+
+# Minimap files (docs/specs/minimap.md, criterion 18): each pack's raw minimap.png and
+# minimap.json must be in the PCK. A path followed by ".import" doesn't count, so the
+# PNG's import file alone doesn't pass.
+if [ "${#pcks[@]}" -gt 0 ] && [ -f "${pcks[0]}" ] && [ "${#maps[@]}" -gt 0 ]; then
+  if out="$(python3 -I -c '
+import re, sys
+data = b"".join(open(p, "rb").read() for p in sys.argv[2:])
+missing = []
+for map_id in sys.argv[1].split():
+    for name in ("minimap.png", "minimap.json"):
+        path = f"maps/{map_id}/{name}".encode()
+        if not re.search(re.escape(path) + rb"(?![.\w])", data):
+            missing.append(path.decode())
+if missing:
+    print(", ".join(missing))
+    sys.exit(1)
+' "${maps[*]}" "${pcks[@]}")"; then
+    pass "PCK has minimap.png and minimap.json of: ${maps[*]}"
+  else
+    fail "PCK lacks: $out"
   fi
 fi
 

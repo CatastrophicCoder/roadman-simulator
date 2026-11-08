@@ -22,7 +22,7 @@ namespace Roadman.Scenes;
 /// Root of the game world. Builds the environment, sun and map loader in code, loads the map, and places the debug
 /// camera above the terrain at the origin. With <c>-- --screenshot &lt;preset&gt; &lt;out.png&gt;</c> on the command
 /// line it adds a <see cref="ScreenshotTool"/> instead of placing the camera. Always adds the
-/// <see cref="StreetLabelHud"/>. Debug builds (<see cref="DebugBuild.IsDebug"/>) also get the <see cref="DebugCamera"/>,
+/// <see cref="StreetLabelHud"/> and the <see cref="MinimapHud"/> (not with <c>--perf ... --no-minimap</c>). Debug builds (<see cref="DebugBuild.IsDebug"/>) also get the <see cref="DebugCamera"/>,
 /// the <see cref="OrthophotoDebugView"/> (F2), the <see cref="RoadGraphDebugView"/> (G) and the
 /// <see cref="PlaceInspector"/> (I); release builds have only the player camera.
 /// <para>
@@ -275,6 +275,22 @@ public partial class World : Node3D
     public GameplaySettings? CameraSettings { get; set; }
 
     /// <summary>
+    /// The gameplay settings whose <see cref="GameplaySettings.MinimapCorner"/> places the <see cref="Minimap"/>
+    /// (<c>docs/specs/minimap.md</c>, "Corner and visibility"); applied at once when set, and when the minimap is made.
+    /// Null (direct <c>World</c> runs, screenshots, perf runs, tests) gives the default corner,
+    /// <see cref="MinimapCorner.BottomLeft"/>. <c>Main</c> sets it from the settings on every world and every change.
+    /// </summary>
+    public GameplaySettings? MinimapSettings
+    {
+        get;
+        set
+        {
+            field = value;
+            ApplyMinimapSettings();
+        }
+    }
+
+    /// <summary>
     /// The quality preset applied to <see cref="Sun"/> (<see cref="ApplyQualitySettings"/>): its shadows on or off,
     /// its directional shadow splits (1: orthogonal, 2 or 4: parallel splits) and shadow distance. Applied when the sun
     /// is made and whenever this is set. Null (direct <c>World</c> runs, screenshots, perf runs, tests) keeps the sun's
@@ -348,6 +364,9 @@ public partial class World : Node3D
 
     /// <summary>The HUD street label; in every build.</summary>
     public StreetLabelHud Hud { get; private set; } = null!;
+
+    /// <summary>The HUD minimap; in every build, null only in a <c>--perf ... --no-minimap</c> run.</summary>
+    public MinimapHud? Minimap { get; private set; }
 
     /// <summary>The place inspector (I); null outside debug builds.</summary>
     public PlaceInspector? Inspector { get; private set; }
@@ -427,6 +446,13 @@ public partial class World : Node3D
 
         Hud = new StreetLabelHud { Name = "StreetLabelHud", Loader = MapLoader };
         AddChild(Hud);
+        if (perf is not { Minimap: false })
+        {
+            Minimap = new MinimapHud { Name = "MinimapHud", Loader = MapLoader, World = this };
+            AddChild(Minimap);
+            ApplyMinimapSettings();
+        }
+
         DeathScreen = new DeathScreen { Name = "DeathScreen" };
         AddChild(DeathScreen);
 
@@ -491,6 +517,7 @@ public partial class World : Node3D
                 OrthophotoView = Orthophoto,
                 RoadGraphView = RoadGraphView,
                 Hud = Hud,
+                Minimap = Minimap,
                 Inspector = Inspector,
                 World = this,
             });
@@ -902,6 +929,18 @@ public partial class World : Node3D
         if (CameraSettings is { } settings && PlayerCamera is not null && IsInstanceValid(PlayerCamera))
         {
             PlayerCamera.ApplySettings(settings);
+        }
+    }
+
+    /// <summary>
+    /// Puts the <see cref="Minimap"/> in the corner of <see cref="MinimapSettings"/> (the default corner when it is
+    /// null), when there is a minimap.
+    /// </summary>
+    public void ApplyMinimapSettings()
+    {
+        if (Minimap is not null && IsInstanceValid(Minimap))
+        {
+            Minimap.Corner = (MinimapSettings ?? GameSettings.Default.Gameplay).MinimapCorner;
         }
     }
 

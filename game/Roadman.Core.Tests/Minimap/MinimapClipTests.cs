@@ -166,6 +166,48 @@ public class MinimapClipTests
         Assert.Equal(2, into.Count);
     }
 
+    [Fact]
+    public void Clip_Flat_GivesTheSamePiecesAsTheListOverload()
+    {
+        var random = new Random(7);
+        var flat = new List<PanelPoint>();
+        var lengths = new List<int>();
+        for (var i = 0; i < 500; i++)
+        {
+            var line = new PanelPoint[2 + random.Next(8)];
+            for (var k = 0; k < line.Length; k++)
+            {
+                line[k] = new PanelPoint(-150 + (random.NextDouble() * 300), -150 + (random.NextDouble() * 300));
+            }
+
+            var expected = MinimapClip.Clip(line, Radius);
+            flat.Clear();
+            lengths.Clear();
+
+            var added = MinimapClip.Clip(line, Radius, flat, lengths);
+
+            Assert.Equal(expected.Count, added);
+            Assert.Equal(expected.Select(piece => piece.Count), lengths);
+            Assert.Equal(expected.SelectMany(piece => piece), flat);
+        }
+    }
+
+    [Fact]
+    public void Clip_Flat_AppendsAfterExistingContents()
+    {
+        var flat = new List<PanelPoint> { new(1, 1), new(2, 2) };
+        var lengths = new List<int> { 2 };
+
+        var added = MinimapClip.Clip([new PanelPoint(-100, 0), new PanelPoint(0, 0), new PanelPoint(0, 100)], Radius, flat, lengths);
+
+        Assert.Equal(1, added);
+        Assert.Equal([2, 3], lengths);
+        Assert.Equal(new PanelPoint(1, 1), flat[0]);
+        AssertOnRim(flat[2]);
+        Assert.Equal(new PanelPoint(0, 0), flat[3]);
+        AssertOnRim(flat[4]);
+    }
+
     private static void AssertOnRim(PanelPoint point) => Assert.Equal(Radius, point.Length, RimPrecision);
 
     private static void AssertOnSegment(PanelPoint a, PanelPoint b, PanelPoint p)

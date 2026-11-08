@@ -903,6 +903,7 @@ public class PlaceInformationTest
             File.WriteAllText(Path.Combine(_tempPack, file), json.ToJsonString());
         }
 
+        TestPacks.CopyMinimap(source, _tempPack, mapId);
         return tiles.Count;
     }
 

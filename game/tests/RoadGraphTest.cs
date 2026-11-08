@@ -636,6 +636,7 @@ public class RoadGraphTest
             File.WriteAllLines(Path.Combine(_tempPack, file + ".import"), import);
         }
 
+        TestPacks.CopyMinimap(source, _tempPack, mapId);
         AssertBool(File.Exists(Path.Combine(_tempPack, MapPack.RoadGraphFile))).IsFalse();
         return tiles.Count;
     }

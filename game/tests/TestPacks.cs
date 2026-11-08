@@ -45,4 +45,22 @@ public static class TestPacks
 
     /// <summary>Clears the override, so <c>res://maps/&lt;id&gt;</c> is loaded again (the full pack locally).</summary>
     public static void UseFullPack() => MapLoader.PackFolderOverride = null;
+
+    /// <summary>
+    /// Copies the minimap files (<c>minimap.json</c> with <c>map_id</c> set to <paramref name="mapId"/>,
+    /// <c>minimap.png</c> and <c>minimap.png.import</c>) from the pack folder <paramref name="sourceFolder"/> to
+    /// <paramref name="targetFolder"/> (both absolute), so a temporary pack that leaves out another file pushes no
+    /// minimap error (<c>docs/specs/minimap.md</c>, "Data and map loads").
+    /// </summary>
+    public static void CopyMinimap(string sourceFolder, string targetFolder, string mapId)
+    {
+        var json = System.Text.Json.Nodes.JsonNode.Parse(
+            System.IO.File.ReadAllText(System.IO.Path.Combine(sourceFolder, MapPack.MinimapFile)))!;
+        json["map_id"] = mapId;
+        System.IO.File.WriteAllText(System.IO.Path.Combine(targetFolder, MapPack.MinimapFile), json.ToJsonString());
+        foreach (var file in new[] { MapPack.MinimapImageFile, MapPack.MinimapImageFile + ".import" })
+        {
+            System.IO.File.Copy(System.IO.Path.Combine(sourceFolder, file), System.IO.Path.Combine(targetFolder, file), overwrite: true);
+        }
+    }
 }

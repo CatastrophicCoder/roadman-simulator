@@ -612,14 +612,25 @@ public partial class Main : Node
     }
 
     /// <summary>
-    /// Shows or hides <paramref name="world"/>'s HUD (the street label): hidden while the pause menu, or anything over it,
-    /// is open, so it never shows through the menus.
+    /// Shows or hides <paramref name="world"/>'s HUD (the street label and the minimap): hidden while the pause menu, or
+    /// anything over it, is open, so it never shows through the menus. The minimap also hides itself without a player
+    /// and outside the death sequence's alive state.
     /// </summary>
     private static void SetHudVisible(World? world, bool visible)
     {
-        if (world is not null && IsInstanceValid(world) && world.Hud is { } hud && IsInstanceValid(hud))
+        if (world is null || !IsInstanceValid(world))
+        {
+            return;
+        }
+
+        if (world.Hud is { } hud && IsInstanceValid(hud))
         {
             hud.Visible = visible;
+        }
+
+        if (world.Minimap is { } minimap && IsInstanceValid(minimap))
+        {
+            minimap.Visible = visible;
         }
     }
 
@@ -981,6 +992,7 @@ public partial class Main : Node
         // OnPlayerPlaced), so a start that fails (StartFailed) doesn't use it up.
         world.GiveItems = _giveItems;
         world.CameraSettings = GameState.Instance?.Settings.Gameplay;
+        world.MinimapSettings = GameState.Instance?.Settings.Gameplay;
         world.QualitySettings = QualityPreset.For((GameState.Instance?.Settings ?? GameSettings.Default).Display.Quality);
         world.PlayerSpawned += _ => OnPlayerPlaced(world, moved: false);
         world.PlayerLoaded += (_, moved) => OnPlayerPlaced(world, moved);
@@ -1108,7 +1120,7 @@ public partial class Main : Node
     /// <summary>
     /// Applies a change made in the settings view at once: the display group (<see cref="SettingsApplier.ApplyDisplay"/>
     /// with the previous values, through <see cref="DisplayBackend"/>), the audio volumes, and on a running world the
-    /// camera values (<see cref="World.CameraSettings"/>) and the quality preset (<see cref="World.QualitySettings"/>).
+    /// camera values (<see cref="World.CameraSettings"/>), the minimap corner (<see cref="World.MinimapSettings"/>) and the quality preset (<see cref="World.QualitySettings"/>).
     /// </summary>
     private void OnSettingsChanged(GameSettings before, GameSettings after)
     {
@@ -1136,6 +1148,7 @@ public partial class Main : Node
         {
             world.CameraSettings = after.Gameplay;
             world.ApplyCameraSettings();
+            world.MinimapSettings = after.Gameplay;
         }
 
         if (before.Display.Quality != after.Display.Quality)

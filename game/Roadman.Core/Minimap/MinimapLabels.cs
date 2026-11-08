@@ -36,7 +36,27 @@ public readonly record struct MinimapRect(PanelPoint Centre, double HalfWidth, d
     }
 
     /// <summary>True when every corner lies at most <paramref name="radius"/> from the panel centre.</summary>
-    public bool IsInsideCircle(double radius) => Corners().All(corner => corner.Length <= radius);
+    /// <remarks>Allocates nothing (the minimap calls it for every stored label each frame).</remarks>
+    public bool IsInsideCircle(double radius)
+    {
+        if (!(radius >= 0))
+        {
+            return false;
+        }
+
+        var (sin, cos) = Math.SinCos(Angle);
+        var axX = cos * HalfWidth;
+        var axY = sin * HalfWidth;
+        var ayX = -sin * HalfHeight;
+        var ayY = cos * HalfHeight;
+        var limit = radius * radius;
+        return Within(Centre.X - axX - ayX, Centre.Y - axY - ayY, limit)
+            && Within(Centre.X + axX - ayX, Centre.Y + axY - ayY, limit)
+            && Within(Centre.X + axX + ayX, Centre.Y + axY + ayY, limit)
+            && Within(Centre.X - axX + ayX, Centre.Y - axY + ayY, limit);
+    }
+
+    private static bool Within(double x, double y, double limitSquared) => (x * x) + (y * y) <= limitSquared;
 
     private static bool Separated(PanelPoint[] a, PanelPoint[] b, double angle)
     {
@@ -170,6 +190,27 @@ public readonly record struct MinimapWorldLabel(
 public static class MinimapLabels
 {
     private const double JoinTolerance = 1e-6;
+
+    /// <summary>
+    /// Whether the labels must be placed again for the frame of <paramref name="current"/>: always without a placement
+    /// (<paramref name="placedWith"/> null), else when the centre has moved more than <paramref name="distanceM"/> metres
+    /// or the heading has turned more than <paramref name="degrees"/> (either way round, across ±180°) since the
+    /// placement made with <paramref name="placedWith"/>.
+    /// </summary>
+    public static bool NeedsPlacement(MinimapProjection? placedWith, MinimapProjection current, double distanceM, double degrees)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        if (placedWith is null)
+        {
+            return true;
+        }
+
+        var dx = current.CentreX - placedWith.CentreX;
+        var dz = current.CentreZ - placedWith.CentreZ;
+        var turn = Math.Abs(MinimapProjection.NormaliseAngle(current.HeadingYaw - placedWith.HeadingYaw));
+        return (dx * dx) + (dz * dz) > distanceM * distanceM
+            || turn > degrees * Math.PI / 180;
+    }
 
     /// <summary>
     /// The label sources of <paramref name="roads"/> on the panel of <paramref name="projection"/>: every road with a

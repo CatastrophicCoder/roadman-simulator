@@ -16,9 +16,11 @@ namespace Roadman.Debug;
 /// <summary>
 /// Measures frame times for the world edge's performance budget (<c>docs/specs/world-edge-game.md</c>, "Performance";
 /// criterion 27) and quits:
-/// <c>godot --path game [--headless] -- --perf &lt;spawn|roadblock&gt; &lt;out.json&gt; [--map &lt;map-id&gt;] [--seed &lt;n&gt;] [--no-world-edge] [--no-space-sky] [--warmup &lt;frames&gt;] [--frames &lt;n&gt;]</c>.
+/// <c>godot --path game [--headless] -- --perf &lt;spawn|roadblock&gt; &lt;out.json&gt; [--map &lt;map-id&gt;] [--seed &lt;n&gt;] [--no-world-edge] [--no-space-sky] [--no-minimap] [--warmup &lt;frames&gt;] [--frames &lt;n&gt;]</c>.
 /// <c>World</c> adds it in debug builds only (<see cref="PerfArgs"/>; <c>.claude/scripts/perf-world-edge.sh</c> runs
-/// every combination).
+/// every world-edge combination, <c>.claude/scripts/perf-minimap.sh</c> the minimap's, <c>docs/specs/minimap.md</c>
+/// criterion 19). With <c>--no-minimap</c> <c>World</c> adds no minimap; otherwise the JSON also has the minimap's
+/// drawn road segment, label and symbol counts, as means over the measured frames.
 /// <para>
 /// After the map loads and the player spawns (and the barriers are built, unless the world edge is off), the player stands
 /// still with its input off: at its spawn point (<c>spawn</c>), or on the ground <see cref="RoadblockInset"/> inward of
@@ -103,6 +105,9 @@ public partial class PerfTool : Node
     private double _renderGpuSum;
     private bool _measureRender;
     private ulong _lastTicks;
+    private double _minimapSegmentSum;
+    private double _minimapLabelSum;
+    private double _minimapSymbolSum;
     private string _outputPath = "";
     private Vector3 _playerPosition;
     private bool _finished;
@@ -175,6 +180,13 @@ public partial class PerfTool : Node
                     _renderCpuSum += RenderingServer.ViewportGetMeasuredRenderTimeCpu(viewport);
                     _renderGpuSum += RenderingServer.ViewportGetMeasuredRenderTimeGpu(viewport);
                 }
+                if (World?.Minimap is { } minimap && IsInstanceValid(minimap))
+                {
+                    _minimapSegmentSum += minimap.DrawnSegmentCount;
+                    _minimapLabelSum += minimap.DrawnLabelCount;
+                    _minimapSymbolSum += minimap.DrawnSymbolCount;
+                }
+
                 if (++_frameCount >= Request!.Frames)
                 {
                     _phase = Phase.Done;
@@ -301,7 +313,7 @@ public partial class PerfTool : Node
         }
 
         GD.Print(FormattableString.Invariant(
-            $"Perf: {SpotName(request.Spot)} at ({_playerPosition.X:0.###}, {_playerPosition.Y:0.###}, {_playerPosition.Z:0.###}), world edge {(request.WorldEdge ? "on" : "off")}, space sky {(request.SpaceSky ? "on" : "off")}; {request.WarmupFrames} warm-up and {request.Frames} measured frames"));
+            $"Perf: {SpotName(request.Spot)} at ({_playerPosition.X:0.###}, {_playerPosition.Y:0.###}, {_playerPosition.Z:0.###}), world edge {(request.WorldEdge ? "on" : "off")}, space sky {(request.SpaceSky ? "on" : "off")}, minimap {(request.Minimap ? "on" : "off")}; {request.WarmupFrames} warm-up and {request.Frames} measured frames"));
         _frameCount = 0;
         if (request.WarmupFrames > 0)
         {
@@ -324,6 +336,9 @@ public partial class PerfTool : Node
         _renderCpuSum = 0;
         _renderGpuSum = 0;
         _monitorUpdates = 0;
+        _minimapSegmentSum = 0;
+        _minimapLabelSum = 0;
+        _minimapSymbolSum = 0;
         _lastProcessMonitor = double.NaN;
         _physicsFramesAtStart = Engine.GetPhysicsFrames();
         _lastTicks = Time.GetTicksUsec();
@@ -378,6 +393,7 @@ public partial class PerfTool : Node
             ["headless"] = headless,
             ["world_edge"] = request.WorldEdge,
             ["space_sky"] = request.SpaceSky,
+            ["minimap"] = request.Minimap,
             ["warmup_frames"] = request.WarmupFrames,
             ["frames"] = _frameCount,
             ["physics_steps"] = _physicsSteps,
@@ -394,6 +410,9 @@ public partial class PerfTool : Node
             ["barrier_items"] = loader.Barriers?.ItemCount ?? 0,
             ["barrier_pieces"] = loader.Barriers?.PieceCount ?? 0,
             ["void_prisms"] = loader.VoidTrigger?.ShapeCount ?? 0,
+            ["minimap_segments"] = _minimapSegmentSum / frames,
+            ["minimap_labels"] = _minimapLabelSum / frames,
+            ["minimap_symbols"] = _minimapSymbolSum / frames,
             ["player_position"] = new[] { _playerPosition.X, _playerPosition.Y, _playerPosition.Z },
         };
         Result = result;

@@ -116,16 +116,38 @@ class SelectionRulesTest(unittest.TestCase):
     def test_core_player(self):
         self.assertGroups(
             selected(["game/Roadman.Core/Player/x.cs"]),
-            ["player", "world-edge", "inventory", "saves"],
+            ["player", "world-edge", "inventory", "saves", "minimap"],
         )
 
     def test_core_edge(self):
         self.assertGroups(
-            selected(["game/Roadman.Core/Edge/x.cs"]), ["world-edge", "saves", "inventory"]
+            selected(["game/Roadman.Core/Edge/x.cs"]),
+            ["world-edge", "saves", "inventory", "minimap"],
         )
 
     def test_core_maps_selects_all(self):
         self.assertAll(selected(["game/Roadman.Core/Maps/x.cs"]), "game/Roadman.Core/Maps/x.cs")
+
+    def test_minimap_code_selects_all(self):
+        # World adds the minimap in every build and every temp-pack helper copies its files.
+        for path in (
+            "game/scripts/hud/MinimapHud.cs",
+            "game/scripts/hud/MinimapHud.cs.uid",
+            "game/Roadman.Core/Minimap/MinimapClip.cs",
+            "game/Roadman.Core/Maps/MinimapImage.cs",
+            "game/Roadman.Core/Maps/MinimapImageReader.cs",
+        ):
+            self.assertAll(selected([path]), path)
+
+    def test_death_camera(self):
+        self.assertGroups(
+            selected(["game/scripts/world/edge/DeathCamera.cs"]),
+            ["world-edge", "saves", "minimap"],
+        )
+
+    def test_perf_scripts_select_nothing(self):
+        for path in (".claude/scripts/perf-world-edge.sh", ".claude/scripts/perf-minimap.sh"):
+            self.assertEqual(selected([path]).mode, "none", path)
 
     def test_docs_alone_select_nothing(self):
         sel = selected(["docs/specs/x.md"])
@@ -153,7 +175,8 @@ class SelectionRulesTest(unittest.TestCase):
 
     def test_world_edge_helper_maps_to_all_its_users(self):
         self.assertGroups(
-            selected(["game/tests/WorldEdgeTest.cs"]), ["world-edge", "saves", "inventory"]
+            selected(["game/tests/WorldEdgeTest.cs"]),
+            ["world-edge", "saves", "inventory", "minimap"],
         )
 
     def test_reason_is_first_path_per_group(self):
@@ -322,7 +345,7 @@ class GitSelectionTest(unittest.TestCase):
         self.repo.write("game/scripts/world/edge/NewThing.cs")
         out = self.repo.select("--dry-run")
         self.assertEqual(out["MODE"], "groups")
-        self.assertEqual(out["GROUPS"], "world-edge saves inventory")
+        self.assertEqual(out["GROUPS"], "world-edge saves inventory minimap")
         self.assertEqual(out["REASON_1"], "world-edge: game/scripts/world/edge/NewThing.cs")
         self.assertIn(
             "game/scripts/world/edge/NewThing.cs -> rule 'game/scripts/world/edge/**'",
@@ -341,7 +364,7 @@ class GitSelectionTest(unittest.TestCase):
         )
         out = self.repo.select("--dry-run")
         self.assertEqual(out["MODE"], "groups")
-        self.assertEqual(out["GROUPS"], "player saves inventory")
+        self.assertEqual(out["GROUPS"], "player saves inventory minimap")
 
     def test_deletion_counts(self):
         self.repo.git("rm", "-q", "game/tests/RoadGraphTest.cs")
@@ -734,6 +757,7 @@ class RealRepoTest(unittest.TestCase):
                 "world-edge": ["WorldEdgeTest", "WorldEdgeBreakingTest", "DeathScreenLayoutTest"],
                 "saves": ["MainMenuTest", "PauseTest", "SaveLoadTest", "SettingsViewTest"],
                 "inventory": ["InventoryTest"],
+                "minimap": ["MinimapTest", "MinimapMainTest", "MinimapPackTest"],
             },
         )
 

@@ -53,8 +53,6 @@ public partial class SettingsView : Control
 
     public const string KeepQuestion = "Keep these display settings?";
 
-    public const string MinimapNote = "Used by the minimap";
-
     /// <summary>The text of an empty binding cell.</summary>
     public const string NoBinding = "—";
 
@@ -925,7 +923,7 @@ public partial class SettingsView : Control
             }
         };
 
-        MinimapCornerOption = AddOption(grid, "MinimapCorner", "Minimap corner", MinimapCornerNames, MinimapNote);
+        MinimapCornerOption = AddOption(grid, "MinimapCorner", "Minimap corner", MinimapCornerNames);
         MinimapCornerOption.ItemSelected += index =>
         {
             if (!_updating)

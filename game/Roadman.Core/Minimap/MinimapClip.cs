@@ -1,3 +1,5 @@
+using Roadman.Core.Maps;
+
 namespace Roadman.Core.Minimap;
 
 /// <summary>
@@ -27,41 +29,65 @@ public static class MinimapClip
     /// <returns>The number of pieces added.</returns>
     public static int Clip(IReadOnlyList<PanelPoint> points, double radius, List<IReadOnlyList<PanelPoint>> into)
     {
-        ArgumentNullException.ThrowIfNull(points);
         ArgumentNullException.ThrowIfNull(into);
+        var flat = new List<PanelPoint>();
+        var lengths = new List<int>();
+        var added = Clip(points, radius, flat, lengths);
+        var offset = 0;
+        foreach (var length in lengths)
+        {
+            into.Add(flat.GetRange(offset, length));
+            offset += length;
+        }
+
+        return added;
+    }
+
+    /// <summary>
+    /// Like <see cref="Clip(IReadOnlyList{PanelPoint}, double)"/>, but flat: appends the points of every piece, one
+    /// piece after the other, to <paramref name="pointsInto"/> and each piece's point count to
+    /// <paramref name="pieceLengths"/>. Allocates nothing once the two lists have grown (the minimap's per-frame use).
+    /// </summary>
+    /// <returns>The number of pieces added.</returns>
+    public static int Clip(IReadOnlyList<PanelPoint> points, double radius, List<PanelPoint> pointsInto, List<int> pieceLengths)
+    {
+        ArgumentNullException.ThrowIfNull(points);
+        ArgumentNullException.ThrowIfNull(pointsInto);
+        ArgumentNullException.ThrowIfNull(pieceLengths);
         if (!(radius > 0))
         {
             throw new ArgumentOutOfRangeException(nameof(radius), radius, "must be above 0");
         }
 
         var added = 0;
-        List<PanelPoint>? piece = null;
+        var pieceStart = -1;
         for (var i = 0; i + 1 < points.Count; i++)
         {
             var a = points[i];
             var b = points[i + 1];
             if (!SegmentInterval(a, b, radius, out var t0, out var t1))
             {
-                Close(ref piece, into, ref added);
+                Close(ref pieceStart, pointsInto, pieceLengths, ref added);
                 continue;
             }
 
             var start = t0 <= 0 ? a : OnRim(Lerp(a, b, t0), radius);
             var end = t1 >= 1 ? b : OnRim(Lerp(a, b, t1), radius);
-            if (piece is null || t0 > 0)
+            if (pieceStart < 0 || t0 > 0)
             {
-                Close(ref piece, into, ref added);
-                piece = [start];
+                Close(ref pieceStart, pointsInto, pieceLengths, ref added);
+                pieceStart = pointsInto.Count;
+                pointsInto.Add(start);
             }
 
-            piece.Add(end);
+            pointsInto.Add(end);
             if (t1 < 1)
             {
-                Close(ref piece, into, ref added);
+                Close(ref pieceStart, pointsInto, pieceLengths, ref added);
             }
         }
 
-        Close(ref piece, into, ref added);
+        Close(ref pieceStart, pointsInto, pieceLengths, ref added);
         return added;
     }
 
@@ -77,6 +103,95 @@ public static class MinimapClip
         }
 
         return IsInside(point, radius) ? point : OnRim(point, radius);
+    }
+
+    /// <summary>
+    /// Replaces the contents of <paramref name="into"/> with a regular polygon of <paramref name="segments"/> corners
+    /// on the circle of <paramref name="radius"/> round (<paramref name="centreX"/>, <paramref name="centreZ"/>),
+    /// counter-clockwise from +x. Its edges lie inside the circle by at most radius × (1 − cos(π / segments)).
+    /// </summary>
+    public static void CirclePolygon(double centreX, double centreZ, double radius, int segments, List<PlanarPoint> into)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        if (segments < 3)
+        {
+            throw new ArgumentOutOfRangeException(nameof(segments), segments, "must be at least 3");
+        }
+
+        into.Clear();
+        for (var i = 0; i < segments; i++)
+        {
+            var (sin, cos) = Math.SinCos(2 * Math.PI * i / segments);
+            into.Add(new PlanarPoint(centreX + (radius * cos), centreZ + (radius * sin)));
+        }
+    }
+
+    /// <summary>
+    /// Clips the convex polygon in <paramref name="polygon"/> to the axis-aligned rectangle <paramref name="rect"/> in
+    /// place (Sutherland–Hodgman), using <paramref name="scratch"/> as working space. The result is convex too; when
+    /// fewer than 3 corners remain (no overlap) the list is emptied. Allocates nothing once the lists have grown.
+    /// </summary>
+    /// <returns>The number of corners left.</returns>
+    public static int ClipConvexToRect(List<PlanarPoint> polygon, MinimapBounds rect, List<PlanarPoint> scratch)
+    {
+        ArgumentNullException.ThrowIfNull(polygon);
+        ArgumentNullException.ThrowIfNull(scratch);
+        ClipEdge(polygon, scratch, xAxis: true, rect.MinX, keepAbove: true);
+        ClipEdge(polygon, scratch, xAxis: true, rect.MaxX, keepAbove: false);
+        ClipEdge(polygon, scratch, xAxis: false, rect.MinZ, keepAbove: true);
+        ClipEdge(polygon, scratch, xAxis: false, rect.MaxZ, keepAbove: false);
+        if (polygon.Count < 3)
+        {
+            polygon.Clear();
+        }
+
+        return polygon.Count;
+    }
+
+    /// <summary>
+    /// One Sutherland–Hodgman pass against the line x = <paramref name="limit"/> (or z with <paramref name="xAxis"/>
+    /// false), keeping the side at or above it (<paramref name="keepAbove"/>) or at or below it.
+    /// </summary>
+    private static void ClipEdge(List<PlanarPoint> polygon, List<PlanarPoint> scratch, bool xAxis, double limit, bool keepAbove)
+    {
+        scratch.Clear();
+        var count = polygon.Count;
+        for (var i = 0; i < count; i++)
+        {
+            var current = polygon[i];
+            var previous = polygon[(i + count - 1) % count];
+            var dc = Signed(current, xAxis, limit, keepAbove);
+            var dp = Signed(previous, xAxis, limit, keepAbove);
+            if (dc >= 0)
+            {
+                if (dp < 0)
+                {
+                    scratch.Add(Crossing(previous, current, dp, dc));
+                }
+
+                scratch.Add(current);
+            }
+            else if (dp >= 0)
+            {
+                scratch.Add(Crossing(previous, current, dp, dc));
+            }
+        }
+
+        polygon.Clear();
+        polygon.AddRange(scratch);
+    }
+
+    private static double Signed(PlanarPoint point, bool xAxis, double limit, bool keepAbove)
+    {
+        var value = (xAxis ? point.X : point.Z) - limit;
+        return keepAbove ? value : -value;
+    }
+
+    /// <summary>The point of a→b where the signed distance goes from <paramref name="da"/> to 0.</summary>
+    private static PlanarPoint Crossing(PlanarPoint a, PlanarPoint b, double da, double db)
+    {
+        var t = da / (da - db);
+        return new PlanarPoint(a.X + ((b.X - a.X) * t), a.Z + ((b.Z - a.Z) * t));
     }
 
     /// <summary>
@@ -138,14 +253,23 @@ public static class MinimapClip
         return length == 0 ? point : point * (radius / length);
     }
 
-    private static void Close(ref List<PanelPoint>? piece, List<IReadOnlyList<PanelPoint>> into, ref int added)
+    /// <summary>Ends the open piece (if any): records its length, or drops it when it has fewer than 2 points.</summary>
+    private static void Close(ref int pieceStart, List<PanelPoint> pointsInto, List<int> pieceLengths, ref int added)
     {
-        if (piece is { Count: >= 2 })
+        if (pieceStart >= 0)
         {
-            into.Add(piece);
-            added++;
+            var length = pointsInto.Count - pieceStart;
+            if (length >= 2)
+            {
+                pieceLengths.Add(length);
+                added++;
+            }
+            else
+            {
+                pointsInto.RemoveRange(pieceStart, length);
+            }
         }
 
-        piece = null;
+        pieceStart = -1;
     }
 }

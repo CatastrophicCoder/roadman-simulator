@@ -18,7 +18,7 @@ namespace Roadman.Debug;
 
 /// <summary>
 /// Renders the world from a named camera preset to a PNG and quits:
-/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots|inventory&gt;] [--give &lt;id,...&gt;] [--seed &lt;n&gt;]</c>.
+/// <c>godot --path game --resolution 1600x900 -- --screenshot &lt;preset&gt; &lt;out.png&gt; [--presets &lt;file&gt;] [--map &lt;map-id&gt;] [--orthophoto] [--road-graph] [--inspect] [--player] [--death &lt;fall|screen&gt;] [--menu &lt;main|pause|settings|slots|inventory&gt;] [--give &lt;id,...&gt;] [--minimap-corner &lt;top-left|top-right|bottom-left|bottom-right&gt;] [--seed &lt;n&gt;]</c>.
 /// <para>
 /// The image comes from its own <see cref="SubViewport"/> of <see cref="ImageSize"/>, so it doesn't depend on the
 /// window size, display scaling or where the window is. Rendering needs a real display server: the tool refuses to
@@ -29,7 +29,10 @@ namespace Roadman.Debug;
 /// at the preset's look-at x/z (<see cref="MapLoader.GroundOrRoadHitAt"/>), facing away from the preset's camera, and
 /// shown; the street label follows it. Once it is on the floor, the capture camera copies the player camera's transform
 /// and field of view every frame for <see cref="SettleFrames"/> frames, so the image is the third-person view. The
-/// player camera itself never becomes current: the capture camera renders in its own viewport.
+/// player camera itself never becomes current: the capture camera renders in its own viewport. The minimap
+/// (<c>docs/specs/minimap.md</c>, "Godot") is moved into the capture viewport, whose 2D space is then the window's
+/// (<see cref="MenuCanvasSize"/>, so the minimap and the street label have their in-game size), in the corner of
+/// <c>--minimap-corner</c> (default bottom left). In every other run the minimap is hidden, so those images don't show it.
 /// </para>
 /// <para>
 /// With <c>--death &lt;fall|screen&gt;</c> (debug builds only; <c>docs/specs/world-edge-game.md</c>, "Screenshots"), after
@@ -172,6 +175,12 @@ public partial class ScreenshotTool : Node
     public StreetLabelHud? Hud { get; set; }
 
     /// <summary>
+    /// The HUD minimap; moved into the capture viewport in <c>--player</c> runs (in the corner of
+    /// <c>--minimap-corner</c>), hidden in every other run. Null leaves every image without it.
+    /// </summary>
+    public MinimapHud? Minimap { get; set; }
+
+    /// <summary>
     /// The place inspector switched on for <c>--inspect</c>; its panel and crosshair are moved into the capture
     /// viewport, and its ray starts from the capture camera, through the preset's look-at point. Null outside debug
     /// builds, where <c>--inspect</c> is an error.
@@ -239,6 +248,12 @@ public partial class ScreenshotTool : Node
         if (Request.Player && !DebugBuild.IsDebug)
         {
             Finish(ScreenshotExitCode.Error, "--player needs a debug build");
+            return;
+        }
+
+        if (Request.MinimapCorner is not null && !DebugBuild.IsDebug)
+        {
+            Finish(ScreenshotExitCode.Error, $"{ScreenshotArgs.MinimapCornerFlag} needs a debug build");
             return;
         }
 
@@ -349,6 +364,27 @@ public partial class ScreenshotTool : Node
         {
             Hud.GetParent()?.RemoveChild(Hud);
             _viewport.AddChild(Hud);
+        }
+
+        // The minimap only in --player runs (the only runs with a visible player), at its in-game size; elsewhere it stays
+        // in the window's viewport, hidden, so those images are unchanged.
+        if (Minimap is not null)
+        {
+            if (Request!.Player)
+            {
+                _viewport.Size2DOverride = MenuCanvasSize(ImageSize);
+                _viewport.Size2DOverrideStretch = true;
+                Minimap.GetParent()?.RemoveChild(Minimap);
+                _viewport.AddChild(Minimap);
+                if (Request.MinimapCorner is { } corner)
+                {
+                    Minimap.Corner = corner;
+                }
+            }
+            else
+            {
+                Minimap.Visible = false;
+            }
         }
 
         // The window's own 3D view isn't saved; skip rendering it.

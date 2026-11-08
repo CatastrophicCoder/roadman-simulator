@@ -1809,6 +1809,7 @@ public class WorldEdgeTest
             File.WriteAllText(Path.Combine(_tempPack, file), json.ToJsonString());
         }
 
+        TestPacks.CopyMinimap(source, _tempPack, mapId);
         AssertBool(File.Exists(Path.Combine(_tempPack, MapPack.BoundaryFile))).IsEqual(boundary is not null);
         return tiles.Count;
     }
