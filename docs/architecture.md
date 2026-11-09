@@ -134,7 +134,7 @@ Build stages (`build/`; ADR 0006):
 - `build/pack_manifest.py` and `build/schemas/manifest-v1.schema.json`: the manifest model, the committed JSON Schema, and the credits.
 - `build/camera_presets.py` and `build/schemas/camera-presets-v1.schema.json`: the optional camera presets model and its committed JSON Schema. `run_build` validates `maps/<map-id>/camera_presets.json` before the load stage and copies it into the pack.
 - `build/orthophoto.py`: terrain UVs (`terrain_uv`) and the debug orthophoto textures. It opens the imagery files as one mosaic, fails the build if they don't cover every tile completely, and writes one JPEG per tile resampled (average) to exactly the tile's bounds, plus `debug/.gdignore`.
-- `build/pack_io.py`: replacing the pack folder safely. The pack is written to a temporary sibling folder, validated, then swapped in, so a failed build leaves the previous pack untouched. A non-empty target without a `manifest.json` is never replaced.
+- `build/pack_io.py`: replacing the pack folder safely. The pack is written to a staging folder in the build's work folder (outside the Godot project), validated, then moved into `game/maps/` with one rename on the same volume (checked before the slow stages), so a failed build leaves the previous pack untouched and Godot never sees a half-written pack. A staged pack that fails a pack check or the export's read-back is kept as `failed-<time>` in the work folder (the 3 newest), and the error names it (ADR 0006). A non-empty target without a `manifest.json` is never replaced.
 
 Intermediate output goes to `tools/mapgen/build/<map-id>/<area>/` (git-ignored). The GeoJSON files are in map CRS world coordinates with a legacy `crs` member, so QGIS places them correctly:
 

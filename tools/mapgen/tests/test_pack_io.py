@@ -1,15 +1,25 @@
 """Pack folder safety: atomic replacement, refusing folders that aren't map packs, credits."""
 
 import json
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from conftest import FixtureBuild, TmpRepo, write_fixture_raw
-from mapgen.build import BuildError, run_build
+from mapgen import paths
+from mapgen.build import BuildError, pack_io, run_build
 from mapgen.build.area import build_area
-from mapgen.build.pack_io import PackFolderError, check_pack_target, swap_in
+from mapgen.build.export_glb import ExportError
+from mapgen.build.pack_io import (
+    PackFolderError,
+    check_pack_target,
+    keep_failed,
+    staging_dir,
+    swap_in,
+)
 from mapgen.build.pack_manifest import ManifestError, credits_for
 from mapgen.build.stage1_load import run_load
 from mapgen.cli import EXIT_FAILED, main
@@ -115,14 +125,75 @@ def test_pack_target_rules(tmp_path: Path) -> None:
 
 
 def test_swap_in_replaces_the_old_pack(tmp_path: Path) -> None:
-    target, staging = tmp_path / "pack", tmp_path / ".pack.tmp"
-    target.mkdir()
+    maps, work = tmp_path / "game" / "maps", tmp_path / "work"
+    target = maps / "pack"
+    target.mkdir(parents=True)
     (target / "manifest.json").write_text("old", encoding="utf-8")
-    staging.mkdir()
+    staging = staging_dir(target, work)
     (staging / "manifest.json").write_text("new", encoding="utf-8")
     swap_in(staging, target)
     assert (target / "manifest.json").read_text(encoding="utf-8") == "new"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["pack"]
+    assert sorted(p.name for p in maps.iterdir()) == ["pack"]
+    assert list(work.iterdir()) == []  # staging moved in, old pack deleted out here
+
+
+def test_build_stages_the_pack_outside_the_game_folder(
+    tmp_repo: TmpRepo, fixture_data: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The staging folder is in the work folder, not in game/, so Godot never sees a
+    half-written pack; the pack then appears in game/maps/ with one rename."""
+    import mapgen.build as build
+
+    tmp_repo.write_map(fixture_data)
+    write_fixture_raw(tmp_repo.raw_dir("testtown"))
+    staged: list[Path] = []
+    in_game_during_build: list[list[str]] = []
+
+    def spy_staging(target: Path, root: Path) -> Path:
+        staged.append(pack_io.staging_dir(target, root))
+        return staged[-1]
+
+    def spy_swap(staging: Path, target: Path) -> None:
+        in_game_during_build.append(sorted(p.name for p in target.parent.iterdir()))
+        pack_io.swap_in(staging, target)
+
+    monkeypatch.setattr(build, "staging_dir", spy_staging)
+    monkeypatch.setattr(build, "swap_in", spy_swap)
+    args = ["--repo-root", str(tmp_repo.root), "build", "testtown", "--area", "test"]
+    assert main(args) == 0
+    game = (tmp_repo.root / "game").resolve()
+    work = paths.work_dir(tmp_repo.root, "testtown", "test").resolve()
+    assert len(staged) == 1
+    assert not staged[0].resolve().is_relative_to(game)
+    assert staged[0].resolve().parent == work
+    assert in_game_during_build == [[]]  # nothing in game/maps/ until the swap
+    maps = tmp_repo.root / "game" / "maps"
+    assert sorted(p.name for p in maps.iterdir()) == ["testtown"]
+    assert not [p for p in work.iterdir() if p.name.startswith(".pack-")]
+
+
+def test_build_fails_early_when_work_and_pack_folders_are_on_different_volumes(
+    tmp_repo: TmpRepo,
+    fixture_data: dict,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tmp_repo.write_map(fixture_data)
+    write_fixture_raw(tmp_repo.raw_dir("testtown"))
+    maps = tmp_repo.root / "game" / "maps"
+    monkeypatch.setattr(pack_io, "_device", lambda path: 2 if maps in [path, *path.parents] else 1)
+    args = ["--repo-root", str(tmp_repo.root), "build", "testtown", "--area", "test"]
+    assert main(args) == EXIT_FAILED
+    assert "different volumes" in capsys.readouterr().err
+    assert list(maps.iterdir()) == []
+
+
+def test_staging_dir_refuses_a_different_volume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pack_io, "_device", lambda path: 2 if path.name == "maps" else 1)
+    with pytest.raises(PackFolderError, match="different volumes"):
+        staging_dir(tmp_path / "maps" / "pack", tmp_path / "work")
 
 
 def _entry(source: str, retrieved_at: str) -> dict[str, str]:
@@ -167,3 +238,83 @@ def test_more_than_one_source_per_capability_is_an_error(
 def test_manifest_written_by_the_build_is_valid_json(fixture_build: FixtureBuild) -> None:
     manifest = json.loads((fixture_build.pack_dir / "manifest.json").read_text(encoding="utf-8"))
     assert [c["source"] for c in manifest["credits"]] == ["mml_dem_2m", "osm"]
+
+
+def _rebuild(config: Any, raw: Path, pack: Path, when: datetime) -> None:
+    run_build(
+        config,
+        "test",
+        raw,
+        pack,
+        pack.parents[2] / "work",
+        map_dir=pack.parents[2] / "maps" / config.id,
+        now=lambda: when,
+        log=_quiet,
+    )
+
+
+def test_failed_pack_check_keeps_the_staged_pack_newest_three(
+    built_pack: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mapgen.build as build
+    from mapgen.build.pack_checks import PackCheckError
+
+    config, raw, pack = built_pack
+    before = _snapshot(pack)
+    work = pack.parents[2] / "work"
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise PackCheckError("tile_x0_y0.glb: something is off")
+
+    monkeypatch.setattr(build, "check_pack", fail)
+    kept: list[Path] = []
+    for hour in range(4):
+        with pytest.raises(BuildError, match="something is off; staged pack kept in ") as info:
+            _rebuild(config, raw, pack, datetime(2026, 11, 9, hour, tzinfo=UTC))
+        kept.append(Path(str(info.value).rsplit("staged pack kept in ", 1)[1]))
+        assert kept[-1] == work / f"failed-20261109T{hour:02d}0000Z"
+        assert (kept[-1] / "manifest.json").is_file()  # the whole staged pack
+        assert any((kept[-1] / "tiles").glob("*.glb"))
+    failed = sorted(p.name for p in work.iterdir() if p.name.startswith("failed-"))
+    assert failed == [p.name for p in kept[1:]]  # only the three newest
+    assert _snapshot(pack) == before
+    assert not [p for p in work.iterdir() if p.name.startswith(".pack-")]
+
+
+def test_failed_read_back_keeps_the_staged_pack(
+    built_pack: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `mapgen.build.export_glb` is the function there, so take the module itself.
+    export_glb_module = sys.modules["mapgen.build.export_glb"]
+
+    config, raw, pack = built_pack
+    before = _snapshot(pack)
+    real_check = export_glb_module.check_written
+
+    def damaged(path: Path, nodes: Any) -> None:
+        if ".pack-staging-" in str(path):  # only the pack's export, not 02-terrain
+            raise ExportError(f"{path.name}: node terrain-col: normals differ when read back")
+        real_check(path, nodes)
+
+    monkeypatch.setattr(export_glb_module, "check_written", damaged)
+    with pytest.raises(ExportError, match="normals differ when read back; staged pack kept in "):
+        _rebuild(config, raw, pack, datetime(2026, 11, 9, 12, 30, 5, tzinfo=UTC))
+    kept = pack.parents[2] / "work" / "failed-20261109T123005Z"
+    assert sorted(p.name for p in (kept / "tiles").iterdir())  # the tile that failed is there
+    assert _snapshot(pack) == before
+
+
+def test_keep_failed_orders_same_second_failures(tmp_path: Path) -> None:
+    when = datetime(2026, 11, 9, 8, 0, 0, tzinfo=UTC)
+    names = []
+    for _ in range(4):
+        staging = tmp_path / f".pack-staging-{len(names)}"
+        staging.mkdir()
+        names.append(keep_failed(staging, when, keep=3).name)
+    assert names == [
+        "failed-20261109T080000Z",
+        "failed-20261109T080000Z-2",
+        "failed-20261109T080000Z-3",
+        "failed-20261109T080000Z-4",
+    ]
+    assert sorted(p.name for p in tmp_path.iterdir()) == names[1:]

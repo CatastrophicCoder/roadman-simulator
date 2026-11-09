@@ -2,8 +2,9 @@
 
 Stage output goes to the work folder (`tools/mapgen/build/<map-id>/<area>/`), the pack
 to `game/maps/<map-id>/` (or `--out`). Both areas write the same pack folder; the
-manifest's `area` says which one it holds. The pack is written to a temporary sibling
-folder and swapped in only when complete and valid (`pack_io`). An optional
+manifest's `area` says which one it holds. The pack is written to a staging folder in the
+work folder, outside the Godot project, and moved in with one rename on the same volume
+only when complete and valid (`pack_io`). An optional
 `maps/<map-id>/camera_presets.json` is validated first and copied unchanged into the pack.
 With an imagery source and its files, the pack also gets `debug/orthophoto/<tile>.jpg`
 per tile (plus `debug/.gdignore`); the terrain's UVs map each tile onto its texture.
@@ -60,7 +61,7 @@ from mapgen.build.camera_presets import (
     CameraPresetsError,
     read_camera_presets,
 )
-from mapgen.build.export_glb import AXES, TERRAIN_NODE, MeshNode, export_glb
+from mapgen.build.export_glb import AXES, TERRAIN_NODE, ExportError, MeshNode, export_glb
 from mapgen.build.markers import MARKERS_NAME, MarkersError, read_markers
 from mapgen.build.minimap import STAGE_DIR as MINIMAP_DIR
 from mapgen.build.minimap import MinimapError, build_minimap, minimap_inputs, write_minimap
@@ -81,7 +82,14 @@ from mapgen.build.orthophoto import (
     write_debug_textures,
 )
 from mapgen.build.pack_checks import PackCheckError, check_pack
-from mapgen.build.pack_io import PackFolderError, check_pack_target, staging_dir, swap_in
+from mapgen.build.pack_io import (
+    PackFolderError,
+    check_pack_target,
+    check_same_volume,
+    keep_failed,
+    staging_dir,
+    swap_in,
+)
 from mapgen.build.pack_manifest import (
     BUILDINGS_NAME,
     HEIGHT_DATUM,
@@ -229,6 +237,7 @@ def run_build(
     builder = terrain_builder or MeshTerrainBuilder()
     try:
         check_pack_target(out_dir)  # fail before the slow stages, and again before the swap
+        check_same_volume(work_dir, out_dir)  # the swap must be a rename
     except PackFolderError as exc:
         raise BuildError(str(exc)) from exc
     try:
@@ -541,7 +550,7 @@ def run_build(
             except OrthophotoError as exc:
                 raise BuildError(str(exc)) from exc
 
-        staging = staging_dir(out_dir)
+        staging = staging_dir(out_dir, work_dir)
         try:
             for tile in tiles:
                 chunk = chunks[tile.id]
@@ -582,7 +591,11 @@ def run_build(
             log(f"[build] pack checks: {report.timings_s['pack_checks']:.2f} s")
             swap_in(staging, out_dir)
         except PackCheckError as exc:
-            raise BuildError(f"pack check failed: {exc}") from exc
+            kept = _keep_failed_staging(staging, now, log)
+            raise BuildError(f"pack check failed: {exc}{kept}") from exc
+        except ExportError as exc:
+            kept = _keep_failed_staging(staging, now, log)
+            raise ExportError(f"{exc}{kept}") from exc
         except (
             ManifestError,
             PackFolderError,
@@ -598,6 +611,20 @@ def run_build(
 
     write_json(work_dir / "timings.json", report.timings_s)
     return report
+
+
+def _keep_failed_staging(
+    staging: Path, now: Callable[[], datetime], log: Callable[[str], None]
+) -> str:
+    """Keep a staged pack that failed a check or the read-back (`keep_failed`); returns
+    the text for the error message ("; staged pack kept in <path>"), or a note that it
+    couldn't be kept (the staging folder is then deleted as usual)."""
+    try:
+        kept = keep_failed(staging, now())
+    except OSError as exc:
+        return f"; the staged pack couldn't be kept: {exc}"
+    log(f"[build] failed staged pack kept in {kept}")
+    return f"; staged pack kept in {kept}"
 
 
 def _build_cliff(
